@@ -37,6 +37,7 @@ parser.add_argument("--minimum-conservative-net-r", type=Decimal, default=Decima
 parser.add_argument("--adverse-selection-r", type=Decimal, default=Decimal("0.03"))
 parser.add_argument("--operational-uncertainty-r", type=Decimal, default=Decimal("0.05"))
 parser.add_argument("--include-instrument-cohort", action="store_true")
+parser.add_argument("--output", type=Path, default=None, help="Optional immutable research-report JSON output")
 args = parser.parse_args()
 
 if args.minimum_labeled_trades < 3:
@@ -200,4 +201,8 @@ report = {
         "ablation, drawdown, replay reproducibility, data-quality, execution and independent evidence requirements remain separate gates."
     ),
 }
-print(json.dumps(report, indent=2, sort_keys=True))
+text = json.dumps(report, indent=2, sort_keys=True)
+if args.output is not None:
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(text + "\n", encoding="utf-8")
+print(text)
