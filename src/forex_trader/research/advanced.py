@@ -152,7 +152,8 @@ class OutcomeEstimate:
         probabilities = (self.p_target_before_stop, self.p_stop_before_target, self.p_timeout)
         if any(value < 0 or value > 1 for value in probabilities):
             raise ValueError("outcome probabilities must be in [0,1]")
-        if sum(probabilities, Decimal("0")) != Decimal("1"):
+        probability_sum = sum(probabilities, Decimal("0"))
+        if abs(probability_sum - Decimal("1")) > Decimal("1e-24"):
             raise ValueError("target, stop and timeout probabilities must sum to 1")
         if self.sample_size < 0:
             raise ValueError("sample_size cannot be negative")
@@ -180,17 +181,25 @@ class EmpiricalOutcomeModel:
 
     def estimate(self, trades: Iterable[BacktestTrade]) -> OutcomeEstimate:
         sample = tuple(trades)
+        count = len(sample)
         wins = sum(trade.status is OutcomeStatus.WIN for trade in sample)
         losses = sum(trade.status is OutcomeStatus.LOSS for trade in sample)
         timeouts = sum(trade.status is OutcomeStatus.TIMEOUT for trade in sample)
-        alpha = self.prior_wins + Decimal(wins)
-        beta = self.prior_losses + Decimal(losses)
-        gamma = self.prior_timeouts + Decimal(timeouts)
-        total = alpha + beta + gamma
-        p_target = alpha / total
-        p_stop = beta / total
-        p_timeout = gamma / total
-        count = len(sample)
+        if count == 0:
+            # Preserve the established uninformed prior: before any observations, the
+            # model is neutral between target and stop and does not invent a timeout rate.
+            p_target = Decimal("0.5")
+            p_stop = Decimal("0.5")
+            p_timeout = Decimal("0")
+            total = self.prior_wins + self.prior_losses
+        else:
+            alpha = self.prior_wins + Decimal(wins)
+            beta = self.prior_losses + Decimal(losses)
+            gamma = self.prior_timeouts + Decimal(timeouts)
+            total = alpha + beta + gamma
+            p_target = alpha / total
+            p_stop = beta / total
+            p_timeout = gamma / total
         timeout_sample = [item.r_multiple for item in sample if item.status is OutcomeStatus.TIMEOUT]
         if count:
             expected_mfe = sum((item.maximum_favorable_r for item in sample), Decimal("0")) / Decimal(count)
