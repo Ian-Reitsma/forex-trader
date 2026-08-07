@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -211,6 +212,54 @@ class TradingRepository(SqliteDecisionRepository):
         sql += " ORDER BY scheduled_at, event_id"
         rows = self._connection.execute(sql, tuple(params)).fetchall()
         return [_scheduled_from_json(json.loads(row["payload_json"])) for row in rows]
+
+    def promotion_metrics(self):  # type: ignore[no-untyped-def]
+        """Augment broker-P/L metrics with uncapped campaign coverage counters."""
+        base = super().promotion_metrics()
+        rows = self._connection.execute(
+            "SELECT instrument, payload_json, created_at FROM decision_traces ORDER BY created_at"
+        ).fetchall()
+        decisions = len(rows)
+        trade_candidates = 0
+        submitted = 0
+        rejected = 0
+        unknown = 0
+        active_days: set[str] = set()
+        instruments: set[str] = set()
+        sessions: set[str] = set()
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            candidate = payload.get("candidate", {})
+            if isinstance(candidate, dict) and candidate.get("disposition") == "trade":
+                trade_candidates += 1
+            active_days.add(str(row["created_at"])[:10])
+            order = payload.get("order")
+            if not isinstance(order, dict):
+                continue
+            submitted += 1
+            instruments.add(str(row["instrument"]))
+            status = str(order.get("status") or "")
+            if status in {"rejected", "cancelled"}:
+                rejected += 1
+            if status in {"unknown", "reconciliation_required"}:
+                unknown += 1
+            metadata = payload.get("metadata")
+            if isinstance(metadata, dict) and metadata.get("session_phase"):
+                sessions.add(str(metadata["session_phase"]))
+        halt_row = self._connection.execute("SELECT COUNT(*) AS count FROM system_halts").fetchone()
+        unresolved_halts = int(halt_row["count"]) if halt_row is not None else 0
+        return replace(
+            base,
+            decisions=decisions,
+            trade_candidates=trade_candidates,
+            submitted_orders=submitted,
+            rejected_orders=rejected,
+            unknown_orders=unknown,
+            active_days=len(active_days),
+            instruments_traded=len(instruments),
+            sessions_traded=len(sessions),
+            unresolved_halts=unresolved_halts,
+        )
 
 
 def _scheduled_from_json(payload: dict[str, object]) -> ScheduledMacroEvent:
