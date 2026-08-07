@@ -2,6 +2,26 @@
 
 All notable changes to this repository are documented here.
 
+## 0.6.1 — 2026-08-07
+
+### Evidence integrity and campaign efficiency
+
+- Added deterministic, secret-free campaign policy fingerprints and run-level campaign IDs to every new campaign evidence row.
+- Policy context records outcome-affecting strategy, risk, timeframe, correlation, cost-model and campaign-execution configuration without API tokens or account IDs.
+- Campaign analysis now refuses to combine multiple policy fingerprints unless the operator explicitly selects one with `--policy-fingerprint`.
+- Evidence with one fingerprint but contradictory policy-context payloads is rejected rather than silently pooled.
+- Pre-fingerprint JSONL remains supported as the `legacy` cohort.
+- Practice-execution campaigns automatically pre-filter pairs that cannot currently meet the required fundamental-confidence gate before spending OANDA candle/pricing requests on guaranteed abstentions.
+- Shadow campaigns continue to scan the full universe by default for fundamental-data coverage diagnostics; `--eligible-only` opts into the same preflight.
+- Preflight failures and excluded-pair counts are recorded as campaign metadata; no threshold/risk gate is relaxed to increase trade frequency.
+- Added cohort-isolation, policy-hash, fundamental-preflight and real-engine evidence-persistence tests.
+
+### Validation
+
+- v0.6.1 retains the v0.6 hardened Practice-only execution boundary and 85% branch-coverage fail-under requirement.
+- Final exact-head test/coverage totals are recorded after the release CI matrix completes.
+- Authenticated OANDA Practice execution remains externally credential-gated and is not claimed by this release.
+
 ## 0.6.0 — 2026-08-07
 
 ### Repository integration repair
@@ -14,65 +34,41 @@ All notable changes to this repository are documented here.
 
 - Added an evidence-first Practice campaign runner with a configurable per-cycle new-order budget; remaining instruments continue in shadow after the budget is spent.
 - Added broker-discovered all-currency-pair campaign support and lower-timeframe-aligned campaign cadence.
-- Campaign evidence now records rejection codes, independent risk denials, provider errors, promotion state and the complete hardened broker-order status histogram.
+- Campaign evidence records rejection codes, independent risk denials, provider errors, promotion state and the complete hardened broker-order status histogram.
 - Generalized campaign fail-closed behavior from literal `UNKNOWN` only to every unresolved state: created, acknowledged, partially filled, unknown, reconciliation required, closing and emergency close.
-- Added backward-compatible JSONL campaign analysis that classifies execution uncertainty, broker reject/cancel behavior, provider failures, missing fundamental data, market context, strategy formation, portfolio risk, unclassified abstentions and clean/selective operation.
+- Added backward-compatible JSONL campaign analysis for execution uncertainty, broker reject/cancel behavior, provider failures, missing fundamental data, market context, strategy formation, portfolio risk, unclassified abstentions and clean/selective operation.
 - Analyzer rejects internally inconsistent evidence and refuses to interpret new/unknown rejection codes as a clean strategy result.
-- Execution uncertainty always outranks strategy tuning; emergency-close evidence explicitly blocks further Practice-risk recommendations until dependent protection behavior is resolved.
-- Added `scripts/analyze_campaign.py` and expanded `docs/25_PRACTICE_CAMPAIGN.md` with the read-only -> sync -> shadow -> broker-minimum round trip -> capped Practice -> diagnosis sequence.
+- Execution uncertainty always outranks strategy tuning; emergency-close evidence blocks further Practice-risk recommendations until dependent protection behavior is resolved.
 
 ### Validation
 
-- Exact reconciled v0.6 head passes the complete Python 3.11 and 3.13 CI matrix.
-- **222 tests pass** with **87.02% branch-aware coverage**; the repository fail-under remains **85%**.
-- Package install, bytecode compile, `pip check`, secret-assignment scan and executed offline paper-order smoke pass on both Python versions.
-- No authenticated OANDA Practice execution is claimed because the required Practice credentials are not available to this execution environment.
+- Exact reconciled v0.6 head passed the complete Python 3.11 and 3.13 CI matrix.
+- **222 tests passed** with **87.02% branch-aware coverage**; repository fail-under remained **85%**.
+- Install, bytecode compile, `pip check`, secret-assignment scan and executed offline paper-order smoke passed on both Python versions.
 
 ## 0.5.0 — 2026-08-07
 
 ### Strategy fidelity
 
-- Replaced the indicator-led live decision path with explicit supply/demand location, declared liquidity, pivot-derived structure, sweep/reclaim, structure-shift and retest/hold state.
-- Added structural invalidation stops and nearest credible opposing liquidity/zone targets instead of constructing a fixed 2R objective.
-- Expanded declared liquidity to 5-p.m.-New-York prior-day extremes, Sunday-5-p.m. prior-week extremes, finalized Asia highs/lows, finalized London/New York opening ranges, equal highs/lows, recent external swings and round-number references.
+- Replaced the indicator-led live decision path with supply/demand location, declared liquidity, pivot-derived structure, sweep/reclaim, structure-shift and retest/hold state.
+- Added structural invalidation stops and nearest credible opposing liquidity/zone targets instead of fixed 2R objectives.
+- Expanded declared liquidity to 5-p.m.-New-York prior-day extremes, Sunday-5-p.m. prior-week extremes, finalized Asia highs/lows, finalized London/New York opening ranges, equal highs/lows, external swings and round-number references.
 - Added source-time rules so a candle cannot sweep a level it created itself.
-- Added fair-value-gap detection/mitigation as a research feature without granting it automatic live authority.
-- Removed the arbitrary fixed technical/fundamental score blend. Fundamentals now operate as independent confidence/freshness/conflict gates; the candidate score is explicitly a non-probabilistic structure/location quality ranking after cost penalty.
+- Added fair-value-gap detection/mitigation as research/confluence evidence without automatic live authority.
+- Removed the arbitrary fixed technical/fundamental score blend. Fundamentals operate as independent confidence/freshness/conflict gates; candidate score is explicitly non-probabilistic structure/location quality after cost penalty.
 
-### Time and market context
+### Time, fundamentals, risk and execution
 
-- Added deployable M5/M10/M15/M30 lower and H1/H4 higher timeframe policy matching the research grid.
-- Corrected completed-candle signal time to bar close rather than OANDA bar-start timestamp.
-- Added DST-aware session phases, London fix and rollover handling.
-- Added country and ECB/TARGET2 holiday blackouts.
-- Added 5-p.m.-New-York FX risk-day and Sunday-5-p.m. trading-week definitions.
-- Expanded lower-timeframe runtime history to at least 48 clock-hours when necessary so M5/M10 day/session liquidity cannot be reconstructed from truncated data.
-
-### Fundamentals and data integrity
-
-- Added immutable point-in-time macro observations and deterministic import IDs.
-- Added component-specific freshness/decay, release-revision effects and central-bank statement comparison.
-- Added scheduled high-impact event persistence and hard blackouts.
-- Preserved spot tick counts as a clearly labeled low-confidence activity proxy rather than representing them as centralized executed order flow.
-
-### Risk and execution
-
-- Added gross currency-leg exposure, single-currency concentration, margin reserve and signed recent-return correlation vetoes.
-- Aligned realized daily P/L aggregation and the persistent marked-loss latch to the 5-p.m.-New-York FX trading day.
-- Added account-scoped execution locks and expiring risk authorization.
-- Added broker-metadata pip/display/unit/margin handling.
-- Added size-aware OANDA Practice pricing buckets and worst-price `priceBound`.
-- Distinguished deterministic broker rejection from ambiguous writes.
-- Added ambiguous-write reconciliation, dependent stop/target verification, protection repair, emergency-close handling and persistent execution-uncertainty halts.
-- OANDA remains Practice-only; there is no live-money endpoint.
+- Added deployable M5/M10/M15/M30 lower and H1/H4 higher timeframe policy and corrected completed-candle signal time to bar close.
+- Added DST-aware sessions, country/ECB-TARGET2 holiday gates, 5-p.m.-New-York FX risk days and Sunday-5-p.m. trading weeks.
+- Added immutable point-in-time macro observations, revision effects, component-specific decay, central-bank comparison and scheduled-event blackouts.
+- Added gross currency exposure, concentration, margin reserve, signed-return correlation veto, account execution locks and expiring risk authorization.
+- Added broker-metadata precision/margin handling, size-aware OANDA pricing, `priceBound`, deterministic reject vs ambiguous-write classification, reconciliation, protection verification/repair, emergency close and persistent uncertainty halts.
+- OANDA remains Practice-only; no live-money endpoint exists.
 
 ### Research
 
-- Added gap-through-stop semantics, spread/slippage/delay stress, MAE/MFE and ambiguous-bar reporting.
-- Added chronological rolling validation with untouched final holdouts.
-- Changed multi-instrument validation to select one globally deployable threshold rather than pair-specific thresholds.
-- Updated all OANDA historical research scripts to use the same configured timeframe policy as runtime.
-- Added research-only management comparison for the structural single-target baseline versus a 50%-at-1R / breakeven-runner hypothesis, with a CI equivalence guard for the baseline replay.
+- Added gap-through-stop semantics, spread/slippage/delay stress, MAE/MFE, ambiguous-bar reporting, rolling untouched holdouts, one globally deployable multi-pair threshold and research-only scale-out/runner comparison.
 
 ## 0.4.0 — 2026-08-07
 
