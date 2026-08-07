@@ -11,7 +11,7 @@ no_zone_quality
 no_retest
 ```
 
-These cannot be inferred from feature importance and cannot be manufactured by deleting labels after a trade outcome is known. The objective is prospective counterfactual evaluation: freeze one point-in-time production signal snapshot, run every predefined variant against that same snapshot before future outcomes are known, retain every variant in the denominator, then compare matured outcomes on the same chronological holdout.
+These cannot be inferred from feature importance and cannot be manufactured by deleting labels after a trade outcome is known. The objective is prospective counterfactual evaluation: freeze one point-in-time production signal snapshot, run every predefined variant against that same snapshot before future outcomes are known, retain every variant in the denominator, mature all variants on the same future path, and quantify the paired component delta with uncertainty.
 
 ## Production-faithful capture
 
@@ -29,19 +29,11 @@ The variants rerun `assess_technicals` plus `RegimeAwareSignalFusionPolicy`; the
 
 ## Exact production-signal snapshot
 
-`SignalEvaluationInputs` captures the inputs from one actual shadow decision:
-
-- lower completed candles;
-- higher completed candles;
-- the exact quote returned in the actual decision trace;
-- the point-in-time fundamental assessment at that quote timestamp;
-- the adaptive spread ceiling used by signal fusion;
-- scheduled-event blackout reasons;
-- rollover blackout state.
+`SignalEvaluationInputs` captures the inputs from one actual shadow decision: lower/higher completed candles, the actual trace quote, point-in-time fundamentals, adaptive spread ceiling, scheduled-event blackout reasons, and rollover state.
 
 `FxTradingEngine.evaluate_with_signal_inputs()` is restricted to `execute=False`. It holds an outer evaluation-local candle snapshot around the normal engine evaluation, then freezes the inputs before that scope closes. Re-requesting lower/higher histories therefore reuses completed candles already read by the production decision. The capture path does not request another executable quote.
 
-New v0.7.8 prospective rows also persist exact decision-time `quote_bid` and `quote_ask`. All six rows in one snapshot must share that quote identity, and the `full` frozen replay must match the actual production trace on bid/ask as well as tradeability, setup, direction, score, geometry and rejection code.
+v0.7.8 prospective rows persist exact decision-time `quote_bid` and `quote_ask`. All six rows in one snapshot must share that quote identity, and the `full` frozen replay must match the actual production trace on bid/ask as well as tradeability, setup, direction, score, geometry and rejection code.
 
 ## Frozen snapshot identity
 
@@ -51,9 +43,7 @@ New v0.7.8 prospective rows also persist exact decision-time `quote_bid` and `qu
 
 ## Context hard gates
 
-Scheduled-event blackout and rollover blackout occur after technical/fusion evaluation in the production engine and are frozen/replayed too.
-
-Scheduled-event blackout remains active for every component variant because it is not one of the five declared ablations. Rollover suppression is part of the session component, so `no_session` intentionally removes that session-derived hard gate while all other variants retain it.
+Scheduled-event blackout and rollover blackout occur after technical/fusion evaluation in the production engine and are frozen/replayed too. Event blackout remains active for every component variant. Rollover suppression is part of the session component, so `no_session` intentionally removes that session-derived hard gate while all other variants retain it.
 
 ## Shadow-only authority boundary
 
@@ -71,8 +61,6 @@ python scripts/run_practice_campaign.py \
 
 ## Paired maturity in v0.7.8
 
-v0.7.8 implements the future-path maturity step:
-
 ```bash
 python scripts/label_ablation_decisions.py \
   ablation-decisions.jsonl \
@@ -84,54 +72,65 @@ python scripts/label_ablation_decisions.py \
 
 Tradeable variants are labeled with the same `evaluate_candidate_outcome()` engine used by ordinary decision evidence. Captured spread, entry/exit slippage, gap-through stops, conservative stop-first same-bar ambiguity, terminal targets/stops and timeout R therefore share one implementation.
 
-Nontradeable variants and evaluator failures remain in the denominator at 0R. This is policy-level per-signal return, not a claim that a trade occurred.
-
-A tradeable row without captured quote context fails closed instead of assuming zero spread.
+Nontradeable variants and evaluator failures remain in the denominator at 0R. A tradeable row without captured quote context fails closed instead of assuming zero spread.
 
 ### Atomic group rule
 
-No snapshot is partially appended. A target or stop may mature before the configured horizon, but a timeout requires the complete `maximum_bars` future path. If any tradeable sibling remains immature, all six outcomes for that snapshot remain pending. Once every tradeable sibling is terminal or timeout-mature, all six rows are written together.
+No snapshot is partially appended. A target or stop may mature before the configured horizon, but a timeout requires the complete `maximum_bars` future path. If any tradeable sibling remains immature, all six outcomes remain pending. Once every tradeable sibling is terminal or timeout-mature, all six rows are written together.
 
-Existing matured output is also validated as complete six-variant groups before resume.
+## Paired uncertainty in v0.7.9
 
-## Matured provenance
+The component statistic is evaluated per frozen snapshot:
 
-`MaturedAblationOutcome` retains:
+```text
+component_increment_r = full_realized_r - ablated_realized_r
+```
 
-- snapshot payload/policy/variant identity;
-- realized R and status;
-- labeling timestamp and policy;
-- bars held and exit reason;
-- same-bar ambiguity flag;
-- estimated cost R.
+The assembler reuses the repository's deterministic paired-bootstrap mean interval from Phase-D research. Defaults are 90% confidence, 2,000 bootstrap iterations and seed `20260807`.
 
-The paired artifact ID hashes that maturity provenance in addition to nominal R/status so changed assumptions change evidence identity.
+```bash
+python scripts/assemble_paired_ablations.py \
+  matured-ablation-outcomes.jsonl \
+  --primary-dataset-id <dataset_id_from_research_report> \
+  --output ablation-evidence.json \
+  --confidence 0.90 \
+  --bootstrap-iterations 2000 \
+  --bootstrap-seed 20260807
+```
 
-## Dataset identities
+Each component row records full and ablated expectancy, paired lower/upper confidence bounds, paired win/loss/tie counts, sample size, primary dataset ID, confidence, iteration count and seed.
+
+### Promotion interpretation
+
+The material-harm tolerance remains `0.05R`, now applied to the confidence interval of `full - ablated`:
+
+```text
+upper confidence bound < -0.05R
+    -> rejected: component is confidently materially harmful
+
+lower bound < -0.05R <= upper bound
+    -> insufficient evidence: material harm cannot yet be ruled out
+
+lower bound >= -0.05R
+    -> component non-harm check passes; all other promotion gates still apply
+```
+
+Legacy mean-only artifacts remain parseable but are insufficient evidence because they lack uncertainty provenance. Promotion requires at least 90% confidence and 1,000 bootstrap iterations by default.
+
+## Matured and dataset provenance
+
+`MaturedAblationOutcome` retains snapshot/payload/policy/variant identity, realized R/status, labeling timestamp/policy, bars held, exit reason, same-bar ambiguity and estimated cost R. The paired artifact ID hashes that maturity provenance in addition to nominal R/status.
 
 Two identities remain intentionally separate:
 
 1. **Primary dataset ID** — SHA-256 identity from the setup-isolated decision/outcome research corpus used by the promotion report.
 2. **Paired ablation artifact ID** — SHA-256 identity of the matured variant-outcome artifact itself.
 
-Promotion-compatible ablation rows carry the primary dataset ID because they claim to measure components on that primary holdout. The output separately records the paired artifact ID so the exact counterfactual evidence file remains independently identifiable.
-
-The promotion bundle additionally checks that each ablation has the same untouched-test sample count and full-policy baseline expectancy as the primary report. Supplying the correct primary dataset ID is necessary but not sufficient to make mismatched evidence pass.
-
-## Offline assembly after maturity
-
-```bash
-python scripts/assemble_paired_ablations.py \
-  matured-ablation-outcomes.jsonl \
-  --primary-dataset-id <dataset_id_from_research_report> \
-  --output ablation-evidence.json
-```
-
-The assembler has no broker client, credential path or execution authority.
+Promotion does not trust the dataset ID string alone. Each required component must also match the primary untouched-test sample count and full-policy expectancy. A mismatch is a hard integrity rejection.
 
 ## What this lifecycle does not claim
 
-Production-faithful capture plus conservative maturity does **not** prove that any component improves profitability. That requires a sufficiently large prospective corpus across real market conditions.
+Production-faithful capture, conservative maturity and paired uncertainty do **not** prove that any component improves profitability. That requires a sufficiently large prospective corpus across real market conditions.
 
 Only paired after-cost outcome evidence can tell us whether fundamentals, flow, session, zone quality or retest add positive incremental expectancy, are neutral, or reduce expectancy. Low sample count is not a reason to loosen production thresholds or infer component value retrospectively.
 
