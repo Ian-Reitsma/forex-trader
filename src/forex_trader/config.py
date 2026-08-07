@@ -13,6 +13,7 @@ from forex_trader.adapters.simulator import SimulatedPaperBroker
 from forex_trader.adapters.synthetic import SyntheticMarketData
 from forex_trader.adapters.timeframe import TimeframeMappedMarketData
 from forex_trader.application.engine import TradingEngine
+from forex_trader.application.fx_engine import FxTradingEngine
 from forex_trader.domain.correlation_risk import CorrelationRiskGuard
 from forex_trader.domain.costs import SessionCostModel
 from forex_trader.domain.enums import OperatingMode, ProviderKind
@@ -228,7 +229,7 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
         minimum_observations=config.correlation_minimum_observations,
         maximum_signed_correlation=config.max_signed_correlation,
     )
-    return TradingEngine(
+    return FxTradingEngine(
         market_data=market_data,
         broker=broker,
         repository=repository,
