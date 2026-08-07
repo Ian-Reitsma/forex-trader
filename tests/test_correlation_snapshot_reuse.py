@@ -67,9 +67,10 @@ def test_higher_timeframe_technical_snapshot_is_reused_by_correlation_guard() ->
     assert len(result.pairs) == 1
     assert result.pairs[0].existing_instrument == "GBP_USD"
     assert result.pairs[0].observations >= 40
-    # EUR_USD correlation needs 81 bars, but the already-fetched 200-bar technical
-    # snapshot satisfies it. Only the genuinely new GBP_USD history is fetched.
+    # EUR_USD correlation asks for the configured 80-bar lookback, but the
+    # already-fetched 200-bar technical snapshot satisfies it. Only the genuinely
+    # new GBP_USD history reaches the underlying provider.
     assert provider.calls == [
         ("EUR_USD", "H1", 200),
-        ("GBP_USD", "H1", 81),
+        ("GBP_USD", "H1", 80),
     ]
