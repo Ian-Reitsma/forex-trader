@@ -90,13 +90,15 @@ The manual OANDA Practice workflow sets `FOREX_BUILD_REVISION` to the exact GitH
 
 The exact v0.6.4 code/test head passed the complete CI matrix on Python 3.11 and Python 3.13:
 
-- **264 tests passed** on each Python version;
-- **87.37% branch-aware coverage**;
+- **267 tests passed** on each Python version;
+- **87.40% branch-aware coverage**;
 - repository minimum coverage gate: **85%**;
 - fresh dynamic package installation as `forex-trader==0.6.4` passed;
 - bytecode compilation and `pip check` dependency integrity passed;
 - secret-assignment scan passed;
 - executed offline paper-order smoke passed on both Python versions.
+
+The test suite now includes an integrated token-only read-only contract: OANDA shadow configuration validates without an account ID, the adapter discovers the authorized Practice account, broker transaction synchronization continues through that discovered ID, and enabling Practice writes without an explicit account ID still fails validation.
 
 These checks establish software/invariant quality. They do not establish a profitable trading edge or authenticated broker success.
 

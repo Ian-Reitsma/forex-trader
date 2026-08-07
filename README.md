@@ -71,6 +71,8 @@ Keep OANDA credentials outside chat and source control. Local configuration belo
 
 The authenticated validation workflow is **manual-only**, restricted to `main`, serialized so two broker-validation runs cannot overlap, and has three explicit stages: `read-only`, `round-trip`, and `campaign`. The read-only stage can discover an authorized Practice account from `OANDA_API_TOKEN`; any stage that can submit a Practice order additionally requires an explicit `OANDA_ACCOUNT_ID` and operator confirmation.
 
+The token-only read-only contract is covered end to end with mocked OANDA responses: shadow configuration accepts no account ID, the adapter discovers the authorized Practice account, transaction synchronization continues through that discovered ID, and enabling Practice writes without an explicit account ID remains invalid.
+
 The broker-minimum round-trip helper fails closed: after a known fill it attempts to close that exact probe trade even if protection verification fails or raises, and treats failed/unverifiable close state as a critical reconciliation condition.
 
 See `docs/17_OANDA_PAPER_SETUP.md` for credential/setup and staged workflow details. See `docs/25_PRACTICE_CAMPAIGN.md` for campaign evidence/analysis rules.
@@ -79,8 +81,8 @@ See `docs/17_OANDA_PAPER_SETUP.md` for credential/setup and staged workflow deta
 
 The exact v0.6.4 code/test head passes on Python 3.11 and Python 3.13:
 
-- **264 tests passed**;
-- **87.37% branch-aware coverage**;
+- **267 tests passed**;
+- **87.40% branch-aware coverage**;
 - enforced coverage minimum: **85%**;
 - dynamic `forex-trader==0.6.4` installation and bytecode compilation passed;
 - `pip check` dependency integrity passed;

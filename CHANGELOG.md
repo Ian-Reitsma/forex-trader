@@ -14,12 +14,13 @@ All notable changes to this repository are documented here.
 - Refactored the broker-minimum open/verify/close probe into a testable fail-closed helper. Once a known fill exists, the helper attempts to close that exact trade even when protection verification fails or raises, and treats failed/unverifiable closes as critical reconciliation conditions.
 - Added Practice round-trip tests covering success, unprotected fills, protection exceptions, close failures, unknown-order reconciliation, unresolved unknowns, pre-existing-position refusal and blank-instrument rejection.
 - Added workflow contract tests that enforce manual-only dispatch, serialized runs, shadow defaults, exact build identity, the staged validation sequence and absence of OANDA live-money hosts.
+- Added an integrated token-only read-only contract test proving shadow config validation, authorized account discovery and transaction synchronization without an explicit account ID, while write-enabled configuration still requires an explicit account ID.
 - Updated OANDA setup, Practice campaign and implementation-status documentation to match the staged operator path and credential boundary. No API token/account ID is written to source, evidence fingerprints or workflow artifacts.
 
 ### Validation
 
 - Exact v0.6.4 code/test head passed the complete Python 3.11 and Python 3.13 CI matrix.
-- **264 tests passed** with **87.37% branch-aware coverage**; repository fail-under remains **85%**.
+- **267 tests passed** with **87.40% branch-aware coverage**; repository fail-under remains **85%**.
 - Fresh `forex-trader==0.6.4` installation, bytecode compilation, `pip check`, secret-assignment scan and executed offline paper-order smoke passed on both Python versions.
 - Authenticated OANDA Practice success is intentionally not inferred from software CI; broker evidence remains externally credential/runtime-gated.
 
