@@ -59,6 +59,18 @@ def _required_decimal(value: object, name: str) -> Decimal:
     return Decimal(str(value))
 
 
+def _optional_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(str(value))
+
+
+def _optional_decimal(value: object) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    return Decimal(str(value))
+
+
 def _canonical_payload_hash(payload: object) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(canonical).hexdigest()
@@ -91,6 +103,18 @@ def _load_ablations(path: Path | None, *, dataset_id: str) -> tuple[AblationEvid
                 ),
                 sample_size=_required_int(item.get("sample_size"), f"ablations[{index}].sample_size"),
                 dataset_id=_required_text(item.get("dataset_id"), f"ablations[{index}].dataset_id"),
+                lower_confidence_component_increment_r=_optional_decimal(
+                    item.get("lower_confidence_component_increment_r")
+                ),
+                upper_confidence_component_increment_r=_optional_decimal(
+                    item.get("upper_confidence_component_increment_r")
+                ),
+                paired_wins=_optional_int(item.get("paired_wins")),
+                paired_losses=_optional_int(item.get("paired_losses")),
+                paired_ties=_optional_int(item.get("paired_ties")),
+                confidence=_optional_decimal(item.get("confidence")),
+                bootstrap_iterations=_optional_int(item.get("bootstrap_iterations")),
+                bootstrap_seed=_optional_int(item.get("bootstrap_seed")),
             )
         )
     if any(item.dataset_id != dataset_id for item in results):
@@ -116,15 +140,17 @@ def _load_replay(
         policy = _required_text(payload.get("policy_fingerprint"), f"{path}:policy_fingerprint")
         setup = _required_text(payload.get("setup_family_filter"), f"{path}:setup_family_filter")
         dataset = _required_mapping(payload.get("dataset"), f"{path}:dataset")
-        dataset_id = _required_text(dataset.get("dataset_id"), f"{path}:dataset.dataset_id")
+        result_dataset_id = _required_text(dataset.get("dataset_id"), f"{path}:dataset.dataset_id")
         if policy != expected_policy_fingerprint:
             raise SystemExit(
                 f"replay result {path} policy fingerprint mismatch: {policy} != {expected_policy_fingerprint}"
             )
         if setup != expected_setup:
             raise SystemExit(f"replay result {path} setup mismatch: {setup} != {expected_setup}")
-        if dataset_id != expected_dataset_id:
-            raise SystemExit(f"replay result {path} dataset mismatch: {dataset_id} != {expected_dataset_id}")
+        if result_dataset_id != expected_dataset_id:
+            raise SystemExit(
+                f"replay result {path} dataset mismatch: {result_dataset_id} != {expected_dataset_id}"
+            )
         result_hashes.append(_canonical_payload_hash(payload))
     return ReplayReproducibilityEvidence(
         manifest_hash=_canonical_json_hash(manifest),
