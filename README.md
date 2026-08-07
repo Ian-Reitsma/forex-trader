@@ -32,22 +32,23 @@ Implemented capabilities include:
 - OANDA Practice account discovery, prices, candles, instrument metadata and protected market orders;
 - EMA structure, ATR, RSI, trend-strength, liquidity-sweep and displacement analysis;
 - strict confirmation, quote freshness, spread and executable reward/risk gates;
-- economic-release and news updates to currency-level fundamental state;
+- immutable point-in-time economic-release, news and central-bank history;
 - conflict-aware technical/fundamental signal fusion;
-- risk sizing from the lower of account balance and NAV;
-- score-scaled risk, daily realized-loss checks, position limits and unit caps;
+- risk sizing from the lower of account balance and NAV with cross-currency conversion;
+- score-scaled risk, daily realized-loss checks, position/unit limits and currency-leg exposure caps;
 - protection-level validation;
 - same-instrument position blocking;
 - persistent duplicate-signal protection across process restarts;
 - OANDA precision-aware price and unit formatting;
-- OANDA read-request retries, ambiguous-order protection and redacted errors;
+- OANDA read-request retries, client-ID unknown-order reconciliation, transaction catch-up/streaming and redacted errors;
 - read-only and self-closing OANDA Practice verification scripts;
-- completion-aware, spread-aware barrier backtesting and score-threshold calibration;
+- point-in-time combined replay, rolling score-threshold calibration, untouched holdouts and multi-instrument validation;
+- session-specific spread/slippage learning and Practice promotion gates;
 - FastAPI control endpoints, Typer CLI, Docker and GitHub Actions.
 
 ## Important performance boundary
 
-The project does not claim a profitable or high-win-rate strategy. Selecting thresholds against synthetic data or the same history used for evaluation would be overfitting. The repository therefore provides chronological training/validation utilities and conservative same-candle execution assumptions. Production claims require historical point-in-time fundamentals, realistic spreads and a later untouched test period.
+The project does not claim a profitable or high-win-rate strategy. Selecting thresholds against synthetic data or the same history used for evaluation would be overfitting. The repository therefore provides chronological training/validation utilities and conservative same-candle execution assumptions. Production claims require sufficiently dense point-in-time fundamentals, realistic historical costs, multi-window stability and a later untouched test period.
 
 ## Installation
 
@@ -100,12 +101,24 @@ Run the read-only probe:
 python scripts/smoke_oanda.py
 ```
 
-Run a recent-candle technical backtest without placing orders:
+Synchronize OANDA transactions and inspect the Practice evidence gate:
 
 ```bash
-python scripts/backtest_oanda.py
-python scripts/optimize_oanda.py --instrument EUR_USD
+forex-trader sync
+forex-trader sync --stream --max-events 100
+forex-trader promotion
 ```
+
+Import point-in-time macro history, then run combined validation without placing orders:
+
+```bash
+python scripts/import_macro_history.py history.jsonl
+python scripts/backtest_oanda.py --instrument EUR_USD --days 90
+python scripts/optimize_oanda.py --instrument EUR_USD --days 180
+python scripts/validate_oanda.py --instruments EUR_USD,GBP_USD,USD_JPY --days 180
+```
+
+Use `--technical-only` only for diagnostic comparison when macro history is not yet populated.
 
 To verify the broker write path with the broker minimum and immediate closure, explicitly enable the paper gates and run:
 
@@ -147,6 +160,7 @@ Start with:
 - [Implementation status](docs/16_IMPLEMENTATION_STATUS.md)
 - [OANDA Practice setup](docs/17_OANDA_PAPER_SETUP.md)
 - [Optimization and validation](docs/18_OPTIMIZATION_VALIDATION.md)
+- [Point-in-time state, reconciliation and promotion](docs/19_POINT_IN_TIME_AND_RECONCILIATION.md)
 - [Developer implementation index](docs/dev/00_DEVELOPER_INDEX.md)
 - [System vision](docs/00_SYSTEM_VISION.md)
 - [Strategy specification](docs/02_STRATEGY_SPECIFICATION.md)

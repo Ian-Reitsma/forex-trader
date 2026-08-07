@@ -1,18 +1,18 @@
 {
-  "generated_at": "2026-08-06T22:15:00-04:00",
-  "file_count": 73,
+  "generated_at": "2026-08-06T22:50:00-04:00",
+  "file_count": 74,
   "files": [
     {
+      "path": "README.md",
+      "bytes": 6713
+    },
+    {
       "path": "CHANGELOG.md",
-      "bytes": 1401
+      "bytes": 2965
     },
     {
       "path": "CONTRIBUTING.md",
       "bytes": 1752
-    },
-    {
-      "path": "README.md",
-      "bytes": 5895
     },
     {
       "path": "SECURITY.md",
@@ -84,7 +84,7 @@
     },
     {
       "path": "docs/16_IMPLEMENTATION_STATUS.md",
-      "bytes": 3992
+      "bytes": 4462
     },
     {
       "path": "docs/17_OANDA_PAPER_SETUP.md",
@@ -92,7 +92,11 @@
     },
     {
       "path": "docs/18_OPTIMIZATION_VALIDATION.md",
-      "bytes": 4166
+      "bytes": 3012
+    },
+    {
+      "path": "docs/19_POINT_IN_TIME_AND_RECONCILIATION.md",
+      "bytes": 2224
     },
     {
       "path": "docs/SOURCES.md",

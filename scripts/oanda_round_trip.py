@@ -10,7 +10,7 @@ import json
 from decimal import Decimal
 from uuid import uuid4
 
-from forex_trader.adapters.oanda import OandaPracticeClient
+from forex_trader.adapters.oanda import OandaApiError, OandaPracticeClient
 from forex_trader.config import AppConfig
 from forex_trader.domain.enums import Direction, OperatingMode, ProviderKind
 from forex_trader.domain.models import OrderRequest
@@ -27,6 +27,7 @@ with OandaPracticeClient(
     token=config.oanda_token,
     account_id=config.oanda_account_id,
     rest_url=config.oanda_rest_url,
+    stream_url=config.oanda_stream_url,
     timeout_seconds=config.oanda_timeout_seconds,
 ) as client:
     if client.has_open_position(instrument):

@@ -7,6 +7,7 @@ from enum import StrEnum
 
 from forex_trader.domain.enums import DecisionDisposition, Direction
 from forex_trader.domain.fundamentals import FundamentalBook
+from forex_trader.domain.macro_history import PointInTimeFundamentalBook
 from forex_trader.domain.models import Candle, Quote, TradeCandidate
 from forex_trader.domain.strategy import SignalFusionPolicy
 from forex_trader.domain.technicals import assess_technicals, pip_size
@@ -221,7 +222,7 @@ def run_walk_forward_backtest(
     instrument: str,
     lower_candles: list[Candle],
     higher_candles: list[Candle],
-    fundamentals: FundamentalBook,
+    fundamentals: FundamentalBook | PointInTimeFundamentalBook,
     fusion_policy: SignalFusionPolicy,
     spread_pips: Decimal = Decimal("1.0"),
     maximum_holding_bars: int = 24,
@@ -230,9 +231,10 @@ def run_walk_forward_backtest(
 ) -> tuple[list[BacktestTrade], BacktestReport]:
     """Replay completed candles without using future bars in signal construction.
 
-    The spread is applied to the synthetic executable quote. This function does not
-    reconstruct historical fundamental releases unless the supplied FundamentalBook
-    itself is point-in-time correct; callers must label technical-only runs accordingly.
+    The spread is applied to the synthetic executable quote. Pass a
+    PointInTimeFundamentalBook to guarantee that each decision sees only macro/news
+    observations available at that historical timestamp. A plain FundamentalBook is
+    supported for technical-only diagnostics and controlled tests.
     """
     lower = sorted((c for c in lower_candles if c.complete), key=lambda candle: candle.time)
     higher = sorted((c for c in higher_candles if c.complete), key=lambda candle: candle.time)

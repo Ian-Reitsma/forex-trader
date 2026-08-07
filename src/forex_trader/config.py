@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlparse
@@ -11,8 +12,10 @@ from forex_trader.adapters.oanda import OandaPracticeClient
 from forex_trader.adapters.simulator import SimulatedPaperBroker
 from forex_trader.adapters.synthetic import SyntheticMarketData
 from forex_trader.application.engine import TradingEngine
+from forex_trader.domain.costs import SessionCostModel
 from forex_trader.domain.enums import OperatingMode, ProviderKind
 from forex_trader.domain.fundamentals import FundamentalBook
+from forex_trader.domain.macro_history import MacroObservationKind
 from forex_trader.domain.models import CurrencyFundamentals
 from forex_trader.domain.risk import RiskPolicy
 from forex_trader.domain.strategy import SignalFusionPolicy
@@ -58,9 +61,12 @@ class AppConfig:
     max_daily_loss_fraction: Decimal = Decimal("0.02")
     max_open_positions: int = 3
     max_units: int = 100_000
+    max_gross_exposure_fraction: Decimal = Decimal("6")
+    max_currency_exposure_fraction: Decimal = Decimal("3")
     oanda_token: str | None = field(default=None, repr=False)
     oanda_account_id: str | None = None
     oanda_rest_url: str = "https://api-fxpractice.oanda.com"
+    oanda_stream_url: str = "https://stream-fxpractice.oanda.com"
     oanda_timeout_seconds: float = 10.0
 
     @classmethod
@@ -84,9 +90,12 @@ class AppConfig:
             max_daily_loss_fraction=_decimal_env("FOREX_MAX_DAILY_LOSS_FRACTION", "0.02"),
             max_open_positions=int(os.getenv("FOREX_MAX_OPEN_POSITIONS", "3")),
             max_units=int(os.getenv("FOREX_MAX_UNITS", "100000")),
+            max_gross_exposure_fraction=_decimal_env("FOREX_MAX_GROSS_EXPOSURE_FRACTION", "6"),
+            max_currency_exposure_fraction=_decimal_env("FOREX_MAX_CURRENCY_EXPOSURE_FRACTION", "3"),
             oanda_token=os.getenv("OANDA_API_TOKEN") or None,
             oanda_account_id=os.getenv("OANDA_ACCOUNT_ID") or None,
             oanda_rest_url=os.getenv("OANDA_REST_URL", "https://api-fxpractice.oanda.com"),
+            oanda_stream_url=os.getenv("OANDA_STREAM_URL", "https://stream-fxpractice.oanda.com"),
             oanda_timeout_seconds=float(os.getenv("OANDA_TIMEOUT_SECONDS", "10")),
         )
 
@@ -98,6 +107,9 @@ class AppConfig:
             parsed = urlparse(self.oanda_rest_url)
             if parsed.scheme != "https" or parsed.hostname != "api-fxpractice.oanda.com":
                 errors.append("the OANDA provider is locked to https://api-fxpractice.oanda.com")
+            stream = urlparse(self.oanda_stream_url)
+            if stream.scheme != "https" or stream.hostname != "stream-fxpractice.oanda.com":
+                errors.append("the OANDA stream is locked to https://stream-fxpractice.oanda.com")
         if self.enable_paper_orders and self.mode is not OperatingMode.PAPER:
             errors.append("paper orders can only be enabled when FOREX_MODE=paper")
         if not self.instruments:
@@ -110,17 +122,32 @@ class AppConfig:
             errors.append("FOREX_RISK_FRACTION must be greater than 0 and no more than 0.02")
         if self.max_open_positions < 1 or self.max_units < 1:
             errors.append("position and unit limits must be positive")
+        if self.max_gross_exposure_fraction <= 0 or self.max_currency_exposure_fraction <= 0:
+            errors.append("portfolio exposure limits must be positive")
         return errors
 
 
-def load_macro_file(path: str | Path | None) -> FundamentalBook:
-    defaults = {
-        "EUR": {"policy": "0.10", "inflation": "0.05", "growth": "0.10", "labor": "0.05", "news": "0", "confidence": "0.70"},
-        "USD": {"policy": "-0.05", "inflation": "0", "growth": "0", "labor": "0", "news": "0", "confidence": "0.70"},
-        "GBP": {"policy": "0.05", "inflation": "0.05", "growth": "0", "labor": "0", "news": "0", "confidence": "0.65"},
-        "JPY": {"policy": "-0.20", "inflation": "-0.05", "growth": "-0.05", "labor": "0", "news": "0", "confidence": "0.65"},
-    }
-    data = defaults if path is None else json.loads(Path(path).read_text())
+def load_macro_file(
+    path: str | Path | None,
+    *,
+    use_demo_defaults: bool = True,
+) -> FundamentalBook:
+    if path is None and use_demo_defaults:
+        data = {
+            "EUR": {"policy": "0.10", "inflation": "0.05", "growth": "0.10", "labor": "0.05", "news": "0", "confidence": "0.70"},
+            "USD": {"policy": "-0.05", "inflation": "0", "growth": "0", "labor": "0", "news": "0", "confidence": "0.70"},
+            "GBP": {"policy": "0.05", "inflation": "0.05", "growth": "0", "labor": "0", "news": "0", "confidence": "0.65"},
+            "JPY": {"policy": "-0.20", "inflation": "-0.05", "growth": "-0.05", "labor": "0", "news": "0", "confidence": "0.65"},
+        }
+        as_of = datetime.now(UTC)
+    elif path is None:
+        data = {currency: {"confidence": "0"} for currency in ("EUR", "USD", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD")}
+        # A stale zero-confidence seed prevents placeholder macro priors from
+        # authorizing practice orders before real observations are ingested.
+        as_of = datetime(2000, 1, 1, tzinfo=UTC)
+    else:
+        data = json.loads(Path(path).read_text())
+        as_of = datetime.now(UTC)
     snapshots = [
         CurrencyFundamentals(
             currency=currency,
@@ -130,6 +157,7 @@ def load_macro_file(path: str | Path | None) -> FundamentalBook:
             labor=Decimal(str(values.get("labor", 0))),
             news=Decimal(str(values.get("news", 0))),
             confidence=Decimal(str(values.get("confidence", 0))),
+            as_of=as_of,
         )
         for currency, values in data.items()
     ]
@@ -141,13 +169,41 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
     if errors:
         raise ValueError("; ".join(errors))
     repository = SqliteDecisionRepository(config.database_path)
-    fundamentals = load_macro_file(macro_file)
+    fundamentals = load_macro_file(
+        macro_file,
+        use_demo_defaults=config.provider is ProviderKind.SIMULATION,
+    )
+    for observation in repository.macro_observations():
+        if observation.kind is MacroObservationKind.RELEASE:
+            assert observation.actual is not None
+            assert observation.forecast is not None
+            assert observation.previous is not None
+            fundamentals.apply_release(
+                currency=observation.currency,
+                category=observation.category,
+                actual=observation.actual,
+                forecast=observation.forecast,
+                previous=observation.previous,
+                higher_is_positive=observation.higher_is_positive,
+                importance=observation.importance,
+                observed_at=observation.available_at,
+            )
+        else:
+            fundamentals.apply_news(
+                currency=observation.currency,
+                headline=observation.headline,
+                body=observation.body,
+                source_weight=observation.source_weight,
+                observed_at=observation.available_at,
+            )
+
     if config.provider is ProviderKind.OANDA:
         assert config.oanda_token is not None
         provider = OandaPracticeClient(
             token=config.oanda_token,
             account_id=config.oanda_account_id,
             rest_url=config.oanda_rest_url,
+            stream_url=config.oanda_stream_url,
             timeout_seconds=config.oanda_timeout_seconds,
         )
         broker = provider
@@ -169,7 +225,10 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
             max_daily_loss_fraction=config.max_daily_loss_fraction,
             max_open_positions=config.max_open_positions,
             max_units=config.max_units,
+            max_gross_exposure_fraction=config.max_gross_exposure_fraction,
+            max_currency_exposure_fraction=config.max_currency_exposure_fraction,
         ),
         mode=config.mode,
         enable_paper_orders=config.enable_paper_orders,
+        cost_model=SessionCostModel(repository.cost_samples(), minimum_samples=30),
     )

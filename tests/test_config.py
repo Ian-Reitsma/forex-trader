@@ -45,3 +45,51 @@ def test_load_dotenv_does_not_override_existing_environment(monkeypatch, tmp_pat
     monkeypatch.setenv("FOREX_PROVIDER", "simulation")
     load_dotenv(env_file)
     assert AppConfig.from_env().provider is ProviderKind.SIMULATION
+
+
+def test_oanda_without_macro_file_starts_with_zero_confidence_priors(tmp_path) -> None:
+    from forex_trader.config import build_engine
+
+    config = AppConfig(
+        provider=ProviderKind.OANDA,
+        mode=OperatingMode.SHADOW,
+        database_path=str(tmp_path / "oanda.db"),
+        oanda_token="token",
+    )
+    engine = build_engine(config)
+    assert engine.fundamentals.get("EUR") is not None
+    assert engine.fundamentals.get("EUR").confidence == 0  # type: ignore[union-attr]
+
+
+def test_config_locks_stream_host_and_exposure_limits() -> None:
+    config = AppConfig(
+        provider=ProviderKind.OANDA,
+        oanda_token="token",
+        oanda_stream_url="https://stream-fxtrade.oanda.com",
+        max_currency_exposure_fraction=__import__("decimal").Decimal("0"),
+    )
+    errors = "; ".join(config.validate())
+    assert "stream" in errors
+    assert "exposure" in errors
+
+
+def test_build_engine_replays_persisted_macro_history(tmp_path) -> None:
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from forex_trader.config import build_engine
+    from forex_trader.domain.macro_history import MacroObservation
+    from forex_trader.infrastructure.repository import SqliteDecisionRepository
+
+    db = tmp_path / "persist.db"
+    repository = SqliteDecisionRepository(db)
+    repository.save_macro_observation(
+        MacroObservation.news(
+            currency="EUR",
+            headline="growth strong",
+            source_weight=Decimal("1"),
+            available_at=datetime.now(UTC),
+        )
+    )
+    repository.close()
+    engine = build_engine(AppConfig(database_path=str(db)))
+    assert engine.fundamentals.get("EUR").news > 0  # type: ignore[union-attr]

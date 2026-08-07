@@ -7,8 +7,10 @@ import typer
 import uvicorn
 
 from forex_trader.api.app import create_app
-from forex_trader.application.runner import run_cycles
 from forex_trader.config import AppConfig, build_engine
+from forex_trader.application.runner import run_cycles
+from forex_trader.application.sync import BrokerStateSynchronizer
+from forex_trader.domain.enums import ProviderKind
 from forex_trader.domain.models import jsonable
 
 app = typer.Typer(no_args_is_help=True, help="Forex Trader paper-trading control CLI")
@@ -76,6 +78,34 @@ def run_bot(
     )
     if max_cycles is not None:
         typer.echo(json.dumps([jsonable(trace) for trace in traces], indent=2))
+
+
+@app.command()
+def sync(
+    stream: bool = typer.Option(False, help="Consume the OANDA transaction stream after REST catch-up"),
+    max_events: int | None = typer.Option(None, min=1, help="Stop streaming after this many payloads"),
+) -> None:
+    """Catch up and optionally stream OANDA Practice transactions into SQLite."""
+    config = AppConfig.from_env()
+    if config.provider is not ProviderKind.OANDA:
+        raise typer.BadParameter("FOREX_PROVIDER must be oanda for broker synchronization")
+    engine = build_engine(config)
+    synchronizer = BrokerStateSynchronizer(engine.broker, engine.repository)
+    inserted = (
+        synchronizer.stream(max_events=max_events)
+        if stream
+        else synchronizer.catch_up()
+    )
+    cursor = engine.repository.get_broker_cursor("oanda.transactions")
+    typer.echo(json.dumps({"inserted": inserted, "cursor": cursor, "stream": stream}, indent=2))
+
+
+@app.command()
+def promotion() -> None:
+    """Show whether accumulated practice evidence meets promotion gates."""
+    config = AppConfig.from_env()
+    engine = build_engine(config)
+    typer.echo(json.dumps(engine.promotion_status(), indent=2))
 
 
 @app.command()

@@ -2,79 +2,69 @@
 
 ## Current release
 
-Version 0.2.0 is a functioning paper-trading platform with an offline deterministic provider and an OANDA fxTrade Practice adapter. It is not a live-money system.
+Version 0.3.0 is a functioning OANDA fxTrade Practice / offline-simulation platform. It remains paper-only and contains no live-money endpoint.
 
 ```text
 completed M5/H1 candles + executable quote
                     +
-       timestamped currency fundamentals
+ point-in-time macro/news/central-bank observations
                     ↓
- technical structure and confirmation
+ technical + fundamental decision engine
                     ↓
-     fundamental pair differential
+ learned session-cost ceiling + explicit abstention
                     ↓
- confirmation, freshness, spread and RR gates
+ independent stop, conversion and portfolio risk gate
                     ↓
-      independent risk authorization
+ protected practice order / shadow trace
                     ↓
- shadow decision or protected practice order
+ OANDA order reconciliation + transaction ledger
                     ↓
- persistent decision and execution audit
+ practice promotion metrics + rolling validation
 ```
 
-## Implemented components
+## Implemented runtime components
 
-- Domain models for candles, quotes, instrument specifications, accounts, assessments, candidates, risk authorizations, orders, fills and traces.
-- EMA, ATR, RSI, higher-timeframe trend strength, lower-timeframe alignment, liquidity-sweep and displacement analysis.
-- Conservative setup requirements for sweep, directional displacement, quote freshness, spread and executable reward/risk.
-- Currency-level fundamental state updated by economic releases and news observations.
-- Fundamental freshness reduction and explicit conflict rejection.
-- Position sizing from the lower of balance and NAV.
-- Score-scaled risk budgets, daily realized-loss limits, open-position limits and maximum units.
-- Protection-level validation for long and short orders.
-- Persistent duplicate signal-candle claims, with release only after a definite broker rejection.
-- Ambiguous market-order transport outcomes are recorded as `UNKNOWN` and retain the execution claim.
-- Same-instrument position stacking prevention.
-- Deterministic synthetic market data and simulated paper fills.
-- OANDA Practice account discovery, summary, tradeable-instrument metadata, candles, quotes, open positions, order placement and trade closure.
-- OANDA display-precision, pip-location, unit-precision and minimum/maximum-order enforcement.
-- OANDA bounded retries for read-only requests and credential-safe exceptions.
-- Market-order requests are never blindly retried after an ambiguous transport or 5xx outcome.
-- OANDA daily realized P/L reconstruction from UTC-day transaction pages.
-- Read-only broker probe and self-closing minimum-size round-trip test.
-- SQLite decision traces and atomic execution claims.
-- FastAPI control plane and Typer CLI.
-- Conservative spread-aware candle barrier backtesting, completion-time controls, performance summaries and chronological threshold optimization.
-- Docker image, Compose configuration and GitHub Actions.
+- Completed-candle M5/H1 technical analysis with EMA structure, ATR, RSI, liquidity sweeps, displacement, quote freshness, spread and executable reward/risk gates.
+- Immutable macro observations with exact availability timestamps, source metadata, release forecasts/actuals/previous values, revisions, news and central-bank material.
+- Point-in-time fundamental reconstruction that excludes both future observations and future-dated seed state.
+- SQLite persistence for decisions, duplicate execution claims, macro history, execution-cost samples, OANDA transactions and durable transaction cursors.
+- OANDA Practice account discovery, candles, bounded historical ranges, prices, instrument metadata, positions, currency conversion, protected market orders and trade closing.
+- OANDA order reconciliation by client ID with transaction-history fallback. Ambiguous writes are never blindly resubmitted.
+- OANDA transaction catch-up and newline-delimited stream consumption with restart-safe cursors and idempotent transaction storage.
+- Learned UTC session cost profiles for Asia, London, London/New York overlap, New York and off-hours. Learned limits may tighten but never widen the configured spread ceiling.
+- Risk sizing from the lower of balance/NAV with quote-to-account currency conversion, daily loss limits, position limits, unit caps, gross currency exposure and single-currency concentration limits.
+- Portfolio risk fails closed when an existing position or currency leg cannot be priced reliably.
+- Practice promotion gates based on decision/trade sample sizes, win rate, profit factor, realized P/L, drawdown, broker reject rate, unknown-order rate and median slippage.
+- Chronological rolling validation with final untouched holdouts and multi-instrument aggregation.
+- CLI, FastAPI, Docker and two-version GitHub Actions verification.
 
-## Validation state
+## Operator commands
 
-The local acceptance run for version 0.2.0 includes:
+```bash
+forex-trader sync
+forex-trader sync --stream --max-events 100
+forex-trader promotion
+python scripts/import_macro_history.py history.jsonl
+python scripts/backtest_oanda.py --instrument EUR_USD --days 90
+python scripts/optimize_oanda.py --instrument EUR_USD --days 180
+python scripts/validate_oanda.py --instruments EUR_USD,GBP_USD,USD_JPY --days 180
+```
 
-- all tests passing;
-- branch-aware coverage above the repository minimum;
-- Python bytecode compilation;
-- dependency consistency checks;
-- offline shadow evaluation;
-- offline protected paper execution;
-- duplicate-order and open-position regression tests;
-- OANDA contract tests through mocked official response shapes.
+Use `--technical-only` on the research scripts only for diagnostic comparison when point-in-time macro history is unavailable. Combined-strategy research defaults to persisted point-in-time observations.
 
-Authenticated OANDA Practice network verification must be performed in an environment with external network access. Tokens are never committed or embedded in CI configuration.
+## Network verification boundary
 
-## Deliberately incomplete
+The OANDA credential is read only from `OANDA_API_TOKEN`. It is never persisted by the application. Authenticated Practice probes have been attempted from the implementation environment, but outbound DNS resolution for `api-fxpractice.oanda.com` is blocked before authentication. Contract behavior is covered by deterministic tests; a real authenticated smoke/round-trip must therefore be run from a normal networked host such as the user's Mac.
 
-The following remain future phases:
+## Still incomplete
 
-- automatic licensed economic-calendar ingestion;
-- historical point-in-time economic consensus and revisions;
-- licensed real-time news and central-bank document extraction;
-- futures order-flow proxy ingestion;
-- complete OANDA transaction-stream reconciliation and restart state recovery;
-- conversion-aware risk sizing for non-USD crosses;
-- portfolio-level correlated currency exposure;
-- PostgreSQL/TimescaleDB and event-bus deployment;
-- longer historical datasets and untouched out-of-sample validation;
-- any live-money endpoint, credential or activation path.
+- Automated licensed economic-calendar collection and consensus snapshots.
+- Automated licensed news ingestion and official central-bank document collector.
+- Futures order-flow proxy ingestion.
+- Historical session-specific spread reconstruction from broker tick data rather than user-collected runtime samples.
+- Correlation/covariance-aware portfolio limits beyond currency-leg concentration.
+- PostgreSQL/TimescaleDB/event-bus deployment for high-volume operation.
+- Sufficient untouched historical and live Practice evidence to claim an edge.
+- Any live-money execution mode.
 
-No win-rate or profit claim is supported until the missing point-in-time data and out-of-sample evidence exist.
+No win-rate or profitability claim is supported until the combined system has sufficient point-in-time data and untouched out-of-sample evidence.

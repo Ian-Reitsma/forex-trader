@@ -47,9 +47,14 @@ class SignalFusionPolicy:
         technical: TechnicalAssessment,
         fundamental: FundamentalAssessment,
         quote: Quote,
+        *,
+        maximum_spread_pips: Decimal | None = None,
     ) -> TradeCandidate:
         reasons = [*technical.reasons, *fundamental.reasons]
         spread_pips = quote.spread / pip_size(technical.instrument)
+        spread_limit = self.maximum_spread_pips if maximum_spread_pips is None else maximum_spread_pips
+        if spread_limit <= 0:
+            raise ValueError("maximum_spread_pips override must be positive")
         signal_gap = (quote.time - technical.signal_time).total_seconds()
 
         if technical.direction is Direction.FLAT:
@@ -63,11 +68,11 @@ class SignalFusionPolicy:
                 f"quote/signal gap {signal_gap:.0f}s is outside the permitted window",
                 reasons,
             )
-        if spread_pips > self.maximum_spread_pips:
+        if spread_pips > spread_limit:
             return self._abstain(
                 technical,
                 fundamental,
-                f"spread {spread_pips:.2f} pips exceeds maximum {self.maximum_spread_pips}",
+                f"spread {spread_pips:.2f} pips exceeds maximum {spread_limit}",
                 reasons,
             )
         if self.require_liquidity_sweep and not technical.liquidity_sweep:
