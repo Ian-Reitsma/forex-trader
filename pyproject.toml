@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "forex-trader"
-version = "0.5.0"
+dynamic = ["version"]
 description = "Practice-only FX research and execution platform combining structure, liquidity, fundamentals and broker-safe controls."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,6 +31,9 @@ forex-trader = "forex_trader.cli:app"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+[tool.setuptools.dynamic]
+version = { attr = "forex_trader.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
