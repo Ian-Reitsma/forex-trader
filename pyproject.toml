@@ -44,7 +44,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = "-q --disable-warnings --strict-markers"
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 
 [tool.coverage.run]
 branch = true
