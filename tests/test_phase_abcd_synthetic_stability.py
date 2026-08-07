@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from forex_trader.adapters.synthetic import _stable_future_anchor
+from forex_trader.adapters.synthetic import DEFAULT_SYNTHETIC_ANCHOR, SyntheticMarketData
 
 
-def test_synthetic_anchor_is_session_stable_across_hour_boundary() -> None:
-    before = _stable_future_anchor(datetime(2026, 8, 6, 18, 59, tzinfo=UTC))
-    after = _stable_future_anchor(datetime(2026, 8, 6, 19, 1, tzinfo=UTC))
-    friday_after = _stable_future_anchor(datetime(2026, 8, 7, 19, 1, tzinfo=UTC))
+def test_synthetic_default_clock_is_fixed_session_stable_and_weekday() -> None:
+    first = SyntheticMarketData(seed=1)
+    second = SyntheticMarketData(seed=2)
 
-    assert before == datetime(2026, 8, 6, 19, 0, tzinfo=UTC)
-    assert after == datetime(2026, 8, 7, 19, 0, tzinfo=UTC)
-    assert friday_after == datetime(2026, 8, 10, 19, 0, tzinfo=UTC)
-    assert all(anchor.hour == 19 and anchor.weekday() < 5 for anchor in (before, after, friday_after))
+    assert first.anchor == DEFAULT_SYNTHETIC_ANCHOR
+    assert second.anchor == DEFAULT_SYNTHETIC_ANCHOR
+    assert DEFAULT_SYNTHETIC_ANCHOR == datetime(2025, 1, 15, 19, 0, tzinfo=UTC)
+    assert DEFAULT_SYNTHETIC_ANCHOR.hour == 19
+    assert DEFAULT_SYNTHETIC_ANCHOR.weekday() < 5
