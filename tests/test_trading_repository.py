@@ -69,8 +69,8 @@ def test_trading_repository_promotion_metrics_use_full_trace_metadata() -> None:
     # Keep this test independent of wall-clock session/weekend state. Use the next
     # weekday at 18:00 UTC, which is New York continuation and outside London-fix
     # and rollover blackouts. Seed 11 is the canonical deterministic qualifying
-    # setup used by the end-to-end engine fixture; this test is about repository
-    # accounting, not whether an arbitrary synthetic seed should trade.
+    # setup used by the end-to-end engine fixture; the fundamental snapshots share
+    # the same logical timestamp so freshness cannot depend on the day CI runs.
     anchor = datetime.now(UTC) + timedelta(days=1)
     while anchor.weekday() >= 5:
         anchor += timedelta(days=1)
@@ -83,8 +83,12 @@ def test_trading_repository_promotion_metrics_use_full_trace_metadata() -> None:
         repository=repository,
         fundamentals=FundamentalBook(
             [
-                CurrencyFundamentals("EUR", policy=Decimal("0.5"), confidence=Decimal("0.9")),
-                CurrencyFundamentals("USD", policy=Decimal("-0.5"), confidence=Decimal("0.9")),
+                CurrencyFundamentals(
+                    "EUR", policy=Decimal("0.5"), confidence=Decimal("0.9"), as_of=anchor
+                ),
+                CurrencyFundamentals(
+                    "USD", policy=Decimal("-0.5"), confidence=Decimal("0.9"), as_of=anchor
+                ),
             ]
         ),
         fusion_policy=SignalFusionPolicy(minimum_score=Decimal("0.5")),
