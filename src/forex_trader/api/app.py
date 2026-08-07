@@ -7,6 +7,7 @@ from decimal import Decimal
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
+from forex_trader import __version__
 from forex_trader.application.engine import TradingEngine
 from forex_trader.domain.models import jsonable
 
@@ -63,7 +64,7 @@ def create_app(
     `allow_unsafe_local_mutations` escape hatch exists only for local tests and
     loopback development; the CLI never enables it for a non-loopback bind.
     """
-    app = FastAPI(title="Forex Trader Control API", version="0.5.0")
+    app = FastAPI(title="Forex Trader Control API", version=__version__)
 
     def require_auth(authorization: str | None = Header(default=None)) -> None:
         if api_token is None:
@@ -85,7 +86,7 @@ def create_app(
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok"}
+        return {"status": "ok", "version": __version__}
 
     @app.get("/v1/status", dependencies=protected)
     def system_status() -> dict[str, object]:
