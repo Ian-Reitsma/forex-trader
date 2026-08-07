@@ -35,6 +35,9 @@ _UNRESOLVED_STATUS_NAMES = {
 
 @dataclass(frozen=True, slots=True)
 class CampaignAggregate:
+    policy_fingerprint: str
+    campaign_ids: tuple[str, ...]
+    policy_context: dict[str, object] | None
     cycles: int
     instruments_requested: int
     instruments_evaluated: int
@@ -109,6 +112,9 @@ class CampaignDiagnosis:
     def to_jsonable(self) -> dict[str, object]:
         return {
             "aggregate": {
+                "policy_fingerprint": self.aggregate.policy_fingerprint,
+                "campaign_ids": list(self.aggregate.campaign_ids),
+                "policy_context": self.aggregate.policy_context,
                 "cycles": self.aggregate.cycles,
                 "instruments_requested": self.aggregate.instruments_requested,
                 "instruments_evaluated": self.aggregate.instruments_evaluated,
@@ -160,10 +166,7 @@ _STRATEGY_REJECTIONS = {
     "INSUFFICIENT_NET_REWARD",
     "SCORE_BELOW_POLICY",
 }
-_FUNDAMENTAL_REJECTIONS = {
-    "FUNDAMENTAL_UNCALIBRATED",
-    "FUNDAMENTAL_CONFLICT",
-}
+_FUNDAMENTAL_REJECTIONS = {"FUNDAMENTAL_UNCALIBRATED", "FUNDAMENTAL_CONFLICT"}
 _CONTEXT_REJECTIONS = {
     "EVENT_BLACKOUT",
     "MARKET_HOLIDAY",
@@ -173,7 +176,6 @@ _CONTEXT_REJECTIONS = {
     "CANDIDATE_EXPIRED",
     "LATE_ENTRY",
 }
-
 _NUMERIC_FIELDS = (
     "instruments_requested",
     "instruments_evaluated",
@@ -213,18 +215,68 @@ def load_campaign_jsonl(path: str | Path) -> list[dict[str, object]]:
     return records
 
 
-def aggregate_campaign(records: Iterable[Mapping[str, object]]) -> CampaignAggregate:
-    records = tuple(records)
-    if not records:
+def select_policy_cohort(
+    records: Iterable[Mapping[str, object]],
+    *,
+    policy_fingerprint: str | None = None,
+) -> tuple[tuple[Mapping[str, object], ...], str]:
+    rows = tuple(records)
+    if not rows:
         raise ValueError("at least one campaign cycle is required")
+    available = sorted({_policy_fingerprint(row) for row in rows})
+    if policy_fingerprint is not None:
+        requested = policy_fingerprint.strip()
+        if not requested:
+            raise ValueError("policy_fingerprint cannot be empty")
+        selected = tuple(row for row in rows if _policy_fingerprint(row) == requested)
+        if not selected:
+            raise ValueError(
+                f"policy fingerprint {requested!r} is not present; available cohorts: {', '.join(available)}"
+            )
+        return selected, requested
+    if len(available) > 1:
+        raise ValueError(
+            "campaign evidence contains multiple policy cohorts: "
+            + ", ".join(available)
+            + "; select one explicitly with --policy-fingerprint"
+        )
+    return rows, available[0]
+
+
+def aggregate_campaign(
+    records: Iterable[Mapping[str, object]],
+    *,
+    policy_fingerprint: str | None = None,
+) -> CampaignAggregate:
+    records, selected_fingerprint = select_policy_cohort(
+        records, policy_fingerprint=policy_fingerprint
+    )
     rejection_codes: Counter[str] = Counter()
     risk_denials: Counter[str] = Counter()
     error_types: Counter[str] = Counter()
     order_statuses: Counter[str] = Counter()
     totals = Counter[str]()
     promotion = Counter[str]()
+    campaign_ids: set[str] = set()
+    policy_context: dict[str, object] | None = None
+    policy_context_canonical: str | None = None
 
     for index, record in enumerate(records, start=1):
+        campaign_ids.add(str(record.get("campaign_id") or "legacy"))
+        context = record.get("policy_context")
+        if context is not None:
+            if not isinstance(context, Mapping):
+                raise ValueError(f"campaign cycle {index} field policy_context must be an object")
+            context_dict = {str(key): value for key, value in context.items()}
+            canonical = json.dumps(context_dict, sort_keys=True, separators=(",", ":"), default=str)
+            if policy_context_canonical is None:
+                policy_context = context_dict
+                policy_context_canonical = canonical
+            elif canonical != policy_context_canonical:
+                raise ValueError(
+                    f"policy cohort {selected_fingerprint} contains inconsistent policy_context values"
+                )
+
         values = {
             field: _nonnegative_int(record.get(field, 0), field=field, cycle=index)
             for field in _NUMERIC_FIELDS
@@ -240,8 +292,6 @@ def aggregate_campaign(records: Iterable[Mapping[str, object]]) -> CampaignAggre
                 count for status_name, count in statuses.items() if status_name in _UNRESOLVED_STATUS_NAMES
             )
         else:
-            # Backward compatibility for evidence written before the generalized
-            # unresolved-state counter existed.
             values["orders_unresolved"] = (
                 values["orders_unknown"]
                 + values["orders_reconciliation_required"]
@@ -271,6 +321,9 @@ def aggregate_campaign(records: Iterable[Mapping[str, object]]) -> CampaignAggre
         raise ValueError("campaign error-type totals do not match aggregate errors")
 
     return CampaignAggregate(
+        policy_fingerprint=selected_fingerprint,
+        campaign_ids=tuple(sorted(campaign_ids)),
+        policy_context=policy_context,
         cycles=len(records),
         instruments_requested=totals["instruments_requested"],
         instruments_evaluated=totals["instruments_evaluated"],
@@ -306,10 +359,7 @@ def diagnose_campaign(
 ) -> CampaignDiagnosis:
     if minimum_cycles < 1 or minimum_evaluations < 1:
         raise ValueError("minimum evidence thresholds must be positive")
-    evidence_sufficient = (
-        aggregate.cycles >= minimum_cycles
-        and aggregate.instruments_evaluated >= minimum_evaluations
-    )
+    evidence_sufficient = aggregate.cycles >= minimum_cycles and aggregate.instruments_evaluated >= minimum_evaluations
     categories = Counter[str]()
     for code, count in aggregate.rejection_codes.items():
         if code in _STRATEGY_REJECTIONS:
@@ -326,7 +376,6 @@ def diagnose_campaign(
     categories[CampaignBottleneck.PROVIDER_ERRORS.value] += aggregate.errors
 
     primary = _primary_bottleneck(aggregate, categories, evidence_sufficient)
-    recommendations = _recommendations(aggregate, categories, primary, evidence_sufficient)
     return CampaignDiagnosis(
         aggregate=aggregate,
         primary_bottleneck=primary,
@@ -336,7 +385,7 @@ def diagnose_campaign(
         top_risk_denials=tuple(Counter(aggregate.risk_denial_reasons).most_common(8)),
         top_error_types=tuple(Counter(aggregate.error_types).most_common(8)),
         top_order_statuses=tuple(Counter(aggregate.order_statuses).most_common(8)),
-        recommendations=tuple(recommendations),
+        recommendations=tuple(_recommendations(aggregate, categories, primary, evidence_sufficient)),
     )
 
 
@@ -345,9 +394,10 @@ def analyze_campaign_file(
     *,
     minimum_cycles: int = 5,
     minimum_evaluations: int = 100,
+    policy_fingerprint: str | None = None,
 ) -> CampaignDiagnosis:
     return diagnose_campaign(
-        aggregate_campaign(load_campaign_jsonl(path)),
+        aggregate_campaign(load_campaign_jsonl(path), policy_fingerprint=policy_fingerprint),
         minimum_cycles=minimum_cycles,
         minimum_evaluations=minimum_evaluations,
     )
@@ -362,10 +412,7 @@ def _primary_bottleneck(
         return CampaignBottleneck.EXECUTION_UNCERTAINTY
     if aggregate.errors > 0 and aggregate.error_rate >= Decimal("0.05"):
         return CampaignBottleneck.PROVIDER_ERRORS
-    if (
-        aggregate.orders_rejected + aggregate.orders_cancelled > 0
-        and aggregate.broker_reject_rate >= Decimal("0.05")
-    ):
+    if aggregate.orders_rejected + aggregate.orders_cancelled > 0 and aggregate.broker_reject_rate >= Decimal("0.05"):
         return CampaignBottleneck.BROKER_REJECTIONS
     if not evidence_sufficient:
         return CampaignBottleneck.INSUFFICIENT_EVIDENCE
@@ -377,9 +424,7 @@ def _primary_bottleneck(
         CampaignBottleneck.PORTFOLIO_RISK,
     )
     winner = max(ordered, key=lambda item: categories.get(item.value, 0))
-    if categories.get(winner.value, 0) > 0:
-        return winner
-    return CampaignBottleneck.CLEAN_SELECTIVE
+    return winner if categories.get(winner.value, 0) > 0 else CampaignBottleneck.CLEAN_SELECTIVE
 
 
 def _recommendations(
@@ -390,67 +435,35 @@ def _recommendations(
 ) -> list[str]:
     recommendations: list[str] = []
     if primary is CampaignBottleneck.EXECUTION_UNCERTAINTY:
-        recommendations.append(
-            "Stop new Practice risk and reconcile broker orders/trades before any further submissions. Protection/reconciliation/partial/ambiguous states outrank strategy tuning."
-        )
+        recommendations.append("Stop new Practice risk and reconcile broker orders/trades before any further submissions. Protection/reconciliation/partial/ambiguous states outrank strategy tuning.")
     if aggregate.orders_emergency_close > 0:
-        recommendations.append(
-            "Emergency-close evidence means dependent protection could not be verified. Resolve broker protection behavior before any additional Practice risk."
-        )
+        recommendations.append("Emergency-close evidence means dependent protection could not be verified. Resolve broker protection behavior before any additional Practice risk.")
     if primary is CampaignBottleneck.PROVIDER_ERRORS:
-        recommendations.append(
-            "Resolve provider/authentication/market-data errors before strategy optimization; repeated failed evaluations are not strategy evidence."
-        )
+        recommendations.append("Resolve provider/authentication/market-data errors before strategy optimization; repeated failed evaluations are not strategy evidence.")
     if primary is CampaignBottleneck.BROKER_REJECTIONS:
-        recommendations.append(
-            "Inspect OANDA reject/cancel payloads, instrument metadata, protection distances and unit/price precision before changing strategy thresholds."
-        )
+        recommendations.append("Inspect OANDA reject/cancel payloads, instrument metadata, protection distances and unit/price precision before changing strategy thresholds.")
     if primary is CampaignBottleneck.UNCLASSIFIED_ABSTENTION:
-        recommendations.append(
-            "A new/unknown abstention code dominates. Classify its semantics and add a tested analyzer mapping before drawing optimization conclusions."
-        )
+        recommendations.append("A new/unknown abstention code dominates. Classify its semantics and add a tested analyzer mapping before drawing optimization conclusions.")
     if not evidence_sufficient:
-        recommendations.append(
-            "Collect more independent campaign cycles/evaluations before treating rejection frequencies as stable."
-        )
+        recommendations.append("Collect more independent campaign cycles/evaluations within this exact policy cohort before treating rejection frequencies as stable.")
     if categories.get(CampaignBottleneck.FUNDAMENTAL_DATA.value, 0):
-        recommendations.append(
-            "If FUNDAMENTAL_UNCALIBRATED dominates, improve legitimate point-in-time macro/news coverage rather than disabling the fundamental gate."
-        )
+        recommendations.append("If FUNDAMENTAL_UNCALIBRATED dominates, improve legitimate point-in-time macro/news coverage rather than disabling the fundamental gate.")
     if categories.get(CampaignBottleneck.MARKET_CONTEXT.value, 0):
-        recommendations.append(
-            "Treat event, holiday, rollover, spread and late-entry abstentions as execution/context evidence; do not compensate by widening risk or forcing entries."
-        )
+        recommendations.append("Treat event, holiday, rollover, spread and late-entry abstentions as execution/context evidence; do not compensate by widening risk or forcing entries.")
     if categories.get(CampaignBottleneck.STRATEGY_FORMATION.value, 0):
-        recommendations.append(
-            "For sweep/structure/location abstentions, inspect whether the declared liquidity/zone model is missing a legitimate feature. Do not lower quality gates solely to increase trade count."
-        )
+        recommendations.append("For sweep/structure/location abstentions, inspect whether the declared liquidity/zone model is missing a legitimate feature. Do not lower quality gates solely to increase trade count.")
     if categories.get(CampaignBottleneck.PORTFOLIO_RISK.value, 0):
-        recommendations.append(
-            "Portfolio-risk denials mean an isolated setup is not acceptable account risk; inspect clustering/currency/margin exposure before considering limit changes."
-        )
+        recommendations.append("Portfolio-risk denials mean an isolated setup is not acceptable account risk; inspect clustering/currency/margin exposure before considering limit changes.")
     if aggregate.orders_submitted == 0:
-        recommendations.append(
-            "Zero submitted orders is not itself a failure. Diagnose candidate, risk and context bottlenecks before changing any production policy."
-        )
+        recommendations.append("Zero submitted orders is not itself a failure. Diagnose candidate, risk and context bottlenecks before changing any production policy.")
     if aggregate.promotion_ready_true == 0 and aggregate.promotion_ready_false > 0:
-        recommendations.append(
-            "The promotion gate has never reported ready in observed cycles; use its concrete blockers and realized outcome metrics before proposing any production promotion."
-        )
+        recommendations.append("The promotion gate has never reported ready in observed cycles; use its concrete blockers and realized outcome metrics before proposing any production promotion.")
     if evidence_sufficient and primary is CampaignBottleneck.CLEAN_SELECTIVE:
-        recommendations.append(
-            "Operational evidence is clean but selective. Continue the Practice campaign and evaluate realized trade outcomes/promotion metrics before strategy changes."
-        )
+        recommendations.append("Operational evidence is clean but selective. Continue this same-policy Practice cohort and evaluate realized trade outcomes/promotion metrics before strategy changes.")
     return recommendations
 
 
-def _validate_cycle(
-    values: Mapping[str, int],
-    record: Mapping[str, object],
-    cycle: int,
-    *,
-    statuses: Counter[str] | None = None,
-) -> None:
+def _validate_cycle(values: Mapping[str, int], record: Mapping[str, object], cycle: int, *, statuses: Counter[str] | None = None) -> None:
     requested = values["instruments_requested"]
     evaluated = values["instruments_evaluated"]
     candidates = values["trade_candidates"]
@@ -458,15 +471,7 @@ def _validate_cycle(
     grants = values["risk_grants"]
     denials = values["risk_denials"]
     submitted = values["orders_submitted"]
-    known_outcomes = (
-        values["orders_filled"]
-        + values["orders_protected"]
-        + values["orders_rejected"]
-        + values["orders_cancelled"]
-        + values["orders_unknown"]
-        + values["orders_reconciliation_required"]
-        + values["orders_emergency_close"]
-    )
+    known_outcomes = sum(values[field] for field in ("orders_filled", "orders_protected", "orders_rejected", "orders_cancelled", "orders_unknown", "orders_reconciliation_required", "orders_emergency_close"))
     if evaluated > requested:
         raise ValueError(f"campaign cycle {cycle} evaluated more instruments than requested")
     if candidates + abstentions != evaluated:
@@ -497,26 +502,22 @@ def _validate_cycle(
         if sum(statuses.values()) != submitted:
             raise ValueError(f"campaign cycle {cycle} order-status counts must equal submissions")
         expected = {
-            "filled": values["orders_filled"],
-            "protected": values["orders_protected"],
-            "rejected": values["orders_rejected"],
-            "cancelled": values["orders_cancelled"],
-            "unknown": values["orders_unknown"],
-            "reconciliation_required": values["orders_reconciliation_required"],
-            "emergency_close": values["orders_emergency_close"],
+            "filled": values["orders_filled"], "protected": values["orders_protected"], "rejected": values["orders_rejected"],
+            "cancelled": values["orders_cancelled"], "unknown": values["orders_unknown"],
+            "reconciliation_required": values["orders_reconciliation_required"], "emergency_close": values["orders_emergency_close"],
         }
         for status_name, count in expected.items():
             if statuses.get(status_name, 0) != count:
-                raise ValueError(
-                    f"campaign cycle {cycle} order-status {status_name} does not match its explicit counter"
-                )
-        unresolved_from_status = sum(
-            count for status_name, count in statuses.items() if status_name in _UNRESOLVED_STATUS_NAMES
-        )
+                raise ValueError(f"campaign cycle {cycle} order-status {status_name} does not match its explicit counter")
+        unresolved_from_status = sum(count for status_name, count in statuses.items() if status_name in _UNRESOLVED_STATUS_NAMES)
         if unresolved_from_status != values["orders_unresolved"]:
-            raise ValueError(
-                f"campaign cycle {cycle} unresolved order-status counts do not match orders_unresolved"
-            )
+            raise ValueError(f"campaign cycle {cycle} unresolved order-status counts do not match orders_unresolved")
+
+
+def _policy_fingerprint(record: Mapping[str, object]) -> str:
+    value = record.get("policy_fingerprint")
+    text = "" if value is None else str(value).strip()
+    return text or "legacy"
 
 
 def _rate(numerator: int, denominator: int) -> Decimal:
@@ -524,9 +525,7 @@ def _rate(numerator: int, denominator: int) -> Decimal:
 
 
 def _nonnegative_int(value: object, *, field: str, cycle: int) -> int:
-    if isinstance(value, bool):
-        raise ValueError(f"campaign cycle {cycle} field {field} must be an integer")
-    if isinstance(value, float) and not value.is_integer():
+    if isinstance(value, bool) or isinstance(value, float) and not value.is_integer():
         raise ValueError(f"campaign cycle {cycle} field {field} must be an integer")
     try:
         parsed = int(value)
@@ -544,6 +543,5 @@ def _counter_mapping(value: object, field: str, cycle: int) -> Counter[str]:
         raise ValueError(f"campaign cycle {cycle} field {field} must be an object")
     result: Counter[str] = Counter()
     for key, count in value.items():
-        parsed = _nonnegative_int(count, field=f"{field}.{key}", cycle=cycle)
-        result[str(key)] += parsed
+        result[str(key)] += _nonnegative_int(count, field=f"{field}.{key}", cycle=cycle)
     return result
