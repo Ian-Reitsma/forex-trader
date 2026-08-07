@@ -12,10 +12,10 @@ from forex_trader.domain.timeframes import granularity_duration
 class SyntheticMarketData:
     """Deterministic-price provider for local development and setup-path tests.
 
-    Prices are seeded deterministically; timestamps share one explicit anchor so every
-    configured strategy timeframe ends at the same logical decision time. The quote is
-    derived from the configured lower-timeframe series, keeping non-default timeframe
-    tests internally coherent instead of silently falling back to M5.
+    `anchor` is the logical time at which the latest generated candle has just closed.
+    OANDA-style candle timestamps represent bar starts, so the final candle begins one
+    configured interval before the anchor. This keeps no-lookahead signal timestamps,
+    quotes, and point-in-time fundamentals coherent across M5..M30 and H1/H4 policies.
     """
 
     def __init__(
@@ -52,7 +52,7 @@ class SyntheticMarketData:
             instrument,
             mid - half,
             mid + half,
-            candles[-1].time + timedelta(seconds=1),
+            self.anchor + timedelta(seconds=1),
             bid_liquidity=Decimal("10000000"),
             ask_liquidity=Decimal("10000000"),
         )
@@ -63,7 +63,7 @@ class SyntheticMarketData:
     def _generate(self, instrument: str, granularity: str, count: int) -> list[Candle]:
         random = Random(f"{self.seed}:{instrument}:{granularity}:{self.direction}")
         step = granularity_duration(granularity)
-        start = self.anchor - step * (count - 1)
+        start = self.anchor - step * count
         base = Decimal("1.1000") if not instrument.endswith("_JPY") else Decimal("150.00")
         pip = pip_size_for(instrument)
         trend_sign = Decimal("1") if self.direction == "long" else Decimal("-1")
