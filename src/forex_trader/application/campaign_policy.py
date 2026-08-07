@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Mapping
+from typing import Mapping, cast
 
 from forex_trader.application.engine import TradingEngine
 
@@ -23,12 +23,12 @@ class CampaignUniverseSelection:
 
 
 def campaign_policy_context(engine: TradingEngine) -> dict[str, object]:
-    """Return a secret-free, deterministic description of policy that affects outcomes."""
+    """Return a secret-free, deterministic, JSON-safe outcome-policy description."""
     fusion = engine.fusion_policy
     risk = engine.risk_policy
     correlation = getattr(risk, "correlation_guard", None)
     market_data = engine.market_data
-    return {
+    raw: dict[str, object] = {
         "schema": "campaign-policy-v1",
         "strategy_version": "zone-liquidity-structure-v0.6",
         "risk_version": "practice-risk-v0.6",
@@ -77,6 +77,7 @@ def campaign_policy_context(engine: TradingEngine) -> dict[str, object]:
         },
         "maximum_slippage_pips": engine.maximum_slippage_pips,
     }
+    return cast(dict[str, object], _jsonable(raw))
 
 
 def campaign_policy_fingerprint(context: Mapping[str, object]) -> str:
@@ -91,13 +92,13 @@ def select_campaign_universe(
     require_fundamental_coverage: bool,
     as_of: datetime | None = None,
 ) -> CampaignUniverseSelection:
-    """Filter broker/configured instruments before expensive market-data evaluation.
+    """Filter guaranteed-ineligible pairs before expensive market-data evaluation.
 
-    This is a preflight efficiency filter only. It never promotes an instrument to a trade;
-    TradingEngine still performs the full quote-time fundamental assessment and every other
-    strategy/risk/execution gate. When fundamentals are required, a pair whose current
-    point-in-time confidence cannot meet the configured minimum is guaranteed to abstain,
-    so an execution campaign need not fetch two candle histories and pricing for it.
+    This is an efficiency preflight only. It never promotes a pair to a trade; TradingEngine
+    still performs full quote-time fundamental assessment plus every strategy, context, risk
+    and execution check. If fundamentals are required and current point-in-time confidence
+    cannot reach the configured minimum, the pair is guaranteed to abstain and an execution
+    campaign need not fetch its candle histories and pricing merely to rediscover that fact.
     """
     discovered = tuple(dict.fromkeys(item.strip().upper() for item in instruments if item.strip()))
     if not require_fundamental_coverage:
