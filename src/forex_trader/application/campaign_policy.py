@@ -28,6 +28,7 @@ def campaign_policy_context(engine: TradingEngine) -> dict[str, object]:
     risk = engine.risk_policy
     correlation = getattr(risk, "correlation_guard", None)
     market_data = engine.market_data
+    cost_model = engine.cost_model
     raw: dict[str, object] = {
         "schema": "campaign-policy-v1",
         "strategy_version": "zone-liquidity-structure-v0.6",
@@ -75,6 +76,11 @@ def campaign_policy_context(engine: TradingEngine) -> dict[str, object]:
             "maximum_signed_correlation": correlation.maximum_signed_correlation,
             "fail_closed": correlation.fail_closed,
         },
+        "cost_model": {
+            "class": type(cost_model).__name__,
+            "minimum_samples": getattr(cost_model, "minimum_samples", None),
+            "adaptive_state": "observed samples evolve within the cohort",
+        },
         "maximum_slippage_pips": engine.maximum_slippage_pips,
     }
     return cast(dict[str, object], _jsonable(raw))
@@ -103,6 +109,8 @@ def select_campaign_universe(
     discovered = tuple(dict.fromkeys(item.strip().upper() for item in instruments if item.strip()))
     if not require_fundamental_coverage:
         return CampaignUniverseSelection(discovered, discovered, {})
+    if as_of is not None and as_of.tzinfo is None:
+        raise ValueError("campaign fundamental preflight timestamp must be timezone-aware")
     instant = (as_of or datetime.now(UTC)).astimezone(UTC)
     selected: list[str] = []
     excluded: dict[str, str] = {}
