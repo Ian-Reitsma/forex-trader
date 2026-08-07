@@ -7,10 +7,10 @@ import typer
 import uvicorn
 
 from forex_trader.api.app import create_app
-from forex_trader.config import AppConfig, build_engine
 from forex_trader.application.runner import run_cycles
 from forex_trader.application.sync import BrokerStateSynchronizer
-from forex_trader.domain.enums import ProviderKind
+from forex_trader.config import AppConfig, build_engine
+from forex_trader.domain.enums import OrderStatus, ProviderKind
 from forex_trader.domain.models import jsonable
 
 app = typer.Typer(no_args_is_help=True, help="Forex Trader paper-trading control CLI")
@@ -26,6 +26,7 @@ def doctor() -> None:
         "mode": config.mode.value,
         "instruments": config.instruments,
         "paper_orders_enabled": config.enable_paper_orders,
+        "api_auth_configured": bool(config.api_token),
         "valid": not errors,
         "errors": errors,
     }
@@ -59,6 +60,48 @@ def cycle(
     typer.echo(json.dumps(results, indent=2))
 
 
+@app.command()
+def scan(
+    execute: bool = typer.Option(False, help="Permit eligible OANDA Practice orders when all other gates allow"),
+    all_currency_pairs: bool = typer.Option(False, help="Discover the OANDA account's current currency instruments"),
+    max_orders: int = typer.Option(1, min=0, help="Maximum Practice orders submitted during this scan"),
+) -> None:
+    """Scan configured or dynamically discovered FX pairs with a hard per-run order cap."""
+    config = AppConfig.from_env()
+    engine = build_engine(config)
+    if all_currency_pairs:
+        if config.provider is not ProviderKind.OANDA:
+            raise typer.BadParameter("--all-currency-pairs requires FOREX_PROVIDER=oanda")
+        instruments = engine.instrument_universe()
+    else:
+        instruments = config.instruments
+    if not instruments:
+        raise typer.BadParameter("the scan instrument universe is empty")
+    results: list[dict[str, object]] = []
+    submitted = 0
+    for instrument in instruments:
+        allow_write = execute and submitted < max_orders
+        try:
+            trace = engine.evaluate(instrument, execute=allow_write)
+        except Exception as exc:
+            results.append({"instrument": instrument, "error": f"{type(exc).__name__}: {str(exc)[:240]}"})
+            continue
+        if trace.order is not None and trace.order.status not in {OrderStatus.REJECTED, OrderStatus.CANCELLED}:
+            submitted += 1
+        results.append(
+            {
+                "instrument": instrument,
+                "disposition": trace.candidate.disposition.value,
+                "setup_state": trace.candidate.setup_state,
+                "score": str(trace.candidate.score),
+                "rejection_code": trace.candidate.rejection_code,
+                "risk": trace.risk.disposition.value if trace.risk is not None else None,
+                "order_status": trace.order.status.value if trace.order is not None else None,
+            }
+        )
+    typer.echo(json.dumps({"instruments": len(instruments), "submitted_orders": submitted, "results": results}, indent=2))
+
+
 @app.command(name="run")
 def run_bot(
     interval_seconds: float = typer.Option(60.0, min=0.0),
@@ -69,12 +112,17 @@ def run_bot(
     """Run the polling bot until interrupted or max-cycles is reached."""
     config = AppConfig.from_env()
     engine = build_engine(config, macro_file=str(macro_file) if macro_file else None)
+
+    def report_error(instrument: str, exc: Exception) -> None:
+        typer.echo(json.dumps({"instrument": instrument, "error": f"{type(exc).__name__}: {str(exc)[:240]}"}), err=True)
+
     traces = run_cycles(
         engine,
         config.instruments,
         execute=execute,
         interval_seconds=interval_seconds,
         max_cycles=max_cycles,
+        on_error=report_error,
     )
     if max_cycles is not None:
         typer.echo(json.dumps([jsonable(trace) for trace in traces], indent=2))
@@ -85,19 +133,24 @@ def sync(
     stream: bool = typer.Option(False, help="Consume the OANDA transaction stream after REST catch-up"),
     max_events: int | None = typer.Option(None, min=1, help="Stop streaming after this many payloads"),
 ) -> None:
-    """Catch up and optionally stream OANDA Practice transactions into SQLite."""
+    """Backfill, catch up and optionally stream OANDA Practice transactions into SQLite."""
     config = AppConfig.from_env()
     if config.provider is not ProviderKind.OANDA:
         raise typer.BadParameter("FOREX_PROVIDER must be oanda for broker synchronization")
     engine = build_engine(config)
     synchronizer = BrokerStateSynchronizer(engine.broker, engine.repository)
-    inserted = (
-        synchronizer.stream(max_events=max_events)
-        if stream
-        else synchronizer.catch_up()
-    )
+    inserted = synchronizer.stream(max_events=max_events) if stream else synchronizer.catch_up()
     cursor = engine.repository.get_broker_cursor("oanda.transactions")
     typer.echo(json.dumps({"inserted": inserted, "cursor": cursor, "stream": stream}, indent=2))
+
+
+@app.command()
+def clear_halt(name: str = typer.Argument(..., help="Halt key, e.g. execution:<account-id>")) -> None:
+    """Explicitly clear a persistent halt after broker/account reconciliation."""
+    config = AppConfig.from_env()
+    engine = build_engine(config)
+    engine.clear_halt(name)
+    typer.echo(json.dumps({"status": "cleared", "name": name}, indent=2))
 
 
 @app.command()
@@ -114,7 +167,18 @@ def serve(
     port: int = typer.Option(8000),
     macro_file: Path | None = typer.Option(None, exists=True, dir_okay=False),
 ) -> None:
-    """Run the control API."""
+    """Run the authenticated control API; external binds require FOREX_API_TOKEN."""
     config = AppConfig.from_env()
+    loopback = host in {"127.0.0.1", "localhost", "::1"}
+    if not loopback and not config.api_token:
+        raise typer.BadParameter("FOREX_API_TOKEN is required when binding the control API beyond loopback")
     engine = build_engine(config, macro_file=str(macro_file) if macro_file else None)
-    uvicorn.run(create_app(engine), host=host, port=port)
+    uvicorn.run(
+        create_app(
+            engine,
+            api_token=config.api_token,
+            allow_unsafe_local_mutations=loopback and not config.api_token,
+        ),
+        host=host,
+        port=port,
+    )
