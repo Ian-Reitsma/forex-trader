@@ -66,7 +66,14 @@ def test_scheduled_event_range_filters_and_immutability() -> None:
 
 
 def test_trading_repository_promotion_metrics_use_full_trace_metadata() -> None:
-    market = SyntheticMarketData(seed=33, direction="long")
+    # Keep this test independent of the wall clock. 18:00 UTC maps to New York
+    # continuation in both standard and daylight time and is intentionally outside
+    # the London-fix/rollover execution blackouts. Tomorrow guarantees the synthetic
+    # quote occurs after the fixture's point-in-time fundamental snapshots.
+    anchor = (datetime.now(UTC) + timedelta(days=1)).replace(
+        hour=18, minute=0, second=0, microsecond=0
+    )
+    market = SyntheticMarketData(seed=33, direction="long", anchor=anchor)
     repository = TradingRepository(":memory:")
     engine = TradingEngine(
         market_data=market,
