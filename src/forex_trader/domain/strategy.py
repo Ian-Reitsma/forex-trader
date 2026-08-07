@@ -99,10 +99,8 @@ class SignalFusionPolicy:
             effective_fundamental = normalized * max(Decimal("0"), min(Decimal("1"), fundamental.confidence))
             score = technical.score * Decimal("0.80") + effective_fundamental * Decimal("0.20")
         else:
-            normalized = Decimal("0")
             effective_fundamental = Decimal("0")
             score = technical.score
-        # Cost is a hard gate first and a small ranking penalty second.
         score -= min(Decimal("0.08"), (spread_pips / spread_limit) * Decimal("0.04"))
         score = max(Decimal("0"), min(Decimal("1"), score))
         if score < self.minimum_score:
@@ -134,6 +132,7 @@ class SignalFusionPolicy:
             setup_family=technical.setup_family,
             setup_state=technical.setup_state,
             evidence={
+                "raw_fundamental_differential": fundamental.differential,
                 "zone_id": technical.zone_id,
                 "zone_quality": technical.zone_quality,
                 "liquidity_kind": technical.liquidity_kind,
@@ -155,10 +154,9 @@ class SignalFusionPolicy:
         *,
         maximum_spread_pips: Decimal | None = None,
     ) -> TradeCandidate:
-        """Re-price an already-complete setup immediately before broker submission."""
         if candidate.disposition is not DecisionDisposition.TRADE:
             return candidate
-        if candidate.expired:
+        if candidate.expires_at is not None and quote.time > candidate.expires_at:
             return replace(candidate, disposition=DecisionDisposition.ABSTAIN, rejection_code="CANDIDATE_EXPIRED", reasons=(*candidate.reasons, "candidate expired before execution"), entry_price=None, stop_loss=None, take_profit=None)
         if quote.instrument.upper() != candidate.instrument.upper():
             raise ValueError("execution quote instrument does not match candidate")
@@ -189,6 +187,9 @@ class SignalFusionPolicy:
     ) -> TradeCandidate:
         reasons.append(f"{code}: {reason}")
         preserved_score = technical.score if score is None else score
+        directional = fundamental.differential if technical.direction is Direction.LONG else -fundamental.differential if technical.direction is Direction.SHORT else Decimal("0")
+        normalized = max(Decimal("0"), min(Decimal("1"), (directional + Decimal("1")) / Decimal("2")))
+        effective_fundamental = normalized * max(Decimal("0"), min(Decimal("1"), fundamental.confidence))
         return TradeCandidate(
             candidate_id=uuid4(),
             instrument=technical.instrument,
@@ -199,7 +200,7 @@ class SignalFusionPolicy:
             stop_loss=None,
             take_profit=None,
             technical_score=technical.score,
-            fundamental_score=fundamental.differential,
+            fundamental_score=effective_fundamental,
             fundamental_confidence=fundamental.confidence,
             reasons=tuple(reasons),
             signal_time=technical.signal_time,
@@ -208,6 +209,7 @@ class SignalFusionPolicy:
             setup_state=technical.setup_state,
             rejection_code=code,
             evidence={
+                "raw_fundamental_differential": fundamental.differential,
                 "zone_id": technical.zone_id,
                 "zone_quality": technical.zone_quality,
                 "liquidity_kind": technical.liquidity_kind,
