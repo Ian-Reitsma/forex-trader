@@ -34,7 +34,7 @@ def test_real_engine_policy_context_is_secret_free_and_changes_with_policy(tmp_p
     assert "oanda_api_token" not in serialized
     assert "api_token" not in serialized
     assert "account_id" not in serialized
-    assert context["fusion"]["minimum_score"] == Decimal("0.66")  # type: ignore[index]
+    assert context["fusion"]["minimum_score"] == "0.66"  # type: ignore[index]
     assert campaign_policy_fingerprint(context) != campaign_policy_fingerprint(
         campaign_policy_context(second)
     )
