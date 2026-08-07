@@ -22,6 +22,17 @@ from forex_trader.domain.enums import OperatingMode, ProviderKind
 from forex_trader.domain.timeframes import granularity_duration
 
 
+def _exclusion_category(reason: str) -> str:
+    lowered = reason.lower()
+    if "missing fundamental state" in lowered:
+        return "missing_fundamental_state"
+    if "below" in lowered and "confidence" in lowered:
+        return "low_fundamental_confidence"
+    if "preflight failed" in lowered:
+        return "fundamental_preflight_error"
+    return "other_fundamental_exclusion"
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--execute", action="store_true", help="Allow gated Practice submissions")
 parser.add_argument(
@@ -175,14 +186,3 @@ print(
         sort_keys=True,
     )
 )
-
-
-def _exclusion_category(reason: str) -> str:
-    lowered = reason.lower()
-    if "missing fundamental state" in lowered:
-        return "missing_fundamental_state"
-    if "below" in lowered and "confidence" in lowered:
-        return "low_fundamental_confidence"
-    if "preflight failed" in lowered:
-        return "fundamental_preflight_error"
-    return "other_fundamental_exclusion"
