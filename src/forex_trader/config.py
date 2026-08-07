@@ -204,7 +204,10 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
         )
         broker = provider
     else:
-        provider = SyntheticMarketData(direction="long")
+        provider = SyntheticMarketData(
+            direction="long",
+            quote_granularity=config.lower_timeframe,
+        )
         broker = SimulatedPaperBroker(provider)
     market_data = TimeframeMappedMarketData(
         provider,
