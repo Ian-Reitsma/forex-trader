@@ -2,7 +2,7 @@
 
 ## Current release
 
-Version 0.6.1 is the hardened offline-simulation and OANDA fxTrade Practice platform. It contains the reconciled structure-first v0.6 runtime plus cohort-safe Practice evidence and fundamental-eligibility preflight. It remains intentionally Practice/paper-only and contains no live-money endpoint.
+Version 0.6.2 is the hardened offline-simulation and OANDA fxTrade Practice platform. It contains the reconciled structure-first runtime, cohort-safe Practice evidence, fundamental-eligibility preflight, and implementation-bound evidence identity. It remains intentionally Practice/paper-only and contains no live-money endpoint.
 
 ```text
 completed configured lower/higher candles + depth-aware quote
@@ -21,7 +21,7 @@ completed configured lower/higher candles + depth-aware quote
                               ↓
  reconciliation + protection verification + persistent uncertainty halt
                               ↓
- eligible-universe preflight -> capped cohort-fingerprinted campaign
+ eligible-universe preflight -> implementation-bound cohort campaign
                               ↓
  cohort-safe fail-closed diagnosis + promotion metrics + stressed validation
 ```
@@ -49,39 +49,47 @@ completed configured lower/higher candles + depth-aware quote
 - Research-only management comparison has no runtime order authority.
 - FastAPI, CLI, Docker and Python 3.11/3.13 CI.
 
-## v0.6.1 Practice evidence hardening
+## Practice evidence integrity
 
 Every newly generated campaign row includes a run-level `campaign_id`, secret-free deterministic `policy_fingerprint`, JSON-safe `policy_context` and campaign/universe metadata.
 
-The fingerprint identifies outcome-affecting strategy, risk, timeframe, correlation, cost-model and campaign-execution configuration. Credentials and account IDs are excluded. Adaptive observed cost samples remain evidence within a cohort rather than forcing a new fingerprint every cycle.
+The fingerprint identifies outcome-affecting strategy, risk, timeframe, correlation, cost-model and campaign-execution configuration. Practice-execution campaigns can pre-filter pairs guaranteed to fail the required fundamental-confidence gate, saving candle/pricing requests without authorizing any trade. Shadow mode keeps full-universe diagnostics by default.
 
 Campaign analysis is cohort-safe:
 
 - one policy fingerprint is analyzed at a time;
-- mixed fingerprints fail unless `--policy-fingerprint` selects one explicitly;
-- contradictory policy contexts inside one fingerprint fail;
+- mixed fingerprints fail unless `--policy-fingerprint` explicitly selects one;
+- contradictory contexts inside a fingerprint fail;
 - pre-fingerprint evidence remains the `legacy` cohort;
 - impossible candidate/risk/order counts and inconsistent broker-status histograms fail;
 - unresolved execution/provider/broker integrity problems outrank strategy tuning;
 - new rejection semantics remain unclassified until mapped and tested.
 
-When fundamentals are required, Practice-execution campaigns pre-filter pairs that cannot currently meet the configured fundamental-confidence gate. This avoids candle/pricing requests for guaranteed abstentions but cannot authorize a trade. Selected pairs still pass the complete quote-time engine. Shadow campaigns retain full-universe diagnostics by default; `--eligible-only` opts into preflight.
+## v0.6.2 implementation identity
+
+`forex_trader.__version__` is the authoritative semantic version. Setuptools derives installed distribution metadata from it, and FastAPI/OpenAPI exposes the same value. This removes the prior package/runtime/API version drift.
+
+Campaign policy context includes:
+
+- `implementation.version` — the semantic runtime/package version;
+- `implementation.build_revision` — optional immutable source revision from `FOREX_BUILD_REVISION`, otherwise `GITHUB_SHA` when available.
+
+Implementation version/revision participates in the policy fingerprint, so otherwise-identical configuration from different software builds cannot silently share an evidence cohort. Credentials and account IDs are not included.
+
+For local Git campaigns, operators should set:
 
 ```bash
-python scripts/run_practice_campaign.py --all-currency-pairs --max-cycles 1
-python scripts/run_practice_campaign.py --all-currency-pairs --eligible-only --max-cycles 1
-python scripts/analyze_campaign.py campaign-evidence.jsonl
-python scripts/analyze_campaign.py campaign-evidence.jsonl --policy-fingerprint <fingerprint>
+export FOREX_BUILD_REVISION="$(git rev-parse HEAD)"
 ```
 
 ## Current automated validation
 
-The exact v0.6.1 code/test head passed the complete CI matrix on Python 3.11 and Python 3.13:
+The exact v0.6.2 code/test head passed the complete CI matrix on Python 3.11 and Python 3.13:
 
-- **238 tests passed**;
-- **87.27% branch-aware coverage**;
+- **243 tests passed**;
+- **87.29% branch-aware coverage**;
 - repository minimum coverage gate: **85%**;
-- package installation and bytecode compilation passed;
+- fresh dynamic package installation and bytecode compilation passed;
 - `pip check` dependency integrity passed;
 - secret-assignment scan passed;
 - executed offline paper-order smoke passed on both Python versions.
@@ -115,9 +123,9 @@ Once credentials are configured outside chat/Git, the required sequence is:
 4. all-pair shadow campaign and cohort analysis;
 5. separately gated broker-minimum protected open -> verify -> close round trip;
 6. capped Practice campaign starting with at most one new order per cycle;
-7. same-policy cohort diagnosis before any threshold/timeframe/management change.
+7. same-policy/same-implementation cohort diagnosis before any threshold/timeframe/management change.
 
-A changed policy must generate a new fingerprint so before/after evidence cannot be silently pooled.
+A changed policy or implementation must generate a new fingerprint so before/after evidence cannot be silently pooled.
 
 ## Still evidence-gated
 

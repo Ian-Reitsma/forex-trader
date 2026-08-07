@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Mapping, cast
 
+from forex_trader import __version__
 from forex_trader.application.engine import TradingEngine
 
 
@@ -31,6 +33,10 @@ def campaign_policy_context(engine: TradingEngine) -> dict[str, object]:
     cost_model = engine.cost_model
     raw: dict[str, object] = {
         "schema": "campaign-policy-v1",
+        "implementation": {
+            "version": __version__,
+            "build_revision": _build_revision(),
+        },
         "strategy_version": "zone-liquidity-structure-v0.6",
         "risk_version": "practice-risk-v0.6",
         "engine_class": type(engine).__name__,
@@ -130,6 +136,15 @@ def select_campaign_universe(
             continue
         selected.append(instrument)
     return CampaignUniverseSelection(discovered, tuple(selected), excluded)
+
+
+def _build_revision() -> str | None:
+    """Return an explicitly supplied immutable build revision, never a credential."""
+    value = os.getenv("FOREX_BUILD_REVISION") or os.getenv("GITHUB_SHA")
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def _jsonable(value: object) -> object:
