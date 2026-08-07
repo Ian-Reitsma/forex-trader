@@ -14,7 +14,6 @@ from forex_trader.research.ablation_maturity import (
 )
 from forex_trader.research.ablations import (
     AblationVariant,
-    MaturedAblationOutcome,
     ProspectiveAblationDecision,
     append_ablation_decisions,
     append_matured_ablation_outcomes,
