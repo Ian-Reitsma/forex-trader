@@ -12,6 +12,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.13"]
     steps:
@@ -29,7 +30,18 @@ jobs:
       - name: Secret assignment scan
         run: python scripts/check_no_secrets.py
       - name: Test and coverage
-        run: pytest --cov=forex_trader --cov-report=term-missing
+        shell: bash
+        run: |
+          set +e
+          pytest --cov=forex_trader --cov-report=term-missing 2>&1 | tee /tmp/pytest-output.txt
+          code=${PIPESTATUS[0]}
+          {
+            echo "### Pytest / coverage — Python ${{ matrix.python-version }}"
+            echo '```text'
+            tail -n 220 /tmp/pytest-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
       - name: Offline smoke test
         env:
           FOREX_PROVIDER: simulation
