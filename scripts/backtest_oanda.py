@@ -1,8 +1,9 @@
 """Point-in-time OANDA Practice candle replay with explicit execution stress.
 
-Uses persisted immutable macro/news observations by default. OANDA historical candles are
-midpoint bars, so spread/slippage inputs remain modeled until a true historical bid/ask or
-tick archive is connected. The token is read from the environment and never printed.
+Uses the same configured lower/higher timeframe policy as runtime. Persisted immutable
+macro/news observations are used by default. OANDA historical candles are midpoint bars,
+so spread/slippage inputs remain modeled until a true historical bid/ask or tick archive
+is connected. The token is read from the environment and never printed.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from forex_trader.domain.fundamentals import FundamentalBook
 from forex_trader.domain.macro_history import PointInTimeFundamentalBook
 from forex_trader.domain.models import CurrencyFundamentals, jsonable
 from forex_trader.domain.strategy import SignalFusionPolicy
+from forex_trader.domain.timeframes import granularity_duration
 from forex_trader.infrastructure.trading_repository import TradingRepository
 from forex_trader.research.backtest import run_walk_forward_backtest
 
@@ -40,6 +42,10 @@ if not config.oanda_token:
     raise SystemExit("OANDA_API_TOKEN is required")
 instrument = (args.instrument or config.instruments[0]).upper()
 base, quote = instrument.split("_", maxsplit=1)
+lower_tf = config.lower_timeframe
+higher_tf = config.higher_timeframe
+lower_duration = granularity_duration(lower_tf)
+higher_duration = granularity_duration(higher_tf)
 repo = TradingRepository(config.database_path)
 
 if args.technical_only:
@@ -61,6 +67,7 @@ else:
 
 end = datetime.now(UTC)
 start = end - timedelta(days=args.days)
+higher_warmup_start = start - max(timedelta(days=10), higher_duration * 100)
 with SafeOandaPracticeClient(
     token=config.oanda_token,
     account_id=config.oanda_account_id,
@@ -69,8 +76,8 @@ with SafeOandaPracticeClient(
     timeout_seconds=config.oanda_timeout_seconds,
 ) as client:
     spec = client.instrument_spec(instrument)
-    lower = client.candles_between(instrument, "M5", start, end)
-    higher = client.candles_between(instrument, "H1", start - timedelta(days=10), end)
+    lower = client.candles_between(instrument, lower_tf, start, end)
+    higher = client.candles_between(instrument, higher_tf, higher_warmup_start, end)
 
 policy = SignalFusionPolicy(
     minimum_score=config.minimum_score,
@@ -84,6 +91,8 @@ base_trades, base_report = run_walk_forward_backtest(
     fundamentals=fundamentals,
     fusion_policy=policy,
     spread_pips=args.spread_pips,
+    lower_timeframe=lower_duration,
+    higher_timeframe=higher_duration,
 )
 stress_trades, stress_report = run_walk_forward_backtest(
     instrument=instrument,
@@ -95,17 +104,24 @@ stress_trades, stress_report = run_walk_forward_backtest(
     entry_slippage_pips=args.stress_entry_slippage_pips,
     exit_slippage_pips=args.stress_exit_slippage_pips,
     entry_delay_bars=args.stress_entry_delay_bars,
+    lower_timeframe=lower_duration,
+    higher_timeframe=higher_duration,
 )
 print(
     json.dumps(
         {
             "scope": "technical-only" if args.technical_only else "point-in-time combined",
             "instrument": instrument,
+            "timeframe_policy": {"lower": lower_tf, "higher": higher_tf},
             "pip_size": str(spec.pip_size),
             "start": start.isoformat(),
             "end": end.isoformat(),
             "historical_price_limitation": "OANDA candle history is midpoint OHLC; modeled costs are not a substitute for historical executable bid/ask ticks.",
-            "baseline": {"report": jsonable(base_report), "evaluated_trades": len(base_trades), "spread_pips": str(args.spread_pips)},
+            "baseline": {
+                "report": jsonable(base_report),
+                "evaluated_trades": len(base_trades),
+                "spread_pips": str(args.spread_pips),
+            },
             "stress": {
                 "report": jsonable(stress_report),
                 "evaluated_trades": len(stress_trades),
