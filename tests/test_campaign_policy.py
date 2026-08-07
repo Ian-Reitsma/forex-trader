@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from forex_trader.application.campaign_policy import (
     campaign_policy_context,
     campaign_policy_fingerprint,
@@ -35,6 +37,7 @@ def test_real_engine_policy_context_is_secret_free_and_changes_with_policy(tmp_p
     assert "api_token" not in serialized
     assert "account_id" not in serialized
     assert context["fusion"]["minimum_score"] == "0.66"  # type: ignore[index]
+    assert context["cost_model"]["minimum_samples"] == 30  # type: ignore[index]
     assert campaign_policy_fingerprint(context) != campaign_policy_fingerprint(
         campaign_policy_context(second)
     )
@@ -75,6 +78,14 @@ def test_universe_preflight_excludes_missing_or_low_confidence_fundamentals() ->
     assert selection.excluded_count == 2
     assert "below" in selection.excluded["GBP_USD"]
     assert "missing fundamental state" in selection.excluded["AUD_USD"]
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        select_campaign_universe(
+            engine,  # type: ignore[arg-type]
+            ["EUR_USD"],
+            require_fundamental_coverage=True,
+            as_of=datetime(2026, 8, 7, 12, 0),
+        )
 
 
 def test_universe_preflight_fails_closed_on_fundamental_assessment_error() -> None:
