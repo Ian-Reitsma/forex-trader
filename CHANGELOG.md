@@ -2,6 +2,28 @@
 
 All notable changes to this repository are documented here.
 
+## 0.7.1 — 2026-08-07
+
+### Paired Phase-D counterfactual research
+
+- Hardened pending limit/MIT/stop replay so a pending order is cancelled when the original setup invalidates or its structural target is reached before fill. Same-bar trigger plus stop/target ambiguity is treated conservatively instead of granting favorable execution ordering.
+- Added spread-aware pending-entry replay and richer entry diagnostics for invalidation-before-fill, target-before-fill, ambiguous pre-fill paths, expired orders, opportunity cost and modeled entry adverse selection.
+- Added paired Phase-D policies that combine market/limit/MIT/stop entries with structural-target or partial/runner management on the exact same signal/path denominator.
+- Missed fills remain in the paired sample at 0R rather than disappearing; impossible post-fill management geometry is also retained and penalized at 0R instead of being silently excluded.
+- Added chronological per-policy reports covering fill rate, R per original signal, R per fill, drawdown, missed-entry opportunity cost, adverse selection, ambiguity and invalid-management counts.
+- Added deterministic paired-bootstrap confidence intervals for each variant's incremental R per original signal versus baseline.
+- Added a research recommendation gate requiring enough paired scenarios, a positive lower confidence bound, minimum fill rate, acceptable drawdown and zero invalid management geometry.
+- Added immutable JSONL candle-path datasets with duplicate instrument/time rejection and full combined entry+management maturity requirements.
+- Added an offline development/untouched-holdout analyzer that has no broker client or credential path, selects at most one predefined Phase-D candidate on development data, and requires that same policy to confirm on untouched holdout data.
+- Added `docs/28_PHASE_D_PAIRED_COUNTERFACTUALS.md` describing the paired-replay assumptions, selection-bias controls, confidence interval and Practice boundary.
+
+### Release and validation
+
+- Advanced authoritative runtime/distribution/API identity to `0.7.1`; campaign policy fingerprints therefore distinguish v0.7.1 evidence from v0.7.0 cohorts.
+- The Phase-D implementation head passed the full Python 3.11/3.13 matrix with **329 tests passed** and **86.80% branch-aware coverage**, plus critical Ruff, strict mypy, dependency integrity, secret scanning and executed offline protected paper-order smoke.
+- The exact `0.7.1` release head is revalidated before merge. Authenticated OANDA Practice success and profitability remain externally evidence-gated and are not inferred from software CI.
+- No Practice or live-money authority is expanded by this release.
+
 ## 0.7.0 — 2026-08-07
 
 ### Phase 0 and A-D system architecture
