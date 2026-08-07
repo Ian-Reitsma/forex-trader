@@ -1,13 +1,15 @@
 from forex_trader.domain.enums import DecisionDisposition, OrderStatus, RiskDisposition
 
 
-def test_end_to_end_engine_executes_paper_order(engine) -> None:  # type: ignore[no-untyped-def]
+def test_end_to_end_engine_executes_protected_paper_order(engine) -> None:  # type: ignore[no-untyped-def]
     trace = engine.evaluate("EUR_USD", execute=True)
     assert trace.candidate.disposition is DecisionDisposition.TRADE
     assert trace.risk is not None
     assert trace.risk.disposition is RiskDisposition.GRANTED
     assert trace.order is not None
-    assert trace.order.status is OrderStatus.FILLED
+    assert trace.order.status is OrderStatus.PROTECTED
+    assert trace.order.protection_confirmed is True
+    assert trace.metadata["strategy_policy"] == "zone-liquidity-structure-v0.5"
 
 
 def test_engine_does_not_execute_without_flag(engine) -> None:  # type: ignore[no-untyped-def]
@@ -18,10 +20,10 @@ def test_engine_does_not_execute_without_flag(engine) -> None:  # type: ignore[n
 def test_engine_blocks_repeated_submission_for_same_signal(market, fundamentals) -> None:  # type: ignore[no-untyped-def]
     from forex_trader.adapters.simulator import SimulatedPaperBroker
     from forex_trader.application.engine import TradingEngine
-    from forex_trader.domain.enums import OperatingMode, RiskDisposition
+    from forex_trader.domain.enums import OperatingMode
     from forex_trader.domain.risk import RiskPolicy
     from forex_trader.domain.strategy import SignalFusionPolicy
-    from forex_trader.infrastructure.repository import SqliteDecisionRepository
+    from forex_trader.infrastructure.trading_repository import TradingRepository
     from decimal import Decimal
 
     class PositionBlindBroker(SimulatedPaperBroker):
@@ -31,7 +33,7 @@ def test_engine_blocks_repeated_submission_for_same_signal(market, fundamentals)
         def has_open_position(self, instrument: str) -> bool:
             return False
 
-    repository = SqliteDecisionRepository(":memory:")
+    repository = TradingRepository(":memory:")
     broker = PositionBlindBroker(market)
     local_engine = TradingEngine(
         market_data=market,
@@ -54,8 +56,6 @@ def test_engine_blocks_repeated_submission_for_same_signal(market, fundamentals)
 
 
 def test_engine_blocks_stacking_same_instrument(engine) -> None:  # type: ignore[no-untyped-def]
-    from forex_trader.domain.enums import RiskDisposition
-
     first = engine.evaluate("EUR_USD", execute=True)
     second = engine.evaluate("EUR_USD", execute=True)
     assert first.order is not None
@@ -81,27 +81,20 @@ def test_engine_persists_fundamental_observations(engine) -> None:  # type: igno
     assert {item.currency for item in history} == {"EUR", "USD"}
 
 
-def test_engine_reconciles_unknown_order_before_recording(market, fundamentals) -> None:  # type: ignore[no-untyped-def]
+def test_engine_reconciles_unknown_order_and_verifies_protection(market, fundamentals) -> None:  # type: ignore[no-untyped-def]
     from decimal import Decimal
     from forex_trader.adapters.simulator import SimulatedPaperBroker
     from forex_trader.application.engine import TradingEngine
-    from forex_trader.domain.enums import OperatingMode, OrderStatus
+    from forex_trader.domain.enums import OperatingMode
     from forex_trader.domain.models import OrderResult
     from forex_trader.domain.risk import RiskPolicy
     from forex_trader.domain.strategy import SignalFusionPolicy
-    from forex_trader.infrastructure.repository import SqliteDecisionRepository
+    from forex_trader.infrastructure.trading_repository import TradingRepository
 
     class UnknownThenFilledBroker(SimulatedPaperBroker):
         def place_market_order(self, request):  # type: ignore[no-untyped-def]
             self.request = request
-            return OrderResult(
-                request.client_order_id,
-                None,
-                OrderStatus.UNKNOWN,
-                request.instrument,
-                request.units,
-                None,
-            )
+            return OrderResult(request.client_order_id, None, OrderStatus.UNKNOWN, request.instrument, request.units, None)
 
         def reconcile_order(self, *, client_order_id: str, instrument: str, units: int):  # type: ignore[no-untyped-def]
             return OrderResult(
@@ -117,7 +110,7 @@ def test_engine_reconciles_unknown_order_before_recording(market, fundamentals) 
         def has_open_position(self, instrument: str) -> bool:
             return False
 
-    repository = SqliteDecisionRepository(":memory:")
+    repository = TradingRepository(":memory:")
     broker = UnknownThenFilledBroker(market)
     local_engine = TradingEngine(
         market_data=market,
@@ -131,5 +124,46 @@ def test_engine_reconciles_unknown_order_before_recording(market, fundamentals) 
     )
     trace = local_engine.evaluate("EUR_USD", execute=True)
     assert trace.order is not None
-    assert trace.order.status is OrderStatus.FILLED
+    assert trace.order.status is OrderStatus.PROTECTED
     assert any(sample.slippage_pips is not None for sample in repository.cost_samples())
+
+
+def test_unresolved_order_halts_account_before_second_instrument(market, fundamentals) -> None:  # type: ignore[no-untyped-def]
+    from decimal import Decimal
+    from forex_trader.adapters.simulator import SimulatedPaperBroker
+    from forex_trader.application.engine import TradingEngine
+    from forex_trader.domain.enums import OperatingMode
+    from forex_trader.domain.models import OrderResult
+    from forex_trader.domain.risk import RiskPolicy
+    from forex_trader.domain.strategy import SignalFusionPolicy
+    from forex_trader.infrastructure.trading_repository import TradingRepository
+
+    class AlwaysUnknownBroker(SimulatedPaperBroker):
+        def positions(self):  # type: ignore[no-untyped-def]
+            return []
+
+        def place_market_order(self, request):  # type: ignore[no-untyped-def]
+            return OrderResult(request.client_order_id, None, OrderStatus.UNKNOWN, request.instrument, request.units, None)
+
+        def reconcile_order(self, *, client_order_id: str, instrument: str, units: int):  # type: ignore[no-untyped-def]
+            return None
+
+    repository = TradingRepository(":memory:")
+    broker = AlwaysUnknownBroker(market)
+    local_engine = TradingEngine(
+        market_data=market,
+        broker=broker,
+        repository=repository,
+        fundamentals=fundamentals,
+        fusion_policy=SignalFusionPolicy(minimum_score=Decimal("0.5")),
+        risk_policy=RiskPolicy(),
+        mode=OperatingMode.PAPER,
+        enable_paper_orders=True,
+    )
+    first = local_engine.evaluate("EUR_USD", execute=True)
+    assert first.order is not None and first.order.status is OrderStatus.UNKNOWN
+    assert repository.get_halt("execution:SIM-001") is not None
+    second = local_engine.evaluate("GBP_USD", execute=True)
+    if second.candidate.disposition is DecisionDisposition.TRADE:
+        assert second.order is None
+        assert second.risk is not None and second.risk.disposition is RiskDisposition.DENIED
