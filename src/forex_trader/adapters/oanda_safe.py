@@ -131,13 +131,23 @@ class SafeOandaPracticeClient(OandaPracticeClient):
         }
         if request.price_bound is not None:
             order["priceBound"] = spec.format_price(request.price_bound)
-        payload, status_code = self._write_json(
+        payload, status_code, ambiguous = self._write_json(
             "POST",
             f"/v3/accounts/{self.account_id}/orders",
             json={"order": order},
         )
+        if ambiguous:
+            return OrderResult(
+                client_order_id=request.client_order_id,
+                provider_order_id=None,
+                status=OrderStatus.UNKNOWN,
+                instrument=request.instrument,
+                units=request.units,
+                fill_price=None,
+                raw=payload,
+            )
         reject = payload.get("orderRejectTransaction")
-        if reject is not None:
+        if isinstance(reject, dict):
             return OrderResult(
                 client_order_id=request.client_order_id,
                 provider_order_id=str(reject.get("id") or "") or None,
@@ -149,9 +159,16 @@ class SafeOandaPracticeClient(OandaPracticeClient):
                 broker_time=_broker_time(reject),
             )
         if status_code >= 400:
-            raise OandaApiError(
-                f"OANDA HTTP {status_code}: {str(payload.get('errorMessage') or payload.get('errorCode') or 'order rejected')[:240]}",
-                status_code=status_code,
+            # A deterministic 4xx without a reject transaction means the broker did
+            # not accept this order object. It is safe to classify as rejected.
+            return OrderResult(
+                client_order_id=request.client_order_id,
+                provider_order_id=None,
+                status=OrderStatus.REJECTED,
+                instrument=request.instrument,
+                units=request.units,
+                fill_price=None,
+                raw=payload,
             )
         fill = payload.get("orderFillTransaction")
         if not isinstance(fill, dict):
@@ -193,10 +210,18 @@ class SafeOandaPracticeClient(OandaPracticeClient):
         take = trade.get("takeProfitOrder")
         if not isinstance(stop, dict) or not isinstance(take, dict):
             return False
-        spec = self.instrument_spec(str(trade.get("instrument") or ""))
+        instrument = str(trade.get("instrument") or "")
+        if not instrument:
+            return False
+        spec = self.instrument_spec(instrument)
         expected_stop = spec.format_price(stop_loss)
         expected_take = spec.format_price(take_profit)
-        return str(stop.get("state", "PENDING")).upper() == "PENDING" and str(take.get("state", "PENDING")).upper() == "PENDING" and spec.format_price(Decimal(str(stop.get("price")))) == expected_stop and spec.format_price(Decimal(str(take.get("price")))) == expected_take
+        return (
+            str(stop.get("state", "PENDING")).upper() == "PENDING"
+            and str(take.get("state", "PENDING")).upper() == "PENDING"
+            and spec.format_price(Decimal(str(stop.get("price")))) == expected_stop
+            and spec.format_price(Decimal(str(take.get("price")))) == expected_take
+        )
 
     def ensure_trade_protection(
         self,
@@ -208,7 +233,7 @@ class SafeOandaPracticeClient(OandaPracticeClient):
         if self.verify_trade_protection(trade_id, stop_loss=stop_loss, take_profit=take_profit):
             return True
         spec = self.instrument_spec(self._trade_instrument(trade_id))
-        payload, status = self._write_json(
+        payload, status, ambiguous = self._write_json(
             "PUT",
             f"/v3/accounts/{self._account_id()}/trades/{trade_id}/orders",
             json={
@@ -216,7 +241,7 @@ class SafeOandaPracticeClient(OandaPracticeClient):
                 "takeProfit": {"timeInForce": "GTC", "price": spec.format_price(take_profit)},
             },
         )
-        if status >= 400 or payload.get("stopLossOrderRejectTransaction") or payload.get("takeProfitOrderRejectTransaction"):
+        if ambiguous or status >= 400 or payload.get("stopLossOrderRejectTransaction") or payload.get("takeProfitOrderRejectTransaction"):
             return False
         return self.verify_trade_protection(trade_id, stop_loss=stop_loss, take_profit=take_profit)
 
@@ -251,20 +276,18 @@ class SafeOandaPracticeClient(OandaPracticeClient):
             raise OandaApiError(f"trade {trade_id} did not expose an instrument")
         return instrument
 
-    def _write_json(self, method: str, path: str, **kwargs: Any) -> tuple[dict[str, Any], int]:
+    def _write_json(self, method: str, path: str, **kwargs: Any) -> tuple[dict[str, Any], int, bool]:
         try:
             response = self.client.request(method, f"{self.rest_url}{path}", **kwargs)
         except httpx.HTTPError as exc:
-            # A transport failure can occur after OANDA accepted a write. The caller
-            # must reconcile rather than resubmit.
-            return {"error": f"transport outcome unknown: {type(exc).__name__}"}, 599
+            return {"error": f"transport outcome unknown: {type(exc).__name__}"}, 599, True
         if response.status_code in {429, 500, 502, 503, 504}:
-            return {"error": f"HTTP {response.status_code} outcome unknown"}, response.status_code
+            return {"error": f"HTTP {response.status_code} outcome unknown"}, response.status_code, True
         try:
             payload = response.json()
         except ValueError:
             payload = {"errorMessage": response.text[:240]}
-        return dict(payload), response.status_code
+        return dict(payload), response.status_code, False
 
 
 def _bucket_price(buckets: list[dict[str, Any]], required: Decimal) -> tuple[Decimal, Decimal | None]:
