@@ -31,6 +31,7 @@ class FrozenAblationSnapshot:
     signal_time: datetime
     policy_fingerprint: str
     payload_hash: str
+    payload_json: str | None = None
 
     def __post_init__(self) -> None:
         if not self.snapshot_id.strip() or not self.instrument.strip() or not self.policy_fingerprint.strip():
@@ -38,6 +39,16 @@ class FrozenAblationSnapshot:
         if self.signal_time.tzinfo is None:
             raise ValueError("signal_time must be timezone-aware")
         _validate_sha256(self.payload_hash, "payload_hash")
+        if self.payload_json is not None:
+            try:
+                payload = json.loads(self.payload_json)
+            except json.JSONDecodeError as exc:
+                raise ValueError("payload_json must contain valid JSON") from exc
+            canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+            if canonical != self.payload_json:
+                raise ValueError("payload_json must be canonical JSON")
+            if hashlib.sha256(canonical.encode()).hexdigest() != self.payload_hash:
+                raise ValueError("payload_json does not match payload_hash")
 
     @classmethod
     def from_payload(
@@ -49,14 +60,23 @@ class FrozenAblationSnapshot:
         policy_fingerprint: str,
         payload: Mapping[str, object],
     ) -> FrozenAblationSnapshot:
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return cls(
             snapshot_id=snapshot_id,
             instrument=instrument,
             signal_time=signal_time,
             policy_fingerprint=policy_fingerprint,
-            payload_hash=hashlib.sha256(canonical).hexdigest(),
+            payload_hash=hashlib.sha256(canonical.encode()).hexdigest(),
+            payload_json=canonical,
         )
+
+    def require_payload(self) -> Mapping[str, object]:
+        if self.payload_json is None:
+            raise ValueError("frozen ablation snapshot does not retain its market payload")
+        payload = json.loads(self.payload_json)
+        if not isinstance(payload, dict):
+            raise ValueError("frozen ablation payload must be a JSON object")
+        return {str(key): value for key, value in payload.items()}
 
 
 @dataclass(frozen=True, slots=True)
