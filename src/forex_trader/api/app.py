@@ -86,7 +86,7 @@ def create_app(
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "version": __version__}
+        return {"status": "ok"}
 
     @app.get("/v1/status", dependencies=protected)
     def system_status() -> dict[str, object]:
