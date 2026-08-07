@@ -6,14 +6,16 @@ from random import Random
 
 from forex_trader.domain.instruments import pip_size_for
 from forex_trader.domain.models import Candle, Quote
+from forex_trader.domain.timeframes import granularity_duration
 
 
 class SyntheticMarketData:
     """Deterministic-price provider for local development and setup-path tests.
 
-    Prices are seeded deterministically; timestamps share one explicit anchor so M5/H1
-    end at the same logical decision time. The default anchor is the next UTC hour,
-    keeping normal test fundamentals point-in-time eligible without hard-coding an old date.
+    Prices are seeded deterministically; timestamps share one explicit anchor so every
+    configured strategy timeframe ends at the same logical decision time. The quote is
+    derived from the configured lower-timeframe series, keeping non-default timeframe
+    tests internally coherent instead of silently falling back to M5.
     """
 
     def __init__(
@@ -22,9 +24,12 @@ class SyntheticMarketData:
         seed: int = 7,
         direction: str = "long",
         anchor: datetime | None = None,
+        quote_granularity: str = "M5",
     ) -> None:
         self.seed = seed
         self.direction = direction
+        self.quote_granularity = quote_granularity.upper()
+        granularity_duration(self.quote_granularity)
         if anchor is None:
             now = datetime.now(UTC)
             anchor = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
@@ -34,13 +39,13 @@ class SyntheticMarketData:
         self._cache: dict[tuple[str, str, int], list[Candle]] = {}
 
     def candles(self, instrument: str, granularity: str, count: int) -> list[Candle]:
-        key = (instrument, granularity, count)
+        key = (instrument, granularity.upper(), count)
         if key not in self._cache:
-            self._cache[key] = self._generate(instrument, granularity, count)
+            self._cache[key] = self._generate(instrument, granularity.upper(), count)
         return list(self._cache[key])
 
     def quote(self, instrument: str) -> Quote:
-        candles = self.candles(instrument, "M5", 200)
+        candles = self.candles(instrument, self.quote_granularity, 200)
         mid = candles[-1].close
         half = pip_size_for(instrument) * Decimal("0.45")
         return Quote(
@@ -57,15 +62,16 @@ class SyntheticMarketData:
 
     def _generate(self, instrument: str, granularity: str, count: int) -> list[Candle]:
         random = Random(f"{self.seed}:{instrument}:{granularity}:{self.direction}")
-        step = timedelta(minutes=5 if granularity == "M5" else 60)
+        step = granularity_duration(granularity)
         start = self.anchor - step * (count - 1)
         base = Decimal("1.1000") if not instrument.endswith("_JPY") else Decimal("150.00")
         pip = pip_size_for(instrument)
         trend_sign = Decimal("1") if self.direction == "long" else Decimal("-1")
+        higher_timeframe = step >= timedelta(hours=1)
         candles: list[Candle] = []
         price = base
         for index in range(count):
-            drift = trend_sign * pip * (Decimal("0.22") if granularity == "H1" else Decimal("0.08"))
+            drift = trend_sign * pip * (Decimal("0.22") if higher_timeframe else Decimal("0.08"))
             noise = Decimal(str(random.uniform(-0.18, 0.18))) * pip
             open_price = price
             close = price + drift + noise
@@ -74,7 +80,7 @@ class SyntheticMarketData:
             candles.append(Candle(start + step * index, open_price, high, low, close, 100 + index))
             price = close
 
-        if granularity == "M5" and count >= 30:
+        if not higher_timeframe and count >= 30:
             self._inject_setup(candles, pip)
         return candles
 
