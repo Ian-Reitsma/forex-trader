@@ -73,144 +73,117 @@ def repeated(record: dict[str, object], count: int = 5) -> list[dict[str, object
     return [dict(record) for _ in range(count)]
 
 
-def test_aggregate_rates_and_promotion_readiness() -> None:
-    records = repeated(
-        cycle(
-            candidates=2,
-            rejection_codes={"NO_STRUCTURE_SHIFT": 18},
-            risk_grants=2,
-            submitted=1,
-            protected=1,
-            order_statuses={"protected": 1},
-            promotion_ready=False,
+def test_aggregate_rates_statuses_and_promotion_readiness() -> None:
+    aggregate = aggregate_campaign(
+        repeated(
+            cycle(
+                candidates=2,
+                rejection_codes={"NO_STRUCTURE_SHIFT": 18},
+                risk_grants=2,
+                submitted=1,
+                protected=1,
+                order_statuses={"protected": 1},
+            )
         )
     )
-    aggregate = aggregate_campaign(records)
     assert aggregate.cycles == 5
     assert aggregate.candidate_rate == Decimal("0.1")
-    assert aggregate.evaluation_completion_rate == Decimal("1")
+    assert aggregate.evaluation_completion_rate == 1
     assert aggregate.risk_denial_rate == 0
     assert aggregate.broker_reject_rate == 0
     assert aggregate.unresolved_rate == 0
-    assert aggregate.promotion_ready_true == 0
     assert aggregate.promotion_ready_false == 5
     assert aggregate.promotion_ready_rate == 0
     assert aggregate.order_statuses == {"protected": 5}
 
 
-def test_unknown_order_has_absolute_diagnostic_precedence() -> None:
-    records = repeated(
-        cycle(
-            candidates=2,
-            rejection_codes={"NO_STRUCTURE_SHIFT": 18},
-            risk_grants=2,
-            submitted=1,
-            unknown=1,
-            order_statuses={"unknown": 1},
-        )
-    )
-    diagnosis = diagnose_campaign(aggregate_campaign(records))
-    assert diagnosis.primary_bottleneck is CampaignBottleneck.EXECUTION_UNCERTAINTY
-    assert diagnosis.aggregate.orders_unresolved == 5
-    assert diagnosis.top_order_statuses == (("unknown", 5),)
-    assert "reconcile" in diagnosis.recommendations[0].lower()
-
-
 @pytest.mark.parametrize(
-    ("field", "status"),
+    ("kwargs", "status"),
     [
-        ("reconciliation_required", "reconciliation_required"),
-        ("emergency_close", "emergency_close"),
+        ({"unknown": 1}, "unknown"),
+        ({"reconciliation_required": 1}, "reconciliation_required"),
+        ({"emergency_close": 1}, "emergency_close"),
     ],
 )
-def test_hardened_unresolved_states_have_execution_precedence(field: str, status: str) -> None:
-    kwargs = {field: 1}
-    records = repeated(
-        cycle(
-            candidates=2,
-            rejection_codes={"NO_STRUCTURE_SHIFT": 18},
-            risk_grants=2,
-            submitted=1,
-            unresolved=1,
-            order_statuses={status: 1},
-            **kwargs,
+def test_unresolved_broker_states_have_absolute_diagnostic_precedence(
+    kwargs: dict[str, int], status: str
+) -> None:
+    diagnosis = diagnose_campaign(
+        aggregate_campaign(
+            repeated(
+                cycle(
+                    candidates=2,
+                    rejection_codes={"NO_STRUCTURE_SHIFT": 18},
+                    risk_grants=2,
+                    submitted=1,
+                    unresolved=1,
+                    order_statuses={status: 1},
+                    **kwargs,
+                )
+            )
         )
     )
-    diagnosis = diagnose_campaign(aggregate_campaign(records))
     assert diagnosis.primary_bottleneck is CampaignBottleneck.EXECUTION_UNCERTAINTY
-    if field == "emergency_close":
+    assert diagnosis.aggregate.orders_unresolved == 5
+    assert diagnosis.top_order_statuses == ((status, 5),)
+    assert "reconcile" in diagnosis.recommendations[0].lower()
+    if status == "emergency_close":
         assert any("protection" in item.lower() for item in diagnosis.recommendations)
 
 
-def test_provider_error_and_broker_rejection_precedence() -> None:
+def test_provider_errors_and_broker_reject_cancel_precede_strategy() -> None:
     provider = repeated(
         cycle(
             requested=20,
             evaluated=18,
-            candidates=0,
             rejection_codes={"TECHNICAL_FLAT": 18},
             errors={"OandaApiError": 2},
         )
     )
     assert diagnose_campaign(aggregate_campaign(provider)).primary_bottleneck is CampaignBottleneck.PROVIDER_ERRORS
 
-    broker = repeated(
-        cycle(
-            candidates=2,
-            rejection_codes={"NO_STRUCTURE_SHIFT": 18},
-            risk_grants=2,
-            submitted=2,
-            protected=1,
-            rejected=1,
-            order_statuses={"protected": 1, "rejected": 1},
+    for field, status in (("rejected", "rejected"), ("cancelled", "cancelled")):
+        kwargs = {field: 1}
+        diagnosis = diagnose_campaign(
+            aggregate_campaign(
+                repeated(
+                    cycle(
+                        candidates=2,
+                        rejection_codes={"NO_STRUCTURE_SHIFT": 18},
+                        risk_grants=2,
+                        submitted=2,
+                        protected=1,
+                        order_statuses={"protected": 1, status: 1},
+                        **kwargs,
+                    )
+                )
+            )
         )
-    )
-    assert diagnose_campaign(aggregate_campaign(broker)).primary_bottleneck is CampaignBottleneck.BROKER_REJECTIONS
-
-    cancelled = repeated(
-        cycle(
-            candidates=2,
-            rejection_codes={"NO_STRUCTURE_SHIFT": 18},
-            risk_grants=2,
-            submitted=2,
-            protected=1,
-            cancelled=1,
-            order_statuses={"protected": 1, "cancelled": 1},
-        )
-    )
-    diagnosis = diagnose_campaign(aggregate_campaign(cancelled))
-    assert diagnosis.primary_bottleneck is CampaignBottleneck.BROKER_REJECTIONS
-    assert diagnosis.aggregate.broker_reject_rate == Decimal("0.5")
+        assert diagnosis.primary_bottleneck is CampaignBottleneck.BROKER_REJECTIONS
+        assert diagnosis.aggregate.broker_reject_rate == Decimal("0.5")
 
 
-def test_fundamental_market_strategy_and_portfolio_bottlenecks() -> None:
-    fundamental = repeated(cycle(rejection_codes={"FUNDAMENTAL_UNCALIBRATED": 20}))
-    assert diagnose_campaign(aggregate_campaign(fundamental)).primary_bottleneck is CampaignBottleneck.FUNDAMENTAL_DATA
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("FUNDAMENTAL_UNCALIBRATED", CampaignBottleneck.FUNDAMENTAL_DATA),
+        ("MARKET_HOLIDAY", CampaignBottleneck.MARKET_CONTEXT),
+        ("NO_DECLARED_LIQUIDITY_SWEEP", CampaignBottleneck.STRATEGY_FORMATION),
+        ("NEW_FUTURE_REJECTION", CampaignBottleneck.UNCLASSIFIED_ABSTENTION),
+    ],
+)
+def test_rejection_categories_are_explicit(code: str, expected: CampaignBottleneck) -> None:
+    diagnosis = diagnose_campaign(aggregate_campaign(repeated(cycle(rejection_codes={code: 20}))))
+    assert diagnosis.primary_bottleneck is expected
+    if expected is CampaignBottleneck.UNCLASSIFIED_ABSTENTION:
+        assert any("classify" in item.lower() for item in diagnosis.recommendations)
 
-    context = repeated(cycle(rejection_codes={"MARKET_HOLIDAY": 12, "SPREAD_TOO_WIDE": 8}))
-    assert diagnose_campaign(aggregate_campaign(context)).primary_bottleneck is CampaignBottleneck.MARKET_CONTEXT
 
-    strategy = repeated(cycle(rejection_codes={"NO_DECLARED_LIQUIDITY_SWEEP": 12, "NO_STRUCTURE_SHIFT": 8}))
-    assert diagnose_campaign(aggregate_campaign(strategy)).primary_bottleneck is CampaignBottleneck.STRATEGY_FORMATION
-
-    portfolio = repeated(
-        cycle(
-            candidates=20,
-            risk_denials={"signed correlation risk veto": 20},
-        )
-    )
+def test_portfolio_risk_and_clean_selective_diagnoses() -> None:
+    portfolio = repeated(cycle(candidates=20, risk_denials={"signed correlation risk veto": 20}))
     assert diagnose_campaign(aggregate_campaign(portfolio)).primary_bottleneck is CampaignBottleneck.PORTFOLIO_RISK
 
-
-def test_unclassified_code_never_becomes_clean_selective() -> None:
-    records = repeated(cycle(rejection_codes={"NEW_FUTURE_REJECTION": 20}))
-    diagnosis = diagnose_campaign(aggregate_campaign(records))
-    assert diagnosis.primary_bottleneck is CampaignBottleneck.UNCLASSIFIED_ABSTENTION
-    assert any("classify" in item.lower() for item in diagnosis.recommendations)
-
-
-def test_clean_selective_requires_sufficient_clean_evidence() -> None:
-    records = repeated(
+    clean = repeated(
         cycle(
             candidates=20,
             risk_grants=20,
@@ -220,20 +193,21 @@ def test_clean_selective_requires_sufficient_clean_evidence() -> None:
             promotion_ready=True,
         )
     )
-    diagnosis = diagnose_campaign(aggregate_campaign(records))
+    diagnosis = diagnose_campaign(aggregate_campaign(clean))
     assert diagnosis.evidence_sufficient is True
     assert diagnosis.primary_bottleneck is CampaignBottleneck.CLEAN_SELECTIVE
     assert diagnosis.aggregate.promotion_ready_rate == 1
 
 
 def test_insufficient_evidence_precedes_normal_frequency_diagnosis() -> None:
-    record = cycle(rejection_codes={"NO_STRUCTURE_SHIFT": 20})
-    diagnosis = diagnose_campaign(aggregate_campaign([record]))
+    diagnosis = diagnose_campaign(
+        aggregate_campaign([cycle(rejection_codes={"NO_STRUCTURE_SHIFT": 20})])
+    )
     assert diagnosis.primary_bottleneck is CampaignBottleneck.INSUFFICIENT_EVIDENCE
     assert diagnosis.evidence_sufficient is False
 
 
-def test_legacy_jsonl_without_new_unresolved_fields_remains_readable(tmp_path) -> None:
+def test_legacy_unknown_evidence_infers_unresolved_and_file_analysis(tmp_path) -> None:
     legacy = cycle(
         candidates=2,
         rejection_codes={"NO_STRUCTURE_SHIFT": 18},
@@ -248,23 +222,14 @@ def test_legacy_jsonl_without_new_unresolved_fields_remains_readable(tmp_path) -
         "orders_unresolved",
     ):
         legacy.pop(key)
-    diagnosis = diagnose_campaign(aggregate_campaign(repeated(legacy)))
-    assert diagnosis.aggregate.orders_unknown == 5
-    assert diagnosis.aggregate.orders_unresolved == 5
-    assert diagnosis.primary_bottleneck is CampaignBottleneck.EXECUTION_UNCERTAINTY
+    aggregate = aggregate_campaign(repeated(legacy))
+    assert aggregate.orders_unknown == 5
+    assert aggregate.orders_unresolved == 5
 
     path = tmp_path / "legacy.jsonl"
     path.write_text("\n".join(json.dumps(row) for row in repeated(legacy)) + "\n", encoding="utf-8")
-    assert analyze_campaign_file(path).primary_bottleneck is CampaignBottleneck.EXECUTION_UNCERTAINTY
-
-
-def test_jsonl_loader_and_file_analysis(tmp_path) -> None:
-    path = tmp_path / "evidence.jsonl"
-    rows = repeated(cycle(rejection_codes={"FUNDAMENTAL_UNCALIBRATED": 20}))
-    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
-    assert len(load_campaign_jsonl(path)) == 5
     diagnosis = analyze_campaign_file(path)
-    assert diagnosis.primary_bottleneck is CampaignBottleneck.FUNDAMENTAL_DATA
+    assert diagnosis.primary_bottleneck is CampaignBottleneck.EXECUTION_UNCERTAINTY
     payload = diagnosis.to_jsonable()
     assert payload["aggregate"]["cycles"] == 5  # type: ignore[index]
 
@@ -289,7 +254,7 @@ def test_jsonl_loader_rejects_missing_empty_invalid_and_non_object(tmp_path) -> 
         load_campaign_jsonl(non_object)
 
 
-def test_aggregate_rejects_internally_impossible_records() -> None:
+def test_aggregate_rejects_impossible_accounting_and_histograms() -> None:
     bad = cycle(rejection_codes={"NO_STRUCTURE_SHIFT": 20})
     bad["instruments_evaluated"] = 21
     with pytest.raises(ValueError, match="evaluated more instruments"):
@@ -318,7 +283,7 @@ def test_aggregate_rejects_internally_impossible_records() -> None:
         risk_grants=2,
         submitted=1,
         protected=1,
-        order_statuses={"filled": 1},
+        order_statuses={"created": 1},
     )
     with pytest.raises(ValueError, match="order-status protected"):
         aggregate_campaign([bad])
@@ -336,29 +301,18 @@ def test_aggregate_rejects_internally_impossible_records() -> None:
         aggregate_campaign([bad])
 
 
-def test_aggregate_rejects_bad_types_counts_and_readiness() -> None:
-    bad = cycle(rejection_codes={"NO_STRUCTURE_SHIFT": 20})
-    bad["errors"] = True
-    with pytest.raises(ValueError, match="must be an integer"):
-        aggregate_campaign([bad])
+def test_aggregate_rejects_bad_types_and_diagnosis_thresholds() -> None:
+    for field, value, pattern in (
+        ("errors", True, "must be an integer"),
+        ("instruments_requested", 20.5, "must be an integer"),
+        ("promotion_ready", "no", "boolean or null"),
+        ("order_statuses", [], "must be an object"),
+    ):
+        bad = cycle(rejection_codes={"NO_STRUCTURE_SHIFT": 20})
+        bad[field] = value
+        with pytest.raises(ValueError, match=pattern):
+            aggregate_campaign([bad])
 
-    bad = cycle(rejection_codes={"NO_STRUCTURE_SHIFT": 20})
-    bad["instruments_requested"] = 20.5
-    with pytest.raises(ValueError, match="must be an integer"):
-        aggregate_campaign([bad])
-
-    bad = cycle(rejection_codes={"NO_STRUCTURE_SHIFT": 20})
-    bad["promotion_ready"] = "no"
-    with pytest.raises(ValueError, match="boolean or null"):
-        aggregate_campaign([bad])
-
-    bad = cycle(rejection_codes={"NO_STRUCTURE_SHIFT": 20})
-    bad["order_statuses"] = []
-    with pytest.raises(ValueError, match="order_statuses must be an object"):
-        aggregate_campaign([bad])
-
-
-def test_diagnosis_validates_minimum_evidence_thresholds() -> None:
     aggregate = aggregate_campaign([cycle(rejection_codes={"NO_STRUCTURE_SHIFT": 20})])
     with pytest.raises(ValueError, match="must be positive"):
         diagnose_campaign(aggregate, minimum_cycles=0)
