@@ -68,12 +68,14 @@ def test_scheduled_event_range_filters_and_immutability() -> None:
 def test_trading_repository_promotion_metrics_use_full_trace_metadata() -> None:
     # Keep this test independent of wall-clock session/weekend state. Use the next
     # weekday at 18:00 UTC, which is New York continuation and outside London-fix
-    # and rollover blackouts. It is also strictly after the point-in-time fixtures.
+    # and rollover blackouts. Seed 11 is the canonical deterministic qualifying
+    # setup used by the end-to-end engine fixture; this test is about repository
+    # accounting, not whether an arbitrary synthetic seed should trade.
     anchor = datetime.now(UTC) + timedelta(days=1)
     while anchor.weekday() >= 5:
         anchor += timedelta(days=1)
     anchor = anchor.replace(hour=18, minute=0, second=0, microsecond=0)
-    market = SyntheticMarketData(seed=33, direction="long", anchor=anchor)
+    market = SyntheticMarketData(seed=11, direction="long", anchor=anchor)
     repository = TradingRepository(":memory:")
     engine = TradingEngine(
         market_data=market,
