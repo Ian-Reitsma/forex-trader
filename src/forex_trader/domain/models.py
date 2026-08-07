@@ -210,6 +210,19 @@ class RiskAuthorization:
     created_at: datetime = field(default_factory=utc_now)
     account_id: str | None = None
     expires_at: datetime | None = None
+    candidate_hash: str = ""
+    environment: str = ""
+    approved_direction: str = ""
+    maximum_units: int = 0
+    entry_price_min: Decimal | None = None
+    entry_price_max: Decimal | None = None
+    stop_loss: Decimal | None = None
+    maximum_loss: Decimal | None = None
+    required_protection: bool = True
+    portfolio_snapshot_id: str = ""
+    risk_policy_version: str = ""
+    limits_consumed: dict[str, str] = field(default_factory=dict)
+    integrity_digest: str = ""
 
     @property
     def expired(self) -> bool:
@@ -228,6 +241,11 @@ class OrderRequest:
     intended_price: Decimal | None = None
     price_bound: Decimal | None = None
     authorization_id: str | None = None
+    order_type: str = "market"
+    time_in_force: str = "FOK"
+    limit_price: Decimal | None = None
+    trigger_price: Decimal | None = None
+    expires_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

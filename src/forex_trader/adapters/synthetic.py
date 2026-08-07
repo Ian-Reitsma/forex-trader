@@ -8,6 +8,8 @@ from forex_trader.domain.instruments import pip_size_for
 from forex_trader.domain.models import Candle, Quote
 from forex_trader.domain.timeframes import granularity_duration
 
+DEFAULT_SYNTHETIC_ANCHOR = datetime(2025, 1, 15, 19, 0, tzinfo=UTC)
+
 
 class SyntheticMarketData:
     """Deterministic-price provider for local development and setup-path tests.
@@ -16,6 +18,11 @@ class SyntheticMarketData:
     OANDA-style candle timestamps represent bar starts, so the final candle begins one
     configured interval before the anchor. This keeps no-lookahead signal timestamps,
     quotes, and point-in-time fundamentals coherent across M5..M30 and H1/H4 policies.
+
+    The default uses a fixed weekday/New-York-continuation logical clock. Synthetic market
+    behavior must not change merely because CI started at a different wall-clock hour or
+    crossed a weekend. Callers that need another session pass an explicit anchor. Demo
+    fundamentals are seeded at this same logical time by runtime configuration.
 
     Quotes reuse the deepest cached series for the configured lower granularity whenever
     one exists. Runtime may request more than 200 lower bars to preserve full session/day
@@ -35,9 +42,7 @@ class SyntheticMarketData:
         self.direction = direction
         self.quote_granularity = quote_granularity.upper()
         granularity_duration(self.quote_granularity)
-        if anchor is None:
-            now = datetime.now(UTC)
-            anchor = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        anchor = DEFAULT_SYNTHETIC_ANCHOR if anchor is None else anchor
         if anchor.tzinfo is None:
             raise ValueError("synthetic anchor must be timezone-aware")
         self.anchor = anchor.astimezone(UTC)

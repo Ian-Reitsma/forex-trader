@@ -117,8 +117,8 @@ def test_walk_forward_replay_uses_only_available_candles() -> None:
     )
     fundamentals = FundamentalBook(
         [
-            CurrencyFundamentals("EUR", policy=Decimal("0.4"), confidence=Decimal("0.9")),
-            CurrencyFundamentals("USD", policy=Decimal("-0.3"), confidence=Decimal("0.9")),
+            CurrencyFundamentals("EUR", policy=Decimal("0.4"), confidence=Decimal("0.9"), as_of=market.anchor),
+            CurrencyFundamentals("USD", policy=Decimal("-0.3"), confidence=Decimal("0.9"), as_of=market.anchor),
         ]
     )
     trades, report = run_walk_forward_backtest(

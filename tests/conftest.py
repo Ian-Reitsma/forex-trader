@@ -19,7 +19,7 @@ def market() -> SyntheticMarketData:
 
 
 @pytest.fixture()
-def fundamentals() -> FundamentalBook:
+def fundamentals(market: SyntheticMarketData) -> FundamentalBook:
     return FundamentalBook(
         [
             CurrencyFundamentals(
@@ -29,6 +29,7 @@ def fundamentals() -> FundamentalBook:
                 growth=Decimal("0.2"),
                 labor=Decimal("0.1"),
                 confidence=Decimal("0.9"),
+                as_of=market.anchor,
             ),
             CurrencyFundamentals(
                 "USD",
@@ -37,6 +38,7 @@ def fundamentals() -> FundamentalBook:
                 growth=Decimal("-0.1"),
                 labor=Decimal("0"),
                 confidence=Decimal("0.9"),
+                as_of=market.anchor,
             ),
         ]
     )

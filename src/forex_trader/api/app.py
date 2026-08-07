@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from forex_trader import __version__
 from forex_trader.application.engine import TradingEngine
+from forex_trader.application.readiness import assess_engine_readiness
 from forex_trader.domain.models import jsonable
 
 
@@ -85,12 +86,50 @@ def create_app(
     protected = [Depends(require_auth)]
 
     @app.get("/health")
+    @app.get("/health/live")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/ready")
+    def readiness_health(instrument: str = "EUR_USD") -> dict[str, object]:
+        try:
+            snapshot, providers, readiness = assess_engine_readiness(engine, instrument)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        if not readiness.ready:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "ready": False,
+                    "reasons": readiness.reasons,
+                    "degraded_sources": readiness.degraded_sources,
+                    "snapshot": jsonable(snapshot),
+                    "providers": jsonable(providers),
+                },
+            )
+        return {
+            "ready": True,
+            "reasons": readiness.reasons,
+            "degraded_sources": readiness.degraded_sources,
+            "snapshot": jsonable(snapshot),
+            "providers": jsonable(providers),
+        }
 
     @app.get("/v1/status", dependencies=protected)
     def system_status() -> dict[str, object]:
         return engine.status()
+
+    @app.get("/v1/readiness/{instrument}", dependencies=protected)
+    def runtime_readiness(instrument: str) -> dict[str, object]:
+        snapshot, providers, readiness = assess_engine_readiness(engine, instrument)
+        return {
+            "instrument": instrument.upper(),
+            "ready": readiness.ready,
+            "reasons": readiness.reasons,
+            "degraded_sources": readiness.degraded_sources,
+            "snapshot": jsonable(snapshot),
+            "providers": jsonable(providers),
+        }
 
     @app.get("/v1/promotion", dependencies=protected)
     def promotion() -> dict[str, object]:
