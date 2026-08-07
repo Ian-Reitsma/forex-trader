@@ -115,6 +115,7 @@ def write_paired_ablation_uncertainty_evidence(
     *,
     artifact_id: str,
 ) -> None:
+    _validate_sha256(artifact_id, "artifact_id")
     values = tuple(evidence)
     if not values:
         raise ValueError("paired ablation uncertainty evidence cannot be empty")
@@ -155,3 +156,12 @@ def write_paired_ablation_uncertainty_evidence(
     file_path = Path(path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _validate_sha256(value: str, name: str) -> None:
+    if len(value) != 64:
+        raise ValueError(f"{name} must be a SHA-256 hex digest")
+    try:
+        int(value, 16)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a SHA-256 hex digest") from exc
