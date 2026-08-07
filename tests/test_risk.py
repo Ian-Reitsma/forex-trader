@@ -187,7 +187,12 @@ def test_portfolio_exposure_fails_closed_when_existing_position_cannot_be_priced
 def test_margin_reserve_can_veto_trade() -> None:
     quote = Quote("EUR_USD", Decimal("1.1"), Decimal("1.1001"), datetime.now(UTC))
     snapshot = account(margin_available=Decimal("100"))
-    auth = RiskPolicy(risk_fraction=Decimal("0.01"), max_units=100000).authorize(
+    auth = RiskPolicy(
+        risk_fraction=Decimal("0.01"),
+        max_units=100000,
+        max_gross_exposure_fraction=Decimal("100"),
+        max_currency_exposure_fraction=Decimal("100"),
+    ).authorize(
         candidate(),
         snapshot,
         quote,
