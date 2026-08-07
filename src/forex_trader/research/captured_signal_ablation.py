@@ -7,7 +7,7 @@ from forex_trader.domain.enums import DecisionDisposition, OperatingMode
 from forex_trader.domain.fusion import RegimeAwareSignalFusionPolicy
 from forex_trader.domain.models import DecisionTrace
 from forex_trader.research.ablation_runtime import ResearchAblationRequest
-from forex_trader.research.ablations import AblationVariant, FrozenAblationSnapshot, ProspectiveAblationDecision
+from forex_trader.research.ablations import FrozenAblationSnapshot, ProspectiveAblationDecision
 from forex_trader.research.production_ablation import ProductionAblationAdapter, make_component_hooks
 from forex_trader.research.production_signal_ablation import (
     ProductionSignalAblationEvaluator,
