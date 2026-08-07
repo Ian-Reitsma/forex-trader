@@ -1,72 +1,78 @@
 # Forex Trader
 
-A documentation-led forex paper-trading platform that combines chart technicals, economic-release fundamentals, and news context before independently authorizing risk and routing an order.
+A runnable, documentation-led forex paper-trading platform that combines multi-timeframe technical structure with currency-level fundamental context, conservative risk authorization, and OANDA fxTrade Practice execution.
 
-The repository now contains a runnable paper-trading MVP plus the full architecture and developer specifications. It does **not** contain a live-trading path.
+The current release is **paper-only**. It contains no live-money endpoint and rejects any OANDA REST host other than `https://api-fxpractice.oanda.com`.
 
-## What works now
+## Implemented system
 
-- Deterministic offline market simulator with no credentials.
-- OANDA fxTrade Practice integration for account discovery, candles, executable quotes, account summaries, and protected market orders.
-- M5/H1 technical analysis using EMA structure, ATR, RSI, liquidity sweeps, displacement, spread gating, structural stops, and 2R targets.
-- Currency-level fundamental state updated from economic releases and news text.
-- Deterministic signal fusion with explicit abstention reasons.
-- Independent stop-distance risk sizing and account limits.
-- Shadow mode and paper mode with separate execution gates.
-- SQLite decision-trace persistence.
-- FastAPI control API, CLI polling runner, Docker support, and GitHub Actions CI.
-- 32 automated tests with an enforced 85% coverage floor.
-
-Read [Implementation Status](docs/16_IMPLEMENTATION_STATUS.md) for the exact boundary between working code and later production phases.
-
-## Architecture
+The working vertical slice is:
 
 ```text
-Market data provider ── candles / executable quote ──┐
-                                                     ├─ technical assessment ─┐
-Economic releases / news ─ fundamental state ───────┘                        │
-                                                                              ├─ signal fusion
-Account snapshot ──────────────────────────────────────────────────────────────┘
-                                                                                 │
-                                                                                 ▼
-                                                                      independent risk gate
-                                                                                 │
-                                                        ┌────────────────────────┴──────────────────────┐
-                                                        ▼                                               ▼
-                                                   shadow trace                               protected paper order
-                                                        └────────────────────────┬──────────────────────┘
-                                                                                 ▼
-                                                                          SQLite audit trail
+M5/H1 completed candles + executable bid/ask
+                    +
+       timestamped currency fundamentals
+                    ↓
+          technical assessment
+                    ↓
+         fundamental differential
+                    ↓
+       confirmation and cost filters
+                    ↓
+       independent risk authorization
+                    ↓
+       shadow decision or paper order
+                    ↓
+        SQLite audit and decision trace
 ```
 
-## Fastest local start
+Implemented capabilities include:
 
-Python 3.11 or newer is supported; Python 3.13 is the target.
+- deterministic offline simulation;
+- OANDA Practice account discovery, prices, candles, instrument metadata and protected market orders;
+- EMA structure, ATR, RSI, trend-strength, liquidity-sweep and displacement analysis;
+- strict confirmation, quote freshness, spread and executable reward/risk gates;
+- economic-release and news updates to currency-level fundamental state;
+- conflict-aware technical/fundamental signal fusion;
+- risk sizing from the lower of account balance and NAV;
+- score-scaled risk, daily realized-loss checks, position limits and unit caps;
+- protection-level validation;
+- same-instrument position blocking;
+- persistent duplicate-signal protection across process restarts;
+- OANDA precision-aware price and unit formatting;
+- OANDA read-request retries, ambiguous-order protection and redacted errors;
+- read-only and self-closing OANDA Practice verification scripts;
+- completion-aware, spread-aware barrier backtesting and score-threshold calibration;
+- FastAPI control endpoints, Typer CLI, Docker and GitHub Actions.
+
+## Important performance boundary
+
+The project does not claim a profitable or high-win-rate strategy. Selecting thresholds against synthetic data or the same history used for evaluation would be overfitting. The repository therefore provides chronological training/validation utilities and conservative same-candle execution assumptions. Production claims require historical point-in-time fundamentals, realistic spreads and a later untouched test period.
+
+## Installation
 
 ```bash
-git clone git@github.com:Ian-Reitsma/forex-trader.git
-cd forex-trader
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 cp .env.example .env
+```
+
+Run the complete test suite:
+
+```bash
 pytest --cov=forex_trader --cov-report=term-missing
 ```
 
-Validate configuration:
+Run a safe offline evaluation:
 
 ```bash
 forex-trader doctor
-```
-
-Run a deterministic shadow evaluation:
-
-```bash
 forex-trader demo --instrument EUR_USD
 ```
 
-Run an offline simulated paper order:
+Run a fully simulated paper fill:
 
 ```bash
 FOREX_PROVIDER=simulation \
@@ -75,163 +81,82 @@ FOREX_ENABLE_PAPER_ORDERS=true \
 forex-trader demo --instrument EUR_USD --execute
 ```
 
-Run repeated cycles:
+## OANDA Practice
 
-```bash
-FOREX_PROVIDER=simulation \
-FOREX_MODE=paper \
-FOREX_ENABLE_PAPER_ORDERS=true \
-forex-trader run --interval-seconds 300 --execute
-```
-
-## Free API paper trading: OANDA Practice
-
-Use **OANDA fxTrade Practice** for the external paper account. The demo account uses virtual funds, does not require a deposit, and exposes OANDA's REST v20 market-data and trading API.
-
-1. Create an OANDA demo account for your country.
-2. Sign in to the OANDA HUB.
-3. Open **Tools → API**. In some account views this appears as **My Services → Manage API Access**.
-4. Select **Generate** and copy the personal access token immediately.
-5. Copy the practice account ID from the account list, or leave `OANDA_ACCOUNT_ID` blank and the adapter will discover the first account visible to the token.
-6. Store the values only in `.env`; `.env` is ignored by Git.
+Configure `.env` without committing it:
 
 ```dotenv
 FOREX_PROVIDER=oanda
 FOREX_MODE=shadow
 FOREX_ENABLE_PAPER_ORDERS=false
-FOREX_DATABASE_PATH=./forex_trader.db
-FOREX_INSTRUMENTS=EUR_USD,GBP_USD,USD_JPY
-
-OANDA_API_TOKEN=your-personal-access-token
-OANDA_ACCOUNT_ID=your-practice-account-id
+OANDA_API_TOKEN=replace-locally
+OANDA_ACCOUNT_ID=
 OANDA_REST_URL=https://api-fxpractice.oanda.com
 ```
 
-Run a read-only connection test first:
+Run the read-only probe:
 
 ```bash
 python scripts/smoke_oanda.py
 ```
 
-Run the bot in shadow mode:
+Run a recent-candle technical backtest without placing orders:
 
 ```bash
-forex-trader demo --instrument EUR_USD
+python scripts/backtest_oanda.py
+python scripts/optimize_oanda.py --instrument EUR_USD
 ```
 
-After the account, quote, and candle checks succeed, permit practice orders:
-
-```dotenv
-FOREX_MODE=paper
-FOREX_ENABLE_PAPER_ORDERS=true
-```
-
-Then:
+To verify the broker write path with the broker minimum and immediate closure, explicitly enable the paper gates and run:
 
 ```bash
-forex-trader demo --instrument EUR_USD --execute
+FOREX_MODE=paper \
+FOREX_ENABLE_PAPER_ORDERS=true \
+python scripts/oanda_round_trip.py
 ```
 
-Both the CLI `--execute` switch and the environment execution gate are required. Paper mode also refuses a non-`fxpractice` OANDA REST URL.
+The round-trip script refuses to run when the selected instrument already has an open position. It opens only the broker minimum and immediately closes the newly created practice trade.
 
-See [OANDA Practice Setup](docs/17_OANDA_PAPER_SETUP.md) for the complete sequence.
-
-## Fundamental and news inputs
-
-The baseline engine maintains a separate state for each currency. A starter state is loaded for EUR, USD, GBP, and JPY so the offline demo is immediately runnable. Production use should replace those values with licensed or official point-in-time feeds.
-
-Start the API:
+## Control API
 
 ```bash
 forex-trader serve
-```
-
-Add an economic release:
-
-```bash
-curl -X POST http://127.0.0.1:8000/v1/fundamentals/releases \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "currency": "USD",
-    "category": "labor",
-    "actual": "250",
-    "forecast": "200",
-    "previous": "180",
-    "higher_is_positive": true,
-    "importance": "1"
-  }'
-```
-
-Add a news observation:
-
-```bash
-curl -X POST http://127.0.0.1:8000/v1/fundamentals/news \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "currency": "EUR",
-    "headline": "Growth weak as activity contracts",
-    "source_weight": "0.8"
-  }'
-```
-
-Evaluate a pair:
-
-```bash
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/v1/status
 curl -X POST 'http://127.0.0.1:8000/v1/evaluate/EUR_USD?execute=false'
 ```
 
-## Safety controls
+## Repository map
 
-- The default provider is simulation.
-- The default mode is shadow.
-- Paper execution is disabled by default.
-- The strategy cannot call the broker directly; risk authorization is separate.
-- Every practice order includes stop-loss and take-profit instructions.
-- Missing or conflicting fundamentals cause abstention when fundamentals are required.
-- Wide spreads cause abstention.
-- Unsupported account-currency conversions cause risk denial.
-- No code selects OANDA's live endpoint.
-- Tokens and account identifiers must never be committed.
+| Path | Purpose |
+|---|---|
+| `src/forex_trader/domain/` | Technicals, fundamentals, fusion, models and risk |
+| `src/forex_trader/application/` | Trading orchestration and ports |
+| `src/forex_trader/adapters/` | OANDA Practice, synthetic data and paper broker |
+| `src/forex_trader/infrastructure/` | Persistent decision and execution claims |
+| `src/forex_trader/research/` | Conservative backtesting and threshold calibration |
+| `src/forex_trader/api/` | FastAPI control plane |
+| `scripts/` | Safe broker probes and research utilities |
+| `tests/` | Unit, contract, integration and end-to-end tests |
+| `docs/` | Strategy, architecture, operations and implementation specifications |
 
-## Commands
+## Documentation
 
-```text
-forex-trader doctor        Validate environment and execution gates
-forex-trader demo          Evaluate one instrument once
-forex-trader cycle         Evaluate every configured instrument once
-forex-trader run           Poll continuously or for a finite number of cycles
-forex-trader serve         Start the FastAPI control plane
-```
+Start with:
 
-## Tests
+- [Implementation status](docs/16_IMPLEMENTATION_STATUS.md)
+- [OANDA Practice setup](docs/17_OANDA_PAPER_SETUP.md)
+- [Optimization and validation](docs/18_OPTIMIZATION_VALIDATION.md)
+- [Developer implementation index](docs/dev/00_DEVELOPER_INDEX.md)
+- [System vision](docs/00_SYSTEM_VISION.md)
+- [Strategy specification](docs/02_STRATEGY_SPECIFICATION.md)
+- [Risk and governance](docs/08_RISK_CAPITAL_GOVERNANCE.md)
+- [Backtesting and validation](docs/09_BACKTESTING_VALIDATION.md)
 
-```bash
-pytest
-pytest --cov=forex_trader --cov-report=term-missing
-```
+## Source-method boundary
 
-The suite covers domain validation, technical indicators, long and short setups, release and news processing, fundamental conflicts, spread rejection, risk sizing and limits, simulator fills, OANDA payloads and error mapping, SQLite persistence, polling, CLI behavior, API behavior, and a full paper-order cycle.
+The strategy is inspired only by publicly described TheForexScalpers concepts such as multi-timeframe structure, supply/demand context, liquidity sweeps, confirmation and session timing. It does not claim to reproduce a private course, paid indicator or undisclosed proprietary formula.
 
-## Docker
+## Safety boundary
 
-```bash
-docker compose up --build
-```
-
-The default container remains in simulation/shadow mode. OANDA credentials are read from the local environment and are not embedded in the image.
-
-## Documentation map
-
-The original design remains under `docs/`. Begin with:
-
-- [System Vision](docs/00_SYSTEM_VISION.md)
-- [Strategy Specification](docs/02_STRATEGY_SPECIFICATION.md)
-- [Fundamental and News Engine](docs/03_FUNDAMENTAL_NEWS_ENGINE.md)
-- [Technical and Order-Flow Engine](docs/04_TECHNICAL_ORDERFLOW_ENGINE.md)
-- [Risk and Governance](docs/08_RISK_CAPITAL_GOVERNANCE.md)
-- [Developer Implementation Index](docs/dev/00_DEVELOPER_INDEX.md)
-- [Implementation Status](docs/16_IMPLEMENTATION_STATUS.md)
-
-## Risk notice
-
-Leveraged foreign-exchange trading can produce rapid losses. Paper results do not establish live expectancy. Do not add live credentials or replace the practice endpoint until the remaining reconciliation, portfolio-risk, point-in-time backtesting, security, and promotion requirements are implemented and independently reviewed.
+Leveraged FX and CFD trading can produce rapid losses. Paper success is not evidence of live profitability. No component can activate live-money trading, and no strategy code can bypass the independent risk policy or the explicit paper-order gates.

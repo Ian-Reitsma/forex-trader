@@ -55,16 +55,27 @@ def assess_technicals(
     instrument: str,
     lower: list[Candle],
     higher: list[Candle],
+    *,
+    reward_risk: Decimal = Decimal("2"),
 ) -> TechnicalAssessment:
+    """Build a conservative multi-timeframe scalp assessment.
+
+    The function identifies direction from H1 structure, but marks a setup as high-quality
+    only when the latest completed M5 candle also sweeps liquidity and displaces back in
+    the trend direction. The fusion policy decides whether those confirmations are mandatory.
+    """
     completed_lower = [c for c in lower if c.complete]
     completed_higher = [c for c in higher if c.complete]
     if len(completed_lower) < 60 or len(completed_higher) < 60:
         raise ValueError("at least 60 completed candles are required per timeframe")
+    if reward_risk <= Decimal("1"):
+        raise ValueError("reward_risk must be greater than 1")
 
     lower_closes = [c.close for c in completed_lower]
     higher_closes = [c.close for c in completed_higher]
     current = completed_lower[-1]
     current_atr = atr(completed_lower)
+    higher_atr = atr(completed_higher)
     current_rsi = rsi(lower_closes)
 
     h_fast = ema(higher_closes, 20)
@@ -74,6 +85,7 @@ def assess_technicals(
 
     long_trend = h_fast > h_slow and higher_closes[-1] > h_fast
     short_trend = h_fast < h_slow and higher_closes[-1] < h_fast
+    trend_strength = abs(h_fast - h_slow) / max(higher_atr, pip_size(instrument))
 
     lookback = completed_lower[-11:-1]
     prior_low = min(c.low for c in lookback)
@@ -83,57 +95,72 @@ def assess_technicals(
 
     bodies = [abs(c.close - c.open) for c in completed_lower[-11:-1]]
     average_body = sum(bodies) / Decimal(len(bodies))
-    displacement = abs(current.close - current.open) >= max(
+    current_body = abs(current.close - current.open)
+    current_range = max(current.high - current.low, pip_size(instrument))
+    close_location = (current.close - current.low) / current_range
+    displacement = current_body >= max(
         current_atr * Decimal("0.45"), average_body * Decimal("1.25")
     )
 
     reasons: list[str] = []
     score = Decimal("0")
     direction = Direction.FLAT
+    confirmed_sweep = False
+    directional_displacement = False
 
     if long_trend:
         direction = Direction.LONG
-        score += Decimal("0.35")
+        score += Decimal("0.25")
         reasons.append("higher-timeframe EMA structure is bullish")
+        if trend_strength >= Decimal("0.12"):
+            score += Decimal("0.10")
+            reasons.append(f"higher-timeframe trend strength={trend_strength:.3f}")
         if l_fast >= l_slow:
             score += Decimal("0.15")
             reasons.append("lower-timeframe momentum is bullish")
         if long_sweep:
+            confirmed_sweep = True
             score += Decimal("0.25")
             reasons.append("sell-side liquidity was swept and reclaimed")
-        if Decimal("35") <= current_rsi <= Decimal("68"):
-            score += Decimal("0.10")
-            reasons.append("RSI is compatible with continuation")
-        if displacement and current.close > current.open:
+        directional_displacement = displacement and current.close > current.open and close_location >= Decimal("0.62")
+        if directional_displacement:
             score += Decimal("0.15")
-            reasons.append("bullish displacement confirms rejection")
+            reasons.append("bullish displacement closes in the upper candle range")
+        if Decimal("38") <= current_rsi <= Decimal("67"):
+            score += Decimal("0.10")
+            reasons.append("RSI is compatible with bullish continuation")
     elif short_trend:
         direction = Direction.SHORT
-        score += Decimal("0.35")
+        score += Decimal("0.25")
         reasons.append("higher-timeframe EMA structure is bearish")
+        if trend_strength >= Decimal("0.12"):
+            score += Decimal("0.10")
+            reasons.append(f"higher-timeframe trend strength={trend_strength:.3f}")
         if l_fast <= l_slow:
             score += Decimal("0.15")
             reasons.append("lower-timeframe momentum is bearish")
         if short_sweep:
+            confirmed_sweep = True
             score += Decimal("0.25")
             reasons.append("buy-side liquidity was swept and rejected")
-        if Decimal("32") <= current_rsi <= Decimal("65"):
-            score += Decimal("0.10")
-            reasons.append("RSI is compatible with continuation")
-        if displacement and current.close < current.open:
+        directional_displacement = displacement and current.close < current.open and close_location <= Decimal("0.38")
+        if directional_displacement:
             score += Decimal("0.15")
-            reasons.append("bearish displacement confirms rejection")
+            reasons.append("bearish displacement closes in the lower candle range")
+        if Decimal("33") <= current_rsi <= Decimal("62"):
+            score += Decimal("0.10")
+            reasons.append("RSI is compatible with bearish continuation")
     else:
         reasons.append("higher-timeframe structure is not directional")
 
     if direction is Direction.LONG:
         stop = min(c.low for c in completed_lower[-8:]) - current_atr * Decimal("0.10")
         risk = current.close - stop
-        take = current.close + risk * Decimal("2")
+        take = current.close + risk * reward_risk
     elif direction is Direction.SHORT:
         stop = max(c.high for c in completed_lower[-8:]) + current_atr * Decimal("0.10")
         risk = stop - current.close
-        take = current.close - risk * Decimal("2")
+        take = current.close - risk * reward_risk
     else:
         stop = None
         take = None
@@ -148,4 +175,9 @@ def assess_technicals(
         stop_reference=stop,
         take_profit_reference=take,
         reasons=tuple(reasons),
+        signal_time=current.time,
+        liquidity_sweep=confirmed_sweep,
+        displacement=directional_displacement,
+        trend_strength=trend_strength,
+        reward_risk=reward_risk if direction is not Direction.FLAT else Decimal("0"),
     )

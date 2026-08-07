@@ -1,58 +1,80 @@
 # 16 — Implementation Status
 
-## Implemented vertical slice
+## Current release
 
-The repository now contains a runnable Python platform rather than specifications only. The implemented path is:
+Version 0.2.0 is a functioning paper-trading platform with an offline deterministic provider and an OANDA fxTrade Practice adapter. It is not a live-money system.
 
 ```text
-M5/H1 candles + executable quote
-        +
-versioned currency fundamental state
-        ↓
-technical assessment
-        ↓
-fundamental pair assessment
-        ↓
-deterministic signal fusion
-        ↓
-independent risk authorization
-        ↓
-shadow decision or paper order
-        ↓
-SQLite decision trace
+completed M5/H1 candles + executable quote
+                    +
+       timestamped currency fundamentals
+                    ↓
+ technical structure and confirmation
+                    ↓
+     fundamental pair differential
+                    ↓
+ confirmation, freshness, spread and RR gates
+                    ↓
+      independent risk authorization
+                    ↓
+ shadow decision or protected practice order
+                    ↓
+ persistent decision and execution audit
 ```
-
-The default provider is deterministic simulation. OANDA fxTrade Practice is the initial external paper broker and market-data adapter.
 
 ## Implemented components
 
-- Pure domain models for candles, quotes, accounts, technical/fundamental assessments, candidates, risk authorizations, orders, and traces.
-- EMA, RSI, ATR, multi-timeframe trend, liquidity-sweep, displacement, spread, stop, and take-profit calculations.
-- Currency-level fundamental state updated from economic releases and news text.
-- Regime-neutral deterministic signal-fusion policy with explicit abstention reasons.
-- Stop-distance position sizing for USD accounts and USD pairs.
-- Independent limits for per-trade risk, daily realized loss, open positions, and maximum units.
-- Deterministic synthetic market-data provider.
-- Simulated paper broker.
-- OANDA Practice REST adapter for account discovery, account summary, candles, quotes, and protected market orders.
-- SQLite decision-trace persistence.
-- FastAPI control plane.
-- Typer CLI for configuration checks, one-shot evaluation, finite or continuous cycles, and API serving.
-- Docker image and compose file.
-- GitHub Actions tests on Python 3.11 and 3.13.
+- Domain models for candles, quotes, instrument specifications, accounts, assessments, candidates, risk authorizations, orders, fills and traces.
+- EMA, ATR, RSI, higher-timeframe trend strength, lower-timeframe alignment, liquidity-sweep and displacement analysis.
+- Conservative setup requirements for sweep, directional displacement, quote freshness, spread and executable reward/risk.
+- Currency-level fundamental state updated by economic releases and news observations.
+- Fundamental freshness reduction and explicit conflict rejection.
+- Position sizing from the lower of balance and NAV.
+- Score-scaled risk budgets, daily realized-loss limits, open-position limits and maximum units.
+- Protection-level validation for long and short orders.
+- Persistent duplicate signal-candle claims, with release only after a definite broker rejection.
+- Ambiguous market-order transport outcomes are recorded as `UNKNOWN` and retain the execution claim.
+- Same-instrument position stacking prevention.
+- Deterministic synthetic market data and simulated paper fills.
+- OANDA Practice account discovery, summary, tradeable-instrument metadata, candles, quotes, open positions, order placement and trade closure.
+- OANDA display-precision, pip-location, unit-precision and minimum/maximum-order enforcement.
+- OANDA bounded retries for read-only requests and credential-safe exceptions.
+- Market-order requests are never blindly retried after an ambiguous transport or 5xx outcome.
+- OANDA daily realized P/L reconstruction from UTC-day transaction pages.
+- Read-only broker probe and self-closing minimum-size round-trip test.
+- SQLite decision traces and atomic execution claims.
+- FastAPI control plane and Typer CLI.
+- Conservative spread-aware candle barrier backtesting, completion-time controls, performance summaries and chronological threshold optimization.
+- Docker image, Compose configuration and GitHub Actions.
 
-## Deliberately not represented as complete
+## Validation state
 
-The implementation is a functioning paper-trading MVP, not a production-ready autonomous trading system. The following specifications remain future phases:
+The local acceptance run for version 0.2.0 includes:
 
-- licensed real-time economic-calendar and news-provider ingestion;
-- central-bank document extraction and LLM-assisted structured analysis;
+- all tests passing;
+- branch-aware coverage above the repository minimum;
+- Python bytecode compilation;
+- dependency consistency checks;
+- offline shadow evaluation;
+- offline protected paper execution;
+- duplicate-order and open-position regression tests;
+- OANDA contract tests through mocked official response shapes.
+
+Authenticated OANDA Practice network verification must be performed in an environment with external network access. Tokens are never committed or embedded in CI configuration.
+
+## Deliberately incomplete
+
+The following remain future phases:
+
+- automatic licensed economic-calendar ingestion;
+- historical point-in-time economic consensus and revisions;
+- licensed real-time news and central-bank document extraction;
 - futures order-flow proxy ingestion;
-- PostgreSQL/TimescaleDB, NATS JetStream, and object-store deployment;
-- broker transaction-stream reconciliation after disconnects;
-- non-USD cross conversion for risk sizing;
-- portfolio-level correlated exposure and multi-account allocation;
-- walk-forward historical replay using licensed point-in-time datasets;
-- multi-party live authorization and any live credential path.
+- complete OANDA transaction-stream reconciliation and restart state recovery;
+- conversion-aware risk sizing for non-USD crosses;
+- portfolio-level correlated currency exposure;
+- PostgreSQL/TimescaleDB and event-bus deployment;
+- longer historical datasets and untouched out-of-sample validation;
+- any live-money endpoint, credential or activation path.
 
-No live endpoint is configured or permitted by the current implementation.
+No win-rate or profit claim is supported until the missing point-in-time data and out-of-sample evidence exist.

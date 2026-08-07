@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlparse
 
 from forex_trader.adapters.oanda import OandaPracticeClient
 from forex_trader.adapters.simulator import SimulatedPaperBroker
@@ -22,6 +23,13 @@ def _bool(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _decimal_env(name: str, default: str) -> Decimal:
+    try:
+        return Decimal(os.getenv(name, default))
+    except Exception as exc:
+        raise ValueError(f"{name} must be a decimal number") from exc
 
 
 def load_dotenv(path: str | Path = ".env") -> None:
@@ -44,9 +52,16 @@ class AppConfig:
     instruments: tuple[str, ...] = ("EUR_USD",)
     require_fundamentals: bool = True
     enable_paper_orders: bool = False
-    oanda_token: str | None = None
+    minimum_score: Decimal = Decimal("0.68")
+    maximum_spread_pips: Decimal = Decimal("2.0")
+    risk_fraction: Decimal = Decimal("0.0025")
+    max_daily_loss_fraction: Decimal = Decimal("0.02")
+    max_open_positions: int = 3
+    max_units: int = 100_000
+    oanda_token: str | None = field(default=None, repr=False)
     oanda_account_id: str | None = None
     oanda_rest_url: str = "https://api-fxpractice.oanda.com"
+    oanda_timeout_seconds: float = 10.0
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -63,22 +78,38 @@ class AppConfig:
             instruments=instruments,
             require_fundamentals=_bool(os.getenv("FOREX_REQUIRE_FUNDAMENTALS"), True),
             enable_paper_orders=_bool(os.getenv("FOREX_ENABLE_PAPER_ORDERS"), False),
+            minimum_score=_decimal_env("FOREX_MINIMUM_SCORE", "0.68"),
+            maximum_spread_pips=_decimal_env("FOREX_MAXIMUM_SPREAD_PIPS", "2.0"),
+            risk_fraction=_decimal_env("FOREX_RISK_FRACTION", "0.0025"),
+            max_daily_loss_fraction=_decimal_env("FOREX_MAX_DAILY_LOSS_FRACTION", "0.02"),
+            max_open_positions=int(os.getenv("FOREX_MAX_OPEN_POSITIONS", "3")),
+            max_units=int(os.getenv("FOREX_MAX_UNITS", "100000")),
             oanda_token=os.getenv("OANDA_API_TOKEN") or None,
             oanda_account_id=os.getenv("OANDA_ACCOUNT_ID") or None,
             oanda_rest_url=os.getenv("OANDA_REST_URL", "https://api-fxpractice.oanda.com"),
+            oanda_timeout_seconds=float(os.getenv("OANDA_TIMEOUT_SECONDS", "10")),
         )
 
     def validate(self) -> list[str]:
         errors: list[str] = []
-        if self.mode is OperatingMode.PAPER and self.provider is ProviderKind.OANDA:
+        if self.provider is ProviderKind.OANDA:
             if not self.oanda_token:
-                errors.append("OANDA_API_TOKEN is required for OANDA paper mode")
-            if "fxpractice" not in self.oanda_rest_url:
-                errors.append("paper mode must use the OANDA fxPractice REST endpoint")
+                errors.append("OANDA_API_TOKEN is required for the OANDA provider")
+            parsed = urlparse(self.oanda_rest_url)
+            if parsed.scheme != "https" or parsed.hostname != "api-fxpractice.oanda.com":
+                errors.append("the OANDA provider is locked to https://api-fxpractice.oanda.com")
         if self.enable_paper_orders and self.mode is not OperatingMode.PAPER:
             errors.append("paper orders can only be enabled when FOREX_MODE=paper")
         if not self.instruments:
             errors.append("at least one instrument is required")
+        if not Decimal("0") <= self.minimum_score <= Decimal("1"):
+            errors.append("FOREX_MINIMUM_SCORE must be between 0 and 1")
+        if self.maximum_spread_pips <= 0:
+            errors.append("FOREX_MAXIMUM_SPREAD_PIPS must be positive")
+        if not Decimal("0") < self.risk_fraction <= Decimal("0.02"):
+            errors.append("FOREX_RISK_FRACTION must be greater than 0 and no more than 0.02")
+        if self.max_open_positions < 1 or self.max_units < 1:
+            errors.append("position and unit limits must be positive")
         return errors
 
 
@@ -117,6 +148,7 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
             token=config.oanda_token,
             account_id=config.oanda_account_id,
             rest_url=config.oanda_rest_url,
+            timeout_seconds=config.oanda_timeout_seconds,
         )
         broker = provider
     else:
@@ -127,8 +159,17 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
         broker=broker,
         repository=repository,
         fundamentals=fundamentals,
-        fusion_policy=SignalFusionPolicy(require_fundamentals=config.require_fundamentals),
-        risk_policy=RiskPolicy(),
+        fusion_policy=SignalFusionPolicy(
+            minimum_score=config.minimum_score,
+            maximum_spread_pips=config.maximum_spread_pips,
+            require_fundamentals=config.require_fundamentals,
+        ),
+        risk_policy=RiskPolicy(
+            risk_fraction=config.risk_fraction,
+            max_daily_loss_fraction=config.max_daily_loss_fraction,
+            max_open_positions=config.max_open_positions,
+            max_units=config.max_units,
+        ),
         mode=config.mode,
         enable_paper_orders=config.enable_paper_orders,
     )

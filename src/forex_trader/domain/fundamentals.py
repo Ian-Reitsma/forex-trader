@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Iterable
 
@@ -100,7 +100,13 @@ class FundamentalBook:
         self.upsert(next_state)
         return next_state
 
-    def assess_pair(self, instrument: str) -> FundamentalAssessment:
+    def assess_pair(
+        self,
+        instrument: str,
+        *,
+        as_of: datetime | None = None,
+        maximum_age: timedelta = timedelta(days=7),
+    ) -> FundamentalAssessment:
         base, quote = instrument.split("_", maxsplit=1)
         base_state = self.get(base)
         quote_state = self.get(quote)
@@ -114,8 +120,25 @@ class FundamentalBook:
                 Decimal("0"),
                 (f"missing fundamental state for {', '.join(missing)}",),
             )
+        observed_at = as_of or datetime.now(UTC)
+        base_age = max(timedelta(0), observed_at - base_state.as_of)
+        quote_age = max(timedelta(0), observed_at - quote_state.as_of)
+        freshness = Decimal("1")
+        oldest_age = max(base_age, quote_age)
+        if oldest_age > maximum_age:
+            freshness = Decimal("0")
+        elif maximum_age.total_seconds() > 0:
+            freshness = max(
+                Decimal("0.25"),
+                Decimal("1") - Decimal(str(oldest_age.total_seconds() / maximum_age.total_seconds())) * Decimal("0.50"),
+            )
         differential = max(Decimal("-2"), min(Decimal("2"), base_state.score - quote_state.score))
-        confidence = min(base_state.confidence, quote_state.confidence)
+        confidence = min(base_state.confidence, quote_state.confidence) * freshness
+        freshness_reason = (
+            f"fundamental freshness={freshness}"
+            if freshness > 0
+            else f"fundamental state is older than {maximum_age}"
+        )
         return FundamentalAssessment(
             instrument=instrument,
             base_score=base_state.score,
@@ -126,6 +149,7 @@ class FundamentalBook:
                 f"{base} composite={base_state.score}",
                 f"{quote} composite={quote_state.score}",
                 f"currency-strength differential={differential}",
+                freshness_reason,
             ),
         )
 

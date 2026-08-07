@@ -30,7 +30,7 @@ class NewsInput(BaseModel):
 
 
 def create_app(engine: TradingEngine) -> FastAPI:
-    app = FastAPI(title="Forex Trader Control API", version="0.1.0")
+    app = FastAPI(title="Forex Trader Control API", version="0.2.0")
 
     @app.get("/health")
     def health() -> dict[str, str]:

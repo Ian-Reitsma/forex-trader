@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "forex-trader"
-version = "0.1.0"
+version = "0.2.0"
 description = "Documentation-led forex paper-trading platform combining technical and fundamental signals."
 readme = "README.md"
 requires-python = ">=3.11"

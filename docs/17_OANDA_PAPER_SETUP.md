@@ -1,66 +1,95 @@
 # 17 — OANDA Practice Setup
 
-OANDA fxTrade Practice is the initial external paper-trading platform. A demo account uses virtual funds and the REST v20 API supports market data, account state, and order management.
+OANDA fxTrade Practice is the initial external paper-trading platform. The adapter is locked to the practice REST host and cannot be pointed at OANDA's live-money REST host through configuration.
 
-## Create the account and token
+## Credential handling
 
-1. Open an OANDA demo account for your regulatory division.
-2. Sign in to the OANDA HUB or account-management portal.
-3. Open **Tools → API** or **My Services → Manage API Access**.
-4. Generate a personal access token and copy it immediately.
-5. Treat the token as a password. Never place it in Git, a screenshot, a test fixture, or a chat message.
-6. The account ID may be copied from the HUB. It may also be omitted; the adapter will select the first account visible to the token.
+1. Create an OANDA demo account for the applicable regulatory division.
+2. In the OANDA account portal, open **Manage API Access** and generate a personal access token.
+3. Store the token only in a local `.env` file or an operating-system secret store.
+4. Never commit it, paste it into an issue, include it in a screenshot or hard-code it in CI.
+5. Revoke and replace a token after accidental disclosure.
 
-## Configure locally
+The `AppConfig` representation suppresses the token field. The adapter installs the token only in the private HTTP authorization header and never includes it in exceptions.
+
+## Configure shadow mode
 
 ```bash
 cp .env.example .env
 ```
 
-Set:
-
 ```dotenv
 FOREX_PROVIDER=oanda
 FOREX_MODE=shadow
 FOREX_ENABLE_PAPER_ORDERS=false
-OANDA_API_TOKEN=replace-with-token
-OANDA_ACCOUNT_ID=replace-with-practice-account-id
+FOREX_INSTRUMENTS=EUR_USD
+OANDA_API_TOKEN=replace-locally
+OANDA_ACCOUNT_ID=
 OANDA_REST_URL=https://api-fxpractice.oanda.com
 ```
 
-Run the read-only check:
+The account ID may be omitted. The adapter discovers the first account visible to the token in deterministic ID order.
+
+## Read-only verification
 
 ```bash
 python scripts/smoke_oanda.py
 ```
 
-Then run a shadow decision:
+The output contains only an account-ID suffix, account currency, virtual balance/NAV, price, instrument precision, completed-candle count and open-position state. It never prints the token.
+
+Run a strategy evaluation without an order:
 
 ```bash
 forex-trader demo --instrument EUR_USD
 ```
 
-Only after the read-only path succeeds, enable practice-account orders:
+## Explicit broker write-path test
+
+The safest broker-order verification is a broker-minimum round trip. It opens one minimum-size practice trade with protection and immediately closes that exact trade.
+
+```bash
+FOREX_PROVIDER=oanda \
+FOREX_MODE=paper \
+FOREX_ENABLE_PAPER_ORDERS=true \
+python scripts/oanda_round_trip.py
+```
+
+The script refuses to run if the selected instrument already has an open position. It does not test strategy profitability; it tests authentication, precision, order creation, attached protection, fill parsing and trade closure.
+
+## Strategy-driven paper orders
+
+After shadow verification:
 
 ```dotenv
 FOREX_MODE=paper
 FOREX_ENABLE_PAPER_ORDERS=true
 ```
 
-Execute one protected practice order when a candidate passes every gate:
-
 ```bash
 forex-trader demo --instrument EUR_USD --execute
-```
-
-Run repeated five-minute cycles:
-
-```bash
 forex-trader run --interval-seconds 300 --execute
 ```
 
-The `--execute` flag and `FOREX_ENABLE_PAPER_ORDERS=true` must both be present. The configured endpoint must contain `fxpractice`. These independent gates are intentional.
+All three conditions must be present before an order is sent:
 
-## Current operational scope
+1. operating mode is `paper`;
+2. `FOREX_ENABLE_PAPER_ORDERS=true`;
+3. the command includes `--execute`.
 
-Initial risk sizing supports USD-denominated OANDA Practice accounts trading pairs where USD is either the base or quote currency. Crosses such as EUR/GBP are analyzed but rejected by risk until conversion pricing is implemented.
+The engine also requires a tradeable candidate, granted risk authorization, no open position in the instrument and a new atomic execution claim for the signal candle.
+
+## OANDA-specific protections
+
+- REST host must be exactly `https://api-fxpractice.oanda.com`.
+- Instrument metadata defines display precision, pip location, trade-unit precision and size bounds.
+- Stops and targets are formatted to broker precision.
+- The client uses persistent HTTP connections and bounded retries for read-only requests.
+- Market-order and trade-close writes are not blindly retried when the provider outcome may be unknown.
+- A definite rejection releases the local execution claim; an unknown outcome retains it to prevent duplicate submission.
+- Daily realized P/L is reconstructed from UTC-day transaction pages and included in risk authorization.
+- Errors do not include the token.
+
+## Current scope
+
+USD-denominated accounts support pairs where USD is the base or quote currency. Crosses such as EUR/GBP remain denied at the risk layer until conversion-rate sizing is implemented.

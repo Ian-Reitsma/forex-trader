@@ -32,3 +32,11 @@ def test_repository_round_trip() -> None:
     records = repository.recent_traces()
     assert records[0]["trace_id"] == str(trace.trace_id)
     assert records[0]["instrument"] == "EUR_USD"
+
+
+def test_repository_execution_claim_is_atomic_and_releasable() -> None:
+    repository = SqliteDecisionRepository(":memory:")
+    assert repository.claim_execution("signal-1") is True
+    assert repository.claim_execution("signal-1") is False
+    repository.release_execution("signal-1")
+    assert repository.claim_execution("signal-1") is True

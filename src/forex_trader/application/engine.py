@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from forex_trader.application.ports import DecisionRepository, MarketDataProvider, PaperBroker
-from forex_trader.domain.enums import DecisionDisposition, Direction, OperatingMode, RiskDisposition
+from forex_trader.domain.enums import DecisionDisposition, Direction, OperatingMode, OrderStatus, RiskDisposition
 from forex_trader.domain.fundamentals import FundamentalBook
 from forex_trader.domain.models import DecisionTrace, OrderRequest, jsonable
 from forex_trader.domain.risk import RiskPolicy
@@ -39,12 +39,18 @@ class TradingEngine:
         higher = self.market_data.candles(instrument, "H1", 200)
         quote = self.market_data.quote(instrument)
         technical = assess_technicals(instrument, lower, higher)
-        fundamental = self.fundamentals.assess_pair(instrument)
+        fundamental = self.fundamentals.assess_pair(instrument, as_of=quote.time)
         candidate = self.fusion_policy.evaluate(technical, fundamental, quote)
         risk = None
         order = None
+
         if candidate.disposition is DecisionDisposition.TRADE:
-            risk = self.risk_policy.authorize(candidate, self.broker.account(), quote)
+            account = self.broker.account()
+            if self.broker.has_open_position(instrument):
+                risk = self.risk_policy.deny(candidate, "an open position already exists for this instrument")
+            else:
+                risk = self.risk_policy.authorize(candidate, account, quote)
+
             should_execute = (
                 execute
                 and self.mode is OperatingMode.PAPER
@@ -52,19 +58,30 @@ class TradingEngine:
                 and risk.disposition is RiskDisposition.GRANTED
             )
             if should_execute:
-                assert candidate.stop_loss is not None
-                assert candidate.take_profit is not None
-                signed_units = risk.units if candidate.direction is Direction.LONG else -risk.units
-                order = self.broker.place_market_order(
-                    OrderRequest(
-                        client_order_id=f"ft-{uuid4().hex[:20]}",
-                        instrument=instrument,
-                        direction=candidate.direction,
-                        units=signed_units,
-                        stop_loss=candidate.stop_loss,
-                        take_profit=candidate.take_profit,
-                    )
-                )
+                if not self.repository.claim_execution(candidate.execution_key):
+                    risk = self.risk_policy.deny(candidate, "this signal candle was already submitted")
+                else:
+                    assert candidate.stop_loss is not None
+                    assert candidate.take_profit is not None
+                    signed_units = risk.units if candidate.direction is Direction.LONG else -risk.units
+                    try:
+                        order = self.broker.place_market_order(
+                            OrderRequest(
+                                client_order_id=f"ft-{uuid4().hex[:20]}",
+                                instrument=instrument,
+                                direction=candidate.direction,
+                                units=signed_units,
+                                stop_loss=candidate.stop_loss,
+                                take_profit=candidate.take_profit,
+                                execution_key=candidate.execution_key,
+                            )
+                        )
+                    except Exception:
+                        self.repository.release_execution(candidate.execution_key)
+                        raise
+                    if order.status is OrderStatus.REJECTED:
+                        self.repository.release_execution(candidate.execution_key)
+
         trace = DecisionTrace.create(instrument, candidate, quote, risk, order)
         self.repository.save_trace(trace)
         return trace

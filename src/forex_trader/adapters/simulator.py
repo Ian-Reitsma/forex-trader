@@ -31,6 +31,12 @@ class SimulatedPaperBroker:
             open_position_count=len([o for o in self._orders if o.status is OrderStatus.FILLED]),
         )
 
+    def has_open_position(self, instrument: str) -> bool:
+        return any(
+            order.status is OrderStatus.FILLED and order.instrument == instrument.upper()
+            for order in self._orders
+        )
+
     def place_market_order(self, request: OrderRequest) -> OrderResult:
         quote = self.market_data.quote(request.instrument)
         fill = quote.ask if request.direction is Direction.LONG else quote.bid
@@ -41,6 +47,7 @@ class SimulatedPaperBroker:
             instrument=request.instrument,
             units=request.units,
             fill_price=fill,
+            provider_trade_id=f"SIM-TRADE-{len(self._orders) + 1}",
             raw={
                 "stop_loss": str(request.stop_loss),
                 "take_profit": str(request.take_profit),

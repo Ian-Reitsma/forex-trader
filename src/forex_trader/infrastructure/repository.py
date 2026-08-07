@@ -33,6 +33,14 @@ class SqliteDecisionRepository:
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_decisions_created ON decision_traces(created_at DESC)"
             )
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS execution_claims (
+                    execution_key TEXT PRIMARY KEY,
+                    claimed_at TEXT NOT NULL
+                )
+                """
+            )
 
     def save_trace(self, trace: DecisionTrace) -> None:
         payload = jsonable(trace)
@@ -59,6 +67,26 @@ class SqliteDecisionRepository:
             (max(1, min(limit, 500)),),
         ).fetchall()
         return [json.loads(row["payload_json"]) for row in rows]
+
+
+    def claim_execution(self, execution_key: str) -> bool:
+        if not execution_key:
+            raise ValueError("execution_key is required")
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                "INSERT OR IGNORE INTO execution_claims(execution_key, claimed_at) VALUES (?, datetime('now'))",
+                (execution_key,),
+            )
+        return cursor.rowcount == 1
+
+    def release_execution(self, execution_key: str) -> None:
+        if not execution_key:
+            return
+        with self._lock, self._connection:
+            self._connection.execute(
+                "DELETE FROM execution_claims WHERE execution_key = ?",
+                (execution_key,),
+            )
 
     def close(self) -> None:
         self._connection.close()

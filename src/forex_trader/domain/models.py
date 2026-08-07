@@ -70,9 +70,37 @@ class AccountSnapshot:
     balance: Decimal
     nav: Decimal
     margin_used: Decimal = Decimal("0")
+    margin_available: Decimal = Decimal("0")
     unrealized_pl: Decimal = Decimal("0")
     open_position_count: int = 0
     realized_pl_today: Decimal = Decimal("0")
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentSpec:
+    name: str
+    display_precision: int
+    pip_location: int
+    trade_units_precision: int
+    minimum_trade_size: Decimal
+    maximum_order_units: Decimal | None = None
+
+    @property
+    def pip_size(self) -> Decimal:
+        return Decimal(1).scaleb(self.pip_location)
+
+    def format_price(self, value: Decimal) -> str:
+        quantum = Decimal(1).scaleb(-self.display_precision)
+        rounded = value.quantize(quantum)
+        return f"{rounded:.{self.display_precision}f}"
+
+    def format_units(self, value: int | Decimal) -> str:
+        decimal_value = Decimal(value)
+        quantum = Decimal(1).scaleb(-self.trade_units_precision)
+        rounded = decimal_value.quantize(quantum)
+        if self.trade_units_precision == 0:
+            return str(int(rounded))
+        return f"{rounded:.{self.trade_units_precision}f}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +147,11 @@ class TechnicalAssessment:
     stop_reference: Decimal | None
     take_profit_reference: Decimal | None
     reasons: tuple[str, ...]
+    signal_time: datetime = field(default_factory=utc_now)
+    liquidity_sweep: bool = False
+    displacement: bool = False
+    trend_strength: Decimal = Decimal("0")
+    reward_risk: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +167,8 @@ class TradeCandidate:
     technical_score: Decimal
     fundamental_score: Decimal
     reasons: tuple[str, ...]
+    signal_time: datetime = field(default_factory=utc_now)
+    execution_key: str = ""
     created_at: datetime = field(default_factory=utc_now)
 
 
@@ -156,6 +191,7 @@ class OrderRequest:
     units: int
     stop_loss: Decimal
     take_profit: Decimal
+    execution_key: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +202,7 @@ class OrderResult:
     instrument: str
     units: int
     fill_price: Decimal | None
+    provider_trade_id: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=utc_now)
 
