@@ -9,7 +9,7 @@ from typing import Iterable
 from forex_trader.domain.models import Candle, TradeCandidate
 from forex_trader.research.backtest import OutcomeStatus
 from forex_trader.research.management import ManagementPolicy, STRUCTURAL_SINGLE_TARGET, evaluate_management_outcome
-from forex_trader.research.order_types import EntryStyleOutcome, OrderStyle, evaluate_entry_style
+from forex_trader.research.order_types import OrderStyle, evaluate_entry_style
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,9 +163,6 @@ def evaluate_phase_d_policy(scenario: PhaseDScenario, policy: PhaseDPolicy) -> P
             exit_slippage_pips=policy.exit_slippage_pips,
         )
     except ValueError as exc:
-        # Policy geometry can become impossible after a different fill (for example a
-        # fixed 1R partial beyond the structural target after a momentum-stop entry).
-        # Count the signal in the denominator with zero realized R rather than dropping it.
         return PhaseDSignalOutcome(
             signal_key=scenario.signal_key,
             policy_name=policy.name,
@@ -232,7 +229,10 @@ def compare_phase_d_policies(
     comparisons: list[PairedVariantComparison] = []
     for policy in variant_list:
         outcomes = tuple(evaluate_phase_d_policy(scenario, policy) for scenario in scenario_list)
-        deltas = tuple(variant.r_multiple - control.r_multiple for control, variant in zip(baseline_outcomes, outcomes, strict=True))
+        deltas = tuple(
+            variant.r_multiple - control.r_multiple
+            for control, variant in zip(baseline_outcomes, outcomes, strict=True)
+        )
         lower, upper = paired_bootstrap_mean_interval(
             deltas,
             confidence=confidence,
@@ -282,13 +282,15 @@ def summarize_phase_d_outcomes(
         average_r_per_signal=total_r / count,
         average_r_per_fill=(
             sum((item.r_multiple for item in filled), Decimal("0")) / Decimal(len(filled))
-            if filled else Decimal("0")
+            if filled
+            else Decimal("0")
         ),
         max_drawdown_r=_max_drawdown(tuple(item.r_multiple for item in values)),
         average_opportunity_cost_r=sum((item.opportunity_cost_r for item in values), Decimal("0")) / count,
         average_entry_adverse_selection_r=(
             sum((item.entry_adverse_selection_r for item in filled), Decimal("0")) / Decimal(len(filled))
-            if filled else Decimal("0")
+            if filled
+            else Decimal("0")
         ),
         invalidated_before_fill=sum(item.entry_termination_reason == "invalidated_before_fill" for item in values),
         target_missed_before_fill=sum(item.entry_termination_reason == "target_before_fill" for item in values),
@@ -324,7 +326,10 @@ def paired_bootstrap_mean_interval(
     means.sort()
     alpha = (Decimal("1") - confidence) / Decimal("2")
     lower_index = min(iterations - 1, max(0, int(alpha * Decimal(iterations))))
-    upper_index = min(iterations - 1, max(0, int((Decimal("1") - alpha) * Decimal(iterations)) - 1))
+    upper_index = min(
+        iterations - 1,
+        max(0, int((Decimal("1") - alpha) * Decimal(iterations)) - 1),
+    )
     return means[lower_index], means[upper_index]
 
 
@@ -374,7 +379,11 @@ def recommend_phase_d_variant(
         )
     best = max(
         qualified,
-        key=lambda item: (item.lower_confidence_delta_r, item.mean_delta_r_per_signal, -item.policy.max_drawdown_r),
+        key=lambda item: (
+            item.lower_confidence_delta_r,
+            item.mean_delta_r_per_signal,
+            -item.policy.max_drawdown_r,
+        ),
     )
     return PhaseDResearchRecommendation(
         True,
