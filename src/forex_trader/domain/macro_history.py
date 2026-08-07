@@ -40,9 +40,8 @@ class MacroObservation:
             raise ValueError("available_at must be timezone-aware")
         if len(self.currency.strip()) != 3:
             raise ValueError("currency must be a three-letter code")
-        if self.kind is MacroObservationKind.RELEASE:
-            if self.actual is None or self.forecast is None or self.previous is None:
-                raise ValueError("release observations require actual, forecast, and previous")
+        if self.kind is MacroObservationKind.RELEASE and (self.actual is None or self.forecast is None or self.previous is None):
+            raise ValueError("release observations require actual, forecast, and previous")
 
     @classmethod
     def release(
@@ -58,9 +57,10 @@ class MacroObservation:
         available_at: datetime | None = None,
         source: str = "manual",
         revision_of: UUID | None = None,
+        observation_id: UUID | None = None,
     ) -> "MacroObservation":
         return cls(
-            observation_id=uuid4(),
+            observation_id=observation_id or uuid4(),
             kind=MacroObservationKind.RELEASE,
             currency=currency.upper(),
             category=category,
@@ -85,9 +85,10 @@ class MacroObservation:
         available_at: datetime | None = None,
         source: str = "manual",
         kind: MacroObservationKind = MacroObservationKind.NEWS,
+        observation_id: UUID | None = None,
     ) -> "MacroObservation":
         return cls(
-            observation_id=uuid4(),
+            observation_id=observation_id or uuid4(),
             kind=kind,
             currency=currency.upper(),
             headline=headline,
@@ -99,7 +100,7 @@ class MacroObservation:
 
 
 class PointInTimeFundamentalBook:
-    """Reconstructs fundamental state using only observations available by `as_of`."""
+    """Reconstruct fundamental state using observations available at each decision timestamp."""
 
     def __init__(
         self,
@@ -107,12 +108,12 @@ class PointInTimeFundamentalBook:
         *,
         seeds: Iterable[CurrencyFundamentals] | None = None,
     ) -> None:
-        self._observations = sorted(
-            list(observations or []), key=lambda item: (item.available_at, str(item.observation_id))
-        )
+        self._observations = sorted(list(observations or []), key=lambda item: (item.available_at, str(item.observation_id)))
         self._seeds = list(seeds or [])
 
     def append(self, observation: MacroObservation) -> None:
+        if any(existing.observation_id == observation.observation_id for existing in self._observations):
+            return
         self._observations.append(observation)
         self._observations.sort(key=lambda item: (item.available_at, str(item.observation_id)))
 
@@ -132,9 +133,7 @@ class PointInTimeFundamentalBook:
             if observation.available_at > as_of:
                 break
             if observation.kind is MacroObservationKind.RELEASE:
-                assert observation.actual is not None
-                assert observation.forecast is not None
-                assert observation.previous is not None
+                assert observation.actual is not None and observation.forecast is not None and observation.previous is not None
                 book.apply_release(
                     currency=observation.currency,
                     category=observation.category,
@@ -143,6 +142,14 @@ class PointInTimeFundamentalBook:
                     previous=observation.previous,
                     higher_is_positive=observation.higher_is_positive,
                     importance=observation.importance,
+                    observed_at=observation.available_at,
+                )
+            elif observation.kind is MacroObservationKind.CENTRAL_BANK:
+                book.apply_central_bank(
+                    currency=observation.currency,
+                    headline=observation.headline,
+                    body=observation.body,
+                    source_weight=observation.source_weight,
                     observed_at=observation.available_at,
                 )
             else:
@@ -160,11 +167,13 @@ class PointInTimeFundamentalBook:
         instrument: str,
         *,
         as_of: datetime | None = None,
-        maximum_age: timedelta = timedelta(days=7),
+        maximum_age: timedelta = timedelta(days=30),
     ) -> FundamentalAssessment:
         observed_at = as_of or datetime.now(UTC)
-        return self.book_at(observed_at).assess_pair(
-            instrument,
-            as_of=observed_at,
-            maximum_age=maximum_age,
-        )
+        return self.book_at(observed_at).assess_pair(instrument, as_of=observed_at, maximum_age=maximum_age)
+
+    def snapshots(self, *, as_of: datetime | None = None) -> list[CurrencyFundamentals]:
+        return self.book_at(as_of or datetime.now(UTC)).snapshots()
+
+    def get(self, currency: str, *, as_of: datetime | None = None) -> CurrencyFundamentals | None:
+        return self.book_at(as_of or datetime.now(UTC)).get(currency)
