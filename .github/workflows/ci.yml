@@ -29,6 +29,16 @@ jobs:
         run: python -m pip check
       - name: Secret assignment scan
         run: python scripts/check_no_secrets.py
+      - name: Critical lint
+        run: ruff check src tests scripts --select E4,E7,E9,F
+      - name: Strict Phase A-D typing
+        run: >-
+          python -m mypy --strict --follow-imports=silent
+          src/forex_trader/intelligence/events.py
+          src/forex_trader/domain/setup_lifecycle.py
+          src/forex_trader/domain/position_management.py
+          src/forex_trader/research/optimization.py
+          src/forex_trader/research/order_types.py
       - name: Test and coverage
         id: pytest
         continue-on-error: true
