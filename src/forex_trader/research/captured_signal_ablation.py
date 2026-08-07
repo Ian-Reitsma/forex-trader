@@ -32,7 +32,7 @@ def freeze_captured_signal_snapshot(
         fundamental=inputs.fundamental,
         maximum_spread_pips=inputs.maximum_spread_pips,
     )
-    payload = base.require_payload()
+    payload = dict(base.require_payload())
     payload["event_blackout_reasons"] = list(inputs.event_blackout_reasons)
     payload["rollover_blackout"] = inputs.rollover_blackout
     return FrozenAblationSnapshot.from_payload(
