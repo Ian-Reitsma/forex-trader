@@ -33,6 +33,7 @@ jobs:
         run: >-
           ruff check --select E4,E7,E9,F
           src/forex_trader/adapters/readiness_guard.py
+          src/forex_trader/adapters/synthetic.py
           src/forex_trader/api/app.py
           src/forex_trader/application/fx_engine.py
           src/forex_trader/application/readiness.py
