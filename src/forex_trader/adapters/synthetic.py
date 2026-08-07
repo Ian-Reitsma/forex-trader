@@ -16,6 +16,11 @@ class SyntheticMarketData:
     OANDA-style candle timestamps represent bar starts, so the final candle begins one
     configured interval before the anchor. This keeps no-lookahead signal timestamps,
     quotes, and point-in-time fundamentals coherent across M5..M30 and H1/H4 policies.
+
+    Quotes reuse the deepest cached series for the configured lower granularity whenever
+    one exists. Runtime may request more than 200 lower bars to preserve full session/day
+    liquidity; deriving the quote from a separately generated 200-bar path would otherwise
+    create an artificial price mismatch in the simulator.
     """
 
     def __init__(
@@ -45,7 +50,15 @@ class SyntheticMarketData:
         return list(self._cache[key])
 
     def quote(self, instrument: str) -> Quote:
-        candles = self.candles(instrument, self.quote_granularity, 200)
+        candidates = [
+            (count, candles)
+            for (cached_instrument, granularity, count), candles in self._cache.items()
+            if cached_instrument == instrument and granularity == self.quote_granularity
+        ]
+        if candidates:
+            candles = max(candidates, key=lambda item: item[0])[1]
+        else:
+            candles = self.candles(instrument, self.quote_granularity, 200)
         mid = candles[-1].close
         half = pip_size_for(instrument) * Decimal("0.45")
         return Quote(
