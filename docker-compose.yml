@@ -1,0 +1,18 @@
+services:
+  forex-trader:
+    build: .
+    environment:
+      FOREX_PROVIDER: ${FOREX_PROVIDER:-simulation}
+      FOREX_MODE: ${FOREX_MODE:-shadow}
+      FOREX_ENABLE_PAPER_ORDERS: ${FOREX_ENABLE_PAPER_ORDERS:-false}
+      FOREX_INSTRUMENTS: ${FOREX_INSTRUMENTS:-EUR_USD}
+      OANDA_API_TOKEN: ${OANDA_API_TOKEN:-}
+      OANDA_ACCOUNT_ID: ${OANDA_ACCOUNT_ID:-}
+      OANDA_REST_URL: ${OANDA_REST_URL:-https://api-fxpractice.oanda.com}
+    ports:
+      - "8000:8000"
+    volumes:
+      - forex-data:/data
+
+volumes:
+  forex-data:

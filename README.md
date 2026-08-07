@@ -1,88 +1,237 @@
 # Forex Trader
 
-Documentation-first framework for a broker-agnostic forex scalping platform that combines:
+A documentation-led forex paper-trading platform that combines chart technicals, economic-release fundamentals, and news context before independently authorizing risk and routing an order.
 
-- TheForexScalpers-inspired public concepts: multi-timeframe supply and demand, market structure, liquidity sweeps, session timing, confirmation, order-flow context, and structure-defined invalidation.
-- Fundamental and news intelligence: economic-calendar surprise analysis, central-bank policy interpretation, macro regime classification, event-aware news sentiment, and cross-asset confirmation.
-- Institutional-grade engineering: event sourcing, point-in-time data, deterministic decision traces, realistic simulation, execution-cost modeling, risk gates, circuit breakers, and a paper-to-live promotion process.
+The repository now contains a runnable paper-trading MVP plus the full architecture and developer specifications. It does **not** contain a live-trading path.
 
-This repository intentionally contains **architecture and specifications only**. It does not yet contain executable trading code.
+## What works now
 
-## Non-goal
+- Deterministic offline market simulator with no credentials.
+- OANDA fxTrade Practice integration for account discovery, candles, executable quotes, account summaries, and protected market orders.
+- M5/H1 technical analysis using EMA structure, ATR, RSI, liquidity sweeps, displacement, spread gating, structural stops, and 2R targets.
+- Currency-level fundamental state updated from economic releases and news text.
+- Deterministic signal fusion with explicit abstention reasons.
+- Independent stop-distance risk sizing and account limits.
+- Shadow mode and paper mode with separate execution gates.
+- SQLite decision-trace persistence.
+- FastAPI control API, CLI polling runner, Docker support, and GitHub Actions CI.
+- 32 automated tests with an enforced 85% coverage floor.
 
-This project is not designed to maximize trade count or to promise a win rate. Its goal is to build a falsifiable, auditable decision system that trades only when technical location, timing, liquidity behavior, fundamental context, expected execution cost, and portfolio risk align.
+Read [Implementation Status](docs/16_IMPLEMENTATION_STATUS.md) for the exact boundary between working code and later production phases.
 
-## Core design decision
+## Architecture
 
-Spot FX is decentralized and fragmented. Broker tick volume is not a market-wide order-flow feed. The system therefore treats:
+```text
+Market data provider ── candles / executable quote ──┐
+                                                     ├─ technical assessment ─┐
+Economic releases / news ─ fundamental state ───────┘                        │
+                                                                              ├─ signal fusion
+Account snapshot ──────────────────────────────────────────────────────────────┘
+                                                                                 │
+                                                                                 ▼
+                                                                      independent risk gate
+                                                                                 │
+                                                        ┌────────────────────────┴──────────────────────┐
+                                                        ▼                                               ▼
+                                                   shadow trace                               protected paper order
+                                                        └────────────────────────┬──────────────────────┘
+                                                                                 ▼
+                                                                          SQLite audit trail
+```
 
-1. the execution broker as the source of executable bid/ask prices;
-2. CME FX futures, EBS/CME spot data, or another institutional feed as the preferred order-flow proxy;
-3. economic releases and news as separate event streams;
-4. every signal as point-in-time and source-attributed.
+## Fastest local start
+
+Python 3.11 or newer is supported; Python 3.13 is the target.
+
+```bash
+git clone git@github.com:Ian-Reitsma/forex-trader.git
+cd forex-trader
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e ".[dev]"
+cp .env.example .env
+pytest --cov=forex_trader --cov-report=term-missing
+```
+
+Validate configuration:
+
+```bash
+forex-trader doctor
+```
+
+Run a deterministic shadow evaluation:
+
+```bash
+forex-trader demo --instrument EUR_USD
+```
+
+Run an offline simulated paper order:
+
+```bash
+FOREX_PROVIDER=simulation \
+FOREX_MODE=paper \
+FOREX_ENABLE_PAPER_ORDERS=true \
+forex-trader demo --instrument EUR_USD --execute
+```
+
+Run repeated cycles:
+
+```bash
+FOREX_PROVIDER=simulation \
+FOREX_MODE=paper \
+FOREX_ENABLE_PAPER_ORDERS=true \
+forex-trader run --interval-seconds 300 --execute
+```
+
+## Free API paper trading: OANDA Practice
+
+Use **OANDA fxTrade Practice** for the external paper account. The demo account uses virtual funds, does not require a deposit, and exposes OANDA's REST v20 market-data and trading API.
+
+1. Create an OANDA demo account for your country.
+2. Sign in to the OANDA HUB.
+3. Open **Tools → API**. In some account views this appears as **My Services → Manage API Access**.
+4. Select **Generate** and copy the personal access token immediately.
+5. Copy the practice account ID from the account list, or leave `OANDA_ACCOUNT_ID` blank and the adapter will discover the first account visible to the token.
+6. Store the values only in `.env`; `.env` is ignored by Git.
+
+```dotenv
+FOREX_PROVIDER=oanda
+FOREX_MODE=shadow
+FOREX_ENABLE_PAPER_ORDERS=false
+FOREX_DATABASE_PATH=./forex_trader.db
+FOREX_INSTRUMENTS=EUR_USD,GBP_USD,USD_JPY
+
+OANDA_API_TOKEN=your-personal-access-token
+OANDA_ACCOUNT_ID=your-practice-account-id
+OANDA_REST_URL=https://api-fxpractice.oanda.com
+```
+
+Run a read-only connection test first:
+
+```bash
+python scripts/smoke_oanda.py
+```
+
+Run the bot in shadow mode:
+
+```bash
+forex-trader demo --instrument EUR_USD
+```
+
+After the account, quote, and candle checks succeed, permit practice orders:
+
+```dotenv
+FOREX_MODE=paper
+FOREX_ENABLE_PAPER_ORDERS=true
+```
+
+Then:
+
+```bash
+forex-trader demo --instrument EUR_USD --execute
+```
+
+Both the CLI `--execute` switch and the environment execution gate are required. Paper mode also refuses a non-`fxpractice` OANDA REST URL.
+
+See [OANDA Practice Setup](docs/17_OANDA_PAPER_SETUP.md) for the complete sequence.
+
+## Fundamental and news inputs
+
+The baseline engine maintains a separate state for each currency. A starter state is loaded for EUR, USD, GBP, and JPY so the offline demo is immediately runnable. Production use should replace those values with licensed or official point-in-time feeds.
+
+Start the API:
+
+```bash
+forex-trader serve
+```
+
+Add an economic release:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/fundamentals/releases \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "currency": "USD",
+    "category": "labor",
+    "actual": "250",
+    "forecast": "200",
+    "previous": "180",
+    "higher_is_positive": true,
+    "importance": "1"
+  }'
+```
+
+Add a news observation:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/fundamentals/news \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "currency": "EUR",
+    "headline": "Growth weak as activity contracts",
+    "source_weight": "0.8"
+  }'
+```
+
+Evaluate a pair:
+
+```bash
+curl -X POST 'http://127.0.0.1:8000/v1/evaluate/EUR_USD?execute=false'
+```
+
+## Safety controls
+
+- The default provider is simulation.
+- The default mode is shadow.
+- Paper execution is disabled by default.
+- The strategy cannot call the broker directly; risk authorization is separate.
+- Every practice order includes stop-loss and take-profit instructions.
+- Missing or conflicting fundamentals cause abstention when fundamentals are required.
+- Wide spreads cause abstention.
+- Unsupported account-currency conversions cause risk denial.
+- No code selects OANDA's live endpoint.
+- Tokens and account identifiers must never be committed.
+
+## Commands
+
+```text
+forex-trader doctor        Validate environment and execution gates
+forex-trader demo          Evaluate one instrument once
+forex-trader cycle         Evaluate every configured instrument once
+forex-trader run           Poll continuously or for a finite number of cycles
+forex-trader serve         Start the FastAPI control plane
+```
+
+## Tests
+
+```bash
+pytest
+pytest --cov=forex_trader --cov-report=term-missing
+```
+
+The suite covers domain validation, technical indicators, long and short setups, release and news processing, fundamental conflicts, spread rejection, risk sizing and limits, simulator fills, OANDA payloads and error mapping, SQLite persistence, polling, CLI behavior, API behavior, and a full paper-order cycle.
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+The default container remains in simulation/shadow mode. OANDA credentials are read from the local environment and are not embedded in the image.
 
 ## Documentation map
 
-| Document | Purpose |
-|---|---|
-| [System Vision](docs/00_SYSTEM_VISION.md) | Mission, principles, boundaries, and target operating model |
-| [Public Method Interpretation](docs/01_PUBLIC_METHOD_INTERPRETATION.md) | Translation of public TheForexScalpers concepts into testable rules |
-| [Strategy Specification](docs/02_STRATEGY_SPECIFICATION.md) | End-to-end setup, entry, management, and exit state machine |
-| [Fundamental & News Engine](docs/03_FUNDAMENTAL_NEWS_ENGINE.md) | Macro, calendar, speech, and news-event intelligence |
-| [Technical & Order-Flow Engine](docs/04_TECHNICAL_ORDERFLOW_ENGINE.md) | Structure, zones, liquidity, volatility, volume, and futures proxies |
-| [Signal Fusion](docs/05_SIGNAL_FUSION_DECISION_ENGINE.md) | Pair scoring, regime weighting, conflict resolution, and trade gating |
-| [Data & API Architecture](docs/06_DATA_API_ARCHITECTURE.md) | Event bus, storage, provider adapters, schemas, and data quality |
-| [Execution Architecture](docs/07_EXECUTION_BROKER_ARCHITECTURE.md) | Broker abstraction, pre-trade checks, order lifecycle, and reconciliation |
-| [Risk & Governance](docs/08_RISK_CAPITAL_GOVERNANCE.md) | Capital allocation, exposure controls, kill switches, and approvals |
-| [Backtesting & Validation](docs/09_BACKTESTING_VALIDATION.md) | Point-in-time simulation, leakage prevention, walk-forward tests, and promotion gates |
-| [Operations](docs/10_OBSERVABILITY_OPERATIONS.md) | Monitoring, decision traces, incident response, and runbooks |
-| [Security & Compliance](docs/11_SECURITY_COMPLIANCE.md) | Secret handling, access controls, data licenses, and auditability |
-| [Roadmap](docs/12_IMPLEMENTATION_ROADMAP.md) | Phased build order and definition of done |
-| [Repository Structure](docs/13_REPOSITORY_STRUCTURE.md) | Planned module boundaries before code is introduced |
-| [Provider Matrix](docs/14_API_PROVIDER_MATRIX.md) | Recommended and alternative API roles |
-| [Decision Trace Example](docs/15_DECISION_TRACE_EXAMPLE.md) | Concrete example of how one prospective trade is evaluated |
-| [Requirements](docs/requirements.md) | Functional and non-functional requirements |
-| [Glossary](docs/glossary.md) | Shared terminology |
-| [Architecture decisions](docs/adr/) | Irreversible or high-cost decisions and rationale |
-| [Developer Implementation Index](docs/dev/00_DEVELOPER_INDEX.md) | Exact build contracts, services, data models, APIs, tests, runbooks, and backlog |
-| [Contract Drafts](docs/contracts/) | Human-reviewable event, market, macro, decision, risk, and execution schemas |
-| [System Diagrams](docs/diagrams/) | Context and sequence diagrams for implementation |
+The original design remains under `docs/`. Begin with:
 
-## Proposed system layers
+- [System Vision](docs/00_SYSTEM_VISION.md)
+- [Strategy Specification](docs/02_STRATEGY_SPECIFICATION.md)
+- [Fundamental and News Engine](docs/03_FUNDAMENTAL_NEWS_ENGINE.md)
+- [Technical and Order-Flow Engine](docs/04_TECHNICAL_ORDERFLOW_ENGINE.md)
+- [Risk and Governance](docs/08_RISK_CAPITAL_GOVERNANCE.md)
+- [Developer Implementation Index](docs/dev/00_DEVELOPER_INDEX.md)
+- [Implementation Status](docs/16_IMPLEMENTATION_STATUS.md)
 
-```text
-Official releases / news / calendars / central banks
-                         │
-Broker quotes ───────┐   │   ┌──── CME futures / EBS / depth
-                     ▼   ▼   ▼
-                Ingestion & normalization
-                         │
-                 Point-in-time event log
-                         │
-       ┌─────────────────┼─────────────────┐
-       ▼                 ▼                 ▼
- Fundamentals      Technicals       Market microstructure
-       └─────────────────┼─────────────────┘
-                         ▼
-             Regime-aware signal fusion
-                         ▼
-                Risk and cost gate
-                         ▼
-            Paper or live order router
-                         ▼
-          Broker reconciliation and ledger
-                         ▼
-        Analytics, attribution, and learning
-```
+## Risk notice
 
-## Source and intellectual-property boundary
-
-The framework is inspired only by publicly available descriptions of TheForexScalpers' methods. It does not claim to reproduce any private course, paid indicator, proprietary rule set, or undisclosed formula. Public material uses the acronym “APPD” in more than one way; this repository therefore models session phases as configurable, versioned definitions instead of treating one interpretation as canonical.
-
-## Safety boundary
-
-Leveraged FX and CFD trading can cause rapid losses. No component may enter live mode solely because a backtest is profitable. Live access requires data-quality checks, paper performance, risk approval, execution rehearsal, and explicit operator activation.
-
-## Implementation status
-
-The repository is currently **specification complete enough to begin Phase 0 review, not implementation complete**. Start with the [Developer Implementation Index](docs/dev/00_DEVELOPER_INDEX.md), resolve proposed ADRs, and approve the acceptance matrix before adding executable trading code.
+Leveraged foreign-exchange trading can produce rapid losses. Paper results do not establish live expectancy. Do not add live credentials or replace the practice endpoint until the remaining reconciliation, portfolio-risk, point-in-time backtesting, security, and promotion requirements are implemented and independently reviewed.
