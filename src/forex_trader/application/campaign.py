@@ -12,6 +12,7 @@ from uuid import uuid4
 from forex_trader.application.campaign_policy import campaign_policy_context, campaign_policy_fingerprint
 from forex_trader.application.engine import TradingEngine
 from forex_trader.domain.enums import DecisionDisposition, OrderStatus, RiskDisposition
+from forex_trader.research.evidence import DecisionEvidence, append_decision_evidence
 
 
 _UNRESOLVED_ORDER_STATUSES = {
@@ -89,11 +90,10 @@ class CampaignReport:
 class PracticeCampaignRunner:
     """Run a conservative, evidence-first Practice campaign.
 
-    The campaign never modifies strategy/risk thresholds. It caps new submissions per
-    cycle, keeps evaluating the remaining universe in shadow after the submission budget
-    is spent, records all broker order states, and stops immediately when a broker outcome
-    is unresolved. Every evidence row carries a deterministic policy fingerprint so
-    incompatible strategy/risk cohorts cannot be pooled silently during analysis.
+    Aggregate cycle evidence remains backward-compatible. An optional separate decision
+    stream records every instrument evaluation with point-in-time strategy, regime,
+    confirmation, risk and quote context. This enables chronological labeling,
+    calibration and ablation without silently treating cycle aggregates as trade data.
     """
 
     def __init__(
@@ -105,6 +105,7 @@ class PracticeCampaignRunner:
         max_new_orders_per_cycle: int = 1,
         stop_on_unresolved: bool = True,
         evidence_path: str | Path | None = None,
+        decision_evidence_path: str | Path | None = None,
         campaign_id: str | None = None,
         policy_context: Mapping[str, object] | None = None,
         campaign_metadata: Mapping[str, object] | None = None,
@@ -124,6 +125,7 @@ class PracticeCampaignRunner:
         self.max_new_orders_per_cycle = max_new_orders_per_cycle
         self.stop_on_unresolved = stop_on_unresolved
         self.evidence_path = Path(evidence_path) if evidence_path is not None else None
+        self.decision_evidence_path = Path(decision_evidence_path) if decision_evidence_path is not None else None
         self.campaign_id = resolved_campaign_id
         self.policy_context = context
         self.policy_fingerprint = campaign_policy_fingerprint(context)
@@ -162,8 +164,30 @@ class PracticeCampaignRunner:
             except Exception as exc:
                 errors += 1
                 error_types[type(exc).__name__] += 1
+                self._append_decision(
+                    DecisionEvidence.from_error(
+                        campaign_id=self.campaign_id,
+                        policy_fingerprint=self.policy_fingerprint,
+                        cycle=cycle,
+                        instrument=instrument,
+                        captured_at=datetime.now(UTC),
+                        execution_enabled=may_submit,
+                        error=exc,
+                    )
+                )
                 continue
 
+            self._append_decision(
+                DecisionEvidence.from_trace(
+                    trace,
+                    campaign_id=self.campaign_id,
+                    policy_fingerprint=self.policy_fingerprint,
+                    cycle=cycle,
+                    instrument=instrument,
+                    captured_at=datetime.now(UTC),
+                    execution_enabled=may_submit,
+                )
+            )
             evaluated += 1
             candidate = trace.candidate
             if candidate.disposition is DecisionDisposition.TRADE:
@@ -276,6 +300,11 @@ class PracticeCampaignRunner:
         with self.evidence_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(report.to_jsonable(), sort_keys=True))
             handle.write("\n")
+
+    def _append_decision(self, record: DecisionEvidence) -> None:
+        if self.decision_evidence_path is None:
+            return
+        append_decision_evidence(self.decision_evidence_path, record)
 
 
 def _safe_policy_context(engine: object) -> dict[str, object]:
