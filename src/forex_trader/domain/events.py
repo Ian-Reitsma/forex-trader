@@ -6,6 +6,8 @@ from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID, uuid4
 
+from forex_trader.domain.market_calendar import pair_holiday_blackout
+
 
 class EventImportance(StrEnum):
     LOW = "low"
@@ -71,16 +73,23 @@ def pair_event_blackout(
     instant: datetime,
     events: list[ScheduledMacroEvent],
 ) -> tuple[bool, tuple[str, ...]]:
+    """Block new risk around high-impact releases or currency-market holidays.
+
+    The engine calls this same function during initial evaluation and immediately before
+    broker submission, so the context gate cannot be bypassed by a stale pre-event signal.
+    Holiday reasons are explicitly labeled to distinguish them from scheduled releases.
+    """
     base, quote = instrument.upper().split("_", maxsplit=1)
     blocking = [
         event
         for event in events
         if event.currency in {base, quote} and event.blocks(instant)
     ]
-    if not blocking:
-        return False, ()
-    reasons = tuple(
+    event_reasons = tuple(
         f"{event.currency} high-impact event '{event.name}' at {event.scheduled_at.isoformat()}"
         for event in sorted(blocking, key=lambda item: item.scheduled_at)
     )
-    return True, reasons
+    holiday_blocked, holiday_reasons = pair_holiday_blackout(instrument, instant)
+    tagged_holidays = tuple(f"MARKET_HOLIDAY: {reason}" for reason in holiday_reasons)
+    reasons = (*event_reasons, *tagged_holidays)
+    return bool(blocking) or holiday_blocked, reasons
