@@ -2,6 +2,37 @@
 
 All notable changes to this repository are documented here.
 
+## 0.7.0 — 2026-08-07
+
+### Phase 0 and A-D system architecture
+
+- Added a machine-readable v0.7 authority manifest. OANDA remains fxTrade Practice-only; live-money execution is disabled. `sweep_reclaim:v1` is the only Practice-authorized setup family, while new families remain shadow/research gated.
+- Added durable broker reconciliation-readiness at the write boundary, provider-health/readiness contracts, horizon-specific currency context, regime classification, independent confirmation categories/source identities, deterministic setup lifecycle, richer raw zone features, research order types and enhanced portfolio risk authorization.
+- Added point-in-time release/news/central-bank intelligence contracts plus provider interfaces for economic calendars, official documents, licensed news, cross-assets and institutional flow. Missing licensed/real institutional data is represented as unavailable rather than fabricated from broker tick activity.
+- Added event-time replay, experiment manifests, calibration primitives, outcome modeling, expected-net-R, ablation/attribution research, entry-style experiments and position-management intents while keeping unvalidated management out of Practice authority.
+
+### Decision evidence and learning the edge
+
+- Campaigns can now persist one point-in-time decision row per instrument attempt alongside the existing cycle aggregates. Detailed evidence captures immutable policy identity, setup/regime/session, independent confirmation categories and source IDs, candidate geometry, quote, risk/order state, raw feature evidence and provider errors.
+- The permanent OANDA Practice validation workflow now uploads detailed shadow and Practice decision streams with the existing evidence artifact.
+- Added a read-only OANDA outcome labeler that joins later historical candles to matured decisions using conservative stop-first OHLC semantics, captured decision-time spread and explicit slippage stress.
+- Incomplete live paths are never written as timeouts: target/stop outcomes may resolve early, while a time-exit label requires the complete configured observation horizon.
+- Added outcome-evidence identity checks, duplicate prevention and joins that fail on campaign, policy fingerprint, instrument or signal-time mismatch.
+- Added hierarchical setup × regime × session calibration with optional instrument specificity and explicit sparse-cohort fallback.
+- Added chronological train/validation/test separation and walk-forward probability evaluation using prior history only.
+- Corrected the empirical outcome model to distinguish target hits, stop hits and time exits. Positive time exits no longer inflate target-hit probability, and timeout R contributes separately to expected value.
+- Added a research-only EV gate requiring minimum sample size, bounded confidence width, validation calibration quality, positive after-cost EV and positive conservative lower-bound EV. It cannot authorize broker execution.
+- Added dataset analysis that rejects mixed policy fingerprints and compares the untouched test fold before versus after EV eligibility.
+- Added `docs/27_RESEARCH_EVIDENCE_AND_EV.md` with the complete capture → mature-label → calibration → untouched-fold EV workflow.
+
+### Quality and validation
+
+- Added incremental Ruff critical-error enforcement and strict mypy checks for the new deterministic Phase A-D/research contracts.
+- Added Hypothesis/property and regression coverage around Phase A-D invariants, evidence serialization, campaign decision capture, chronological splitting, outcome labeling, three-outcome probability semantics, cohort fallback/calibration and conservative EV gating.
+- Pre-release v0.7 research/evidence head passed the full Python 3.11/3.13 matrix with **319 tests passed** and **87.29% branch-aware coverage**, plus dependency/secret/lint/typing gates and the executed offline protected paper-order smoke.
+- The authoritative runtime/distribution/API identity advances to `0.7.0`; the exact release-identity head is revalidated before merge.
+- Authenticated OANDA Practice success and profitability remain externally evidence-gated and are not inferred from software CI.
+
 ## 0.6.4 — 2026-08-07
 
 ### CI and Practice readiness
