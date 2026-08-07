@@ -37,12 +37,7 @@ class FrozenAblationSnapshot:
             raise ValueError("snapshot_id, instrument and policy_fingerprint are required")
         if self.signal_time.tzinfo is None:
             raise ValueError("signal_time must be timezone-aware")
-        if len(self.payload_hash) != 64:
-            raise ValueError("payload_hash must be a SHA-256 hex digest")
-        try:
-            int(self.payload_hash, 16)
-        except ValueError as exc:
-            raise ValueError("payload_hash must be a SHA-256 hex digest") from exc
+        _validate_sha256(self.payload_hash, "payload_hash")
 
     @classmethod
     def from_payload(
@@ -88,8 +83,7 @@ class ProspectiveAblationDecision:
             raise ValueError("ablation decision identity is required")
         if self.signal_time.tzinfo is None:
             raise ValueError("signal_time must be timezone-aware")
-        if len(self.snapshot_payload_hash) != 64:
-            raise ValueError("snapshot_payload_hash must be a SHA-256 hex digest")
+        _validate_sha256(self.snapshot_payload_hash, "snapshot_payload_hash")
         if self.tradeable and self.error_type is not None:
             raise ValueError("errored ablation decisions cannot be tradeable")
         if self.tradeable and (self.entry_price is None or self.stop_loss is None or self.take_profit is None):
@@ -102,10 +96,9 @@ AblationEvaluator = Callable[[FrozenAblationSnapshot, AblationVariant], Prospect
 class ProspectiveAblationCollector:
     """Run every declared ablation against one frozen point-in-time snapshot.
 
-    The collector is intentionally evaluator-agnostic: production/research decision logic must
-    be supplied by a caller. Its invariant is that all variants consume the same immutable
-    snapshot identity before any outcome is known. An evaluator may abstain or fail, but the
-    corresponding row remains in the paired denominator.
+    Production/research decision logic is supplied by the caller. The collector guarantees
+    that every variant consumes the same immutable snapshot identity before future outcomes
+    are known. Abstentions and evaluator failures remain explicit rows in the denominator.
     """
 
     def __init__(
@@ -185,8 +178,7 @@ class MaturedAblationOutcome:
     def __post_init__(self) -> None:
         if not self.snapshot_id.strip() or not self.policy_fingerprint.strip():
             raise ValueError("matured ablation outcome identity is required")
-        if len(self.snapshot_payload_hash) != 64:
-            raise ValueError("snapshot_payload_hash must be a SHA-256 hex digest")
+        _validate_sha256(self.snapshot_payload_hash, "snapshot_payload_hash")
         if not self.status.strip():
             raise ValueError("matured ablation status is required")
 
@@ -200,8 +192,9 @@ class PairedAblationEvidence:
     dataset_id: str
 
     def __post_init__(self) -> None:
-        if not self.name.strip() or not self.dataset_id.strip():
-            raise ValueError("paired ablation name and dataset_id are required")
+        if not self.name.strip():
+            raise ValueError("paired ablation name is required")
+        _validate_sha256(self.dataset_id, "dataset_id")
         if self.sample_size < 1:
             raise ValueError("paired ablation sample_size must be positive")
 
@@ -213,8 +206,10 @@ class PairedAblationEvidence:
 def paired_ablation_evidence(
     outcomes: Iterable[MaturedAblationOutcome],
     *,
+    primary_dataset_id: str,
     required_variants: Iterable[AblationVariant] = REQUIRED_ABLATION_VARIANTS,
 ) -> tuple[PairedAblationEvidence, ...]:
+    _validate_sha256(primary_dataset_id, "primary_dataset_id")
     variants = tuple(required_variants)
     if AblationVariant.FULL not in variants:
         raise ValueError("full variant is required")
@@ -250,7 +245,6 @@ def paired_ablation_evidence(
     ordered_ids = tuple(sorted(grouped))
     full_values = tuple(grouped[snapshot_id][AblationVariant.FULL].realized_r for snapshot_id in ordered_ids)
     full_expectancy = sum(full_values, Decimal("0")) / Decimal(len(full_values))
-    dataset_id = _paired_dataset_id(grouped, ordered_ids, variants)
     evidence: list[PairedAblationEvidence] = []
     for variant in variants:
         if variant is AblationVariant.FULL:
@@ -262,31 +256,24 @@ def paired_ablation_evidence(
                 full_expectancy_r=full_expectancy,
                 ablated_expectancy_r=sum(values, Decimal("0")) / Decimal(len(values)),
                 sample_size=len(ordered_ids),
-                dataset_id=dataset_id,
+                dataset_id=primary_dataset_id,
             )
         )
     return tuple(evidence)
 
 
-def _paired_dataset_id(
-    grouped: Mapping[str, Mapping[AblationVariant, MaturedAblationOutcome]],
-    ordered_ids: tuple[str, ...],
-    variants: tuple[AblationVariant, ...],
-) -> str:
+def paired_artifact_id(outcomes: Iterable[MaturedAblationOutcome]) -> str:
+    rows = tuple(outcomes)
     payload = [
         {
-            "snapshot_id": snapshot_id,
-            "snapshot_payload_hash": grouped[snapshot_id][AblationVariant.FULL].snapshot_payload_hash,
-            "policy_fingerprint": grouped[snapshot_id][AblationVariant.FULL].policy_fingerprint,
-            "outcomes": {
-                variant.value: {
-                    "realized_r": str(grouped[snapshot_id][variant].realized_r),
-                    "status": grouped[snapshot_id][variant].status,
-                }
-                for variant in variants
-            },
+            "snapshot_id": row.snapshot_id,
+            "snapshot_payload_hash": row.snapshot_payload_hash,
+            "policy_fingerprint": row.policy_fingerprint,
+            "variant": row.variant.value,
+            "realized_r": str(row.realized_r),
+            "status": row.status,
         }
-        for snapshot_id in ordered_ids
+        for row in sorted(rows, key=lambda item: (item.snapshot_id, item.variant.value))
     ]
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(canonical).hexdigest()
@@ -309,7 +296,42 @@ def append_ablation_decisions(path: str | Path, rows: Iterable[ProspectiveAblati
     return count
 
 
-def write_paired_ablation_evidence(path: str | Path, evidence: Iterable[PairedAblationEvidence]) -> None:
+def load_matured_ablation_outcomes(path: str | Path) -> tuple[MaturedAblationOutcome, ...]:
+    file_path = Path(path)
+    if not file_path.is_file():
+        raise FileNotFoundError(file_path)
+    rows: list[MaturedAblationOutcome] = []
+    for line_number, raw in enumerate(file_path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not raw.strip():
+            continue
+        try:
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise ValueError("expected JSON object")
+            rows.append(
+                MaturedAblationOutcome(
+                    snapshot_id=str(payload["snapshot_id"]),
+                    snapshot_payload_hash=str(payload["snapshot_payload_hash"]),
+                    policy_fingerprint=str(payload["policy_fingerprint"]),
+                    variant=AblationVariant(str(payload["variant"])),
+                    realized_r=Decimal(str(payload["realized_r"])),
+                    status=str(payload["status"]),
+                )
+            )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(f"invalid matured ablation JSONL line {line_number}: {exc}") from exc
+    if not rows:
+        raise ValueError("matured ablation outcome file is empty")
+    return tuple(rows)
+
+
+def write_paired_ablation_evidence(
+    path: str | Path,
+    evidence: Iterable[PairedAblationEvidence],
+    *,
+    artifact_id: str,
+) -> None:
+    _validate_sha256(artifact_id, "artifact_id")
     values = tuple(evidence)
     if not values:
         raise ValueError("paired ablation evidence cannot be empty")
@@ -322,6 +344,7 @@ def write_paired_ablation_evidence(path: str | Path, evidence: Iterable[PairedAb
         "research_only": True,
         "execution_authority": False,
         "dataset_id": next(iter(dataset_ids)),
+        "paired_artifact_id": artifact_id,
         "sample_size": next(iter(sample_sizes)),
         "ablations": [
             {
@@ -337,3 +360,12 @@ def write_paired_ablation_evidence(path: str | Path, evidence: Iterable[PairedAb
     file_path = Path(path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _validate_sha256(value: str, name: str) -> None:
+    if len(value) != 64:
+        raise ValueError(f"{name} must be a SHA-256 hex digest")
+    try:
+        int(value, 16)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a SHA-256 hex digest") from exc
