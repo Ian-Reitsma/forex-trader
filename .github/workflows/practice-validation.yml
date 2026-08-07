@@ -1,16 +1,44 @@
 name: OANDA Practice Validation
 
 on:
-  push:
-    branches: [v0.5-audit-remediation]
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Validation stage to run"
+        required: true
+        default: "read-only"
+        type: choice
+        options:
+          - read-only
+          - round-trip
+          - campaign
+      campaign_cycles:
+        description: "Practice campaign cycles (campaign stage only)"
+        required: true
+        default: "12"
+        type: string
+      max_orders_per_cycle:
+        description: "Maximum new Practice orders per campaign cycle"
+        required: true
+        default: "1"
+        type: string
+      confirm_practice_write:
+        description: "Required for round-trip/campaign: confirms OANDA Practice orders only"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
+concurrency:
+  group: oanda-practice-validation
+  cancel-in-progress: false
+
 jobs:
-  practice-smoke:
-    if: contains(github.event.head_commit.message, '[practice-smoke]') || contains(github.event.head_commit.message, '[practice-write]')
+  practice-validation:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     env:
       OANDA_API_TOKEN: ${{ secrets.OANDA_API_TOKEN }}
       OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID }}
@@ -20,81 +48,144 @@ jobs:
       FOREX_INSTRUMENTS: EUR_USD,GBP_USD,USD_JPY
       FOREX_REQUIRE_FUNDAMENTALS: "true"
       FOREX_DATABASE_PATH: /tmp/forex-practice.db
+      FOREX_BUILD_REVISION: ${{ github.sha }}
+      CAMPAIGN_CYCLES: ${{ inputs.campaign_cycles }}
+      MAX_ORDERS_PER_CYCLE: ${{ inputs.max_orders_per_cycle }}
+      PRACTICE_STAGE: ${{ inputs.stage }}
+      CONFIRM_PRACTICE_WRITE: ${{ inputs.confirm_practice_write }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
           cache: pip
-      - name: Install
-        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
-      - name: Verify Practice secrets are configured
+
+      - name: Validate manual dispatch safety
         shell: bash
         run: |
-          if [[ -z "$OANDA_API_TOKEN" || -z "$OANDA_ACCOUNT_ID" ]]; then
-            echo "OANDA Practice credentials are not configured as repository Actions secrets." | tee /tmp/practice-smoke.txt
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Authenticated Practice validation must be dispatched from the main branch."
             exit 2
           fi
-          echo "OANDA Practice credentials are configured (values intentionally not printed)." | tee /tmp/practice-smoke.txt
-      - name: Read-only authenticated probe
-        shell: bash
-        run: python scripts/smoke_oanda.py 2>&1 | tee -a /tmp/practice-smoke.txt
-      - name: Discover currency universe
+          python - <<'PY'
+          import os
+
+          stage = os.environ["PRACTICE_STAGE"]
+          if stage not in {"read-only", "round-trip", "campaign"}:
+              raise SystemExit(f"unsupported stage: {stage}")
+          try:
+              cycles = int(os.environ["CAMPAIGN_CYCLES"])
+              max_orders = int(os.environ["MAX_ORDERS_PER_CYCLE"])
+          except ValueError as exc:
+              raise SystemExit("campaign_cycles and max_orders_per_cycle must be integers") from exc
+          if not 1 <= cycles <= 24:
+              raise SystemExit("campaign_cycles must be between 1 and 24")
+          if not 0 <= max_orders <= 3:
+              raise SystemExit("max_orders_per_cycle must be between 0 and 3")
+          if stage in {"round-trip", "campaign"} and os.environ["CONFIRM_PRACTICE_WRITE"].lower() != "true":
+              raise SystemExit("round-trip/campaign requires confirm_practice_write=true")
+          if stage == "campaign" and max_orders < 1:
+              raise SystemExit("campaign stage requires max_orders_per_cycle >= 1")
+          PY
+
+      - name: Verify Practice credentials are configured
         shell: bash
         run: |
-          python - <<'PY' 2>&1 | tee -a /tmp/practice-smoke.txt
-          from forex_trader.config import AppConfig, build_engine
-          engine = build_engine(AppConfig.from_env())
-          instruments = engine.instrument_universe()
-          print({"currency_instruments": len(instruments), "sample": list(instruments[:12])})
-          PY
-      - name: Upload smoke evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: oanda-practice-smoke
-          path: /tmp/practice-smoke.txt
-          if-no-files-found: warn
-          retention-days: 7
+          set -euo pipefail
+          if [[ -z "$OANDA_API_TOKEN" || -z "$OANDA_ACCOUNT_ID" ]]; then
+            echo "OANDA Practice credentials are not configured as repository Actions secrets."
+            exit 2
+          fi
+          echo "OANDA Practice credentials are configured; values are intentionally not printed."
 
-  practice-write:
-    if: contains(github.event.head_commit.message, '[practice-write]')
-    needs: practice-smoke
-    runs-on: ubuntu-latest
-    env:
-      OANDA_API_TOKEN: ${{ secrets.OANDA_API_TOKEN }}
-      OANDA_ACCOUNT_ID: ${{ secrets.OANDA_ACCOUNT_ID }}
-      FOREX_PROVIDER: oanda
-      FOREX_MODE: paper
-      FOREX_ENABLE_PAPER_ORDERS: "true"
-      FOREX_INSTRUMENTS: EUR_USD,GBP_USD,USD_JPY
-      FOREX_REQUIRE_FUNDAMENTALS: "true"
-      FOREX_DATABASE_PATH: /tmp/forex-practice-write.db
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip
       - name: Install
         run: python -m pip install --upgrade pip && pip install -e ".[dev]"
-      - name: Re-run tests immediately before broker write
-        run: pytest --cov=forex_trader --cov-report=term-missing
-      - name: Protected broker-minimum Practice round trip
+
+      - name: Validate configuration
+        run: forex-trader doctor
+
+      - name: Re-run software gate before any broker write
+        if: ${{ inputs.stage != 'read-only' }}
+        env:
+          FOREX_PROVIDER: simulation
+          FOREX_MODE: shadow
+          FOREX_ENABLE_PAPER_ORDERS: "false"
+          OANDA_API_TOKEN: ""
+          OANDA_ACCOUNT_ID: ""
+        run: pytest --cov=forex_trader --cov-branch --cov-report=term-missing
+
+      - name: Prepare evidence directory
+        run: mkdir -p /tmp/oanda-practice
+
+      - name: Authenticated read-only broker probe
         shell: bash
-        run: python scripts/oanda_round_trip.py 2>&1 | tee /tmp/practice-write.txt
-      - name: Current-market structure scan without further writes
+        run: python scripts/smoke_oanda.py 2>&1 | tee /tmp/oanda-practice/read-only-probe.txt
+
+      - name: Reconcile broker transaction state before scanning
+        shell: bash
+        run: forex-trader sync 2>&1 | tee /tmp/oanda-practice/pre-scan-sync.txt
+
+      - name: One-cycle all-pair shadow campaign
         env:
           FOREX_MODE: shadow
           FOREX_ENABLE_PAPER_ORDERS: "false"
-          FOREX_REQUIRE_FUNDAMENTALS: "false"
         shell: bash
-        run: forex-trader scan --all-currency-pairs --max-orders 0 2>&1 | tee -a /tmp/practice-write.txt
-      - name: Upload Practice trade and scan evidence
+        run: |
+          python scripts/run_practice_campaign.py \
+            --all-currency-pairs \
+            --max-cycles 1 \
+            --evidence-path /tmp/oanda-practice/shadow-campaign.jsonl \
+            2>&1 | tee /tmp/oanda-practice/shadow-campaign.txt
+
+      - name: Analyze shadow campaign
+        shell: bash
+        run: |
+          python scripts/analyze_campaign.py /tmp/oanda-practice/shadow-campaign.jsonl \
+            2>&1 | tee /tmp/oanda-practice/shadow-analysis.json
+
+      - name: Protected broker-minimum Practice round trip
+        if: ${{ inputs.stage == 'round-trip' || inputs.stage == 'campaign' }}
+        env:
+          FOREX_MODE: paper
+          FOREX_ENABLE_PAPER_ORDERS: "true"
+        shell: bash
+        run: python scripts/oanda_round_trip.py 2>&1 | tee /tmp/oanda-practice/protected-round-trip.txt
+
+      - name: Reconcile broker state after round trip
+        if: ${{ inputs.stage == 'round-trip' || inputs.stage == 'campaign' }}
+        shell: bash
+        run: forex-trader sync 2>&1 | tee /tmp/oanda-practice/post-round-trip-sync.txt
+
+      - name: Capped OANDA Practice campaign
+        if: ${{ inputs.stage == 'campaign' }}
+        env:
+          FOREX_MODE: paper
+          FOREX_ENABLE_PAPER_ORDERS: "true"
+        shell: bash
+        run: |
+          python scripts/run_practice_campaign.py \
+            --execute \
+            --all-currency-pairs \
+            --max-orders-per-cycle "$MAX_ORDERS_PER_CYCLE" \
+            --max-cycles "$CAMPAIGN_CYCLES" \
+            --evidence-path /tmp/oanda-practice/practice-campaign.jsonl \
+            2>&1 | tee /tmp/oanda-practice/practice-campaign.txt
+
+      - name: Analyze Practice campaign
+        if: ${{ inputs.stage == 'campaign' }}
+        shell: bash
+        run: |
+          python scripts/analyze_campaign.py /tmp/oanda-practice/practice-campaign.jsonl \
+            2>&1 | tee /tmp/oanda-practice/practice-analysis.json
+          forex-trader promotion 2>&1 | tee /tmp/oanda-practice/promotion.json
+
+      - name: Upload Practice evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: oanda-practice-write
-          path: /tmp/practice-write.txt
+          name: oanda-practice-${{ inputs.stage }}-${{ github.run_id }}
+          path: /tmp/oanda-practice/
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 14
