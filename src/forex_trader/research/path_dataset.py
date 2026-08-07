@@ -43,7 +43,7 @@ def load_candle_archive(path: str | Path) -> dict[str, tuple[Candle, ...]]:
                 high=_required_decimal(payload.get("high"), "high"),
                 low=_required_decimal(payload.get("low"), "low"),
                 close=_required_decimal(payload.get("close"), "close"),
-                volume=_optional_decimal(payload.get("volume")),
+                volume=_optional_integer(payload.get("volume"), default=0),
                 complete=_optional_bool(payload.get("complete"), default=True),
             )
         except (TypeError, ValueError) as exc:
@@ -122,6 +122,12 @@ def _required_decimal(value: object, name: str) -> Decimal:
     if parsed is None:
         raise ValueError(f"{name} is required")
     return parsed
+
+
+def _optional_integer(value: object, *, default: int) -> int:
+    if value is None or value == "":
+        return default
+    return int(str(value))
 
 
 def _required_text(value: object, name: str) -> str:
