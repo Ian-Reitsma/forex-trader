@@ -7,19 +7,20 @@ All notable changes to this repository are documented here.
 ### Evidence integrity and campaign efficiency
 
 - Added deterministic, secret-free campaign policy fingerprints and run-level campaign IDs to every new campaign evidence row.
-- Policy context records outcome-affecting strategy, risk, timeframe, correlation, cost-model and campaign-execution configuration without API tokens or account IDs.
-- Campaign analysis now refuses to combine multiple policy fingerprints unless the operator explicitly selects one with `--policy-fingerprint`.
+- Policy context records outcome-affecting strategy, risk, timeframe, correlation, adaptive-cost configuration and campaign execution policy without API tokens or account IDs.
+- Campaign analysis refuses to combine multiple policy fingerprints unless the operator explicitly selects one with `--policy-fingerprint`.
 - Evidence with one fingerprint but contradictory policy-context payloads is rejected rather than silently pooled.
 - Pre-fingerprint JSONL remains supported as the `legacy` cohort.
 - Practice-execution campaigns automatically pre-filter pairs that cannot currently meet the required fundamental-confidence gate before spending OANDA candle/pricing requests on guaranteed abstentions.
 - Shadow campaigns continue to scan the full universe by default for fundamental-data coverage diagnostics; `--eligible-only` opts into the same preflight.
-- Preflight failures and excluded-pair counts are recorded as campaign metadata; no threshold/risk gate is relaxed to increase trade frequency.
-- Added cohort-isolation, policy-hash, fundamental-preflight and real-engine evidence-persistence tests.
+- Preflight exclusions are summarized in campaign metadata; no strategy/risk threshold is relaxed to increase trade frequency.
+- Added cohort-isolation, policy-hash, point-in-time preflight, legacy-evidence and real-engine cohort-persistence tests.
 
 ### Validation
 
-- v0.6.1 retains the v0.6 hardened Practice-only execution boundary and 85% branch-coverage fail-under requirement.
-- Final exact-head test/coverage totals are recorded after the release CI matrix completes.
+- Exact v0.6.1 code/test head passed the complete Python 3.11 and Python 3.13 CI matrix.
+- **238 tests passed** with **87.27% branch-aware coverage**; repository fail-under remains **85%**.
+- Install, bytecode compile, `pip check`, secret-assignment scan and executed offline paper-order smoke passed on both Python versions.
 - Authenticated OANDA Practice execution remains externally credential-gated and is not claimed by this release.
 
 ## 0.6.0 — 2026-08-07
