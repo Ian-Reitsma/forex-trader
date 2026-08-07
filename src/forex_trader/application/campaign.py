@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from collections import Counter
@@ -11,8 +12,18 @@ from uuid import uuid4
 
 from forex_trader.application.campaign_policy import campaign_policy_context, campaign_policy_fingerprint
 from forex_trader.application.engine import TradingEngine
+from forex_trader.application.signal_capture import SignalEvaluationInputs
 from forex_trader.domain.enums import DecisionDisposition, OrderStatus, RiskDisposition
+from forex_trader.domain.fusion import RegimeAwareSignalFusionPolicy
+from forex_trader.domain.models import DecisionTrace
+from forex_trader.research.ablations import ProspectiveAblationDecision, append_ablation_decisions
+from forex_trader.research.captured_signal_ablation import (
+    CapturedProductionSignalAblationEvaluator,
+    freeze_captured_signal_snapshot,
+    validate_full_against_trace,
+)
 from forex_trader.research.evidence import DecisionEvidence, append_decision_evidence
+from forex_trader.research.production_ablation import ProductionAblationAdapter
 
 
 _UNRESOLVED_ORDER_STATUSES = {
@@ -51,11 +62,15 @@ class CampaignCycleReport:
     orders_emergency_close: int
     orders_unresolved: int
     errors: int
+    ablation_snapshots: int
+    ablation_rows: int
+    ablation_errors: int
     stopped_early: bool
     stop_reason: str | None
     rejection_codes: dict[str, int]
     risk_denial_reasons: dict[str, int]
     error_types: dict[str, int]
+    ablation_error_types: dict[str, int]
     order_statuses: dict[str, int]
     promotion_ready: bool | None
 
@@ -86,14 +101,27 @@ class CampaignReport:
     def unresolved(self) -> int:
         return sum(cycle.orders_unresolved for cycle in self.cycles)
 
+    @property
+    def ablation_snapshots(self) -> int:
+        return sum(cycle.ablation_snapshots for cycle in self.cycles)
+
+    @property
+    def ablation_rows(self) -> int:
+        return sum(cycle.ablation_rows for cycle in self.cycles)
+
+    @property
+    def ablation_errors(self) -> int:
+        return sum(cycle.ablation_errors for cycle in self.cycles)
+
 
 class PracticeCampaignRunner:
     """Run a conservative, evidence-first Practice campaign.
 
     Aggregate cycle evidence remains backward-compatible. An optional separate decision
     stream records every instrument evaluation with point-in-time strategy, regime,
-    confirmation, risk and quote context. This enables chronological labeling,
-    calibration and ablation without silently treating cycle aggregates as trade data.
+    confirmation, risk and quote context. Shadow campaigns may additionally capture six
+    paired production-signal ablations from the exact same frozen decision inputs. Paired
+    capture is research-only and cannot coexist with campaign execution.
     """
 
     def __init__(
@@ -106,6 +134,7 @@ class PracticeCampaignRunner:
         stop_on_unresolved: bool = True,
         evidence_path: str | Path | None = None,
         decision_evidence_path: str | Path | None = None,
+        ablation_evidence_path: str | Path | None = None,
         campaign_id: str | None = None,
         policy_context: Mapping[str, object] | None = None,
         campaign_metadata: Mapping[str, object] | None = None,
@@ -126,10 +155,24 @@ class PracticeCampaignRunner:
         self.stop_on_unresolved = stop_on_unresolved
         self.evidence_path = Path(evidence_path) if evidence_path is not None else None
         self.decision_evidence_path = Path(decision_evidence_path) if decision_evidence_path is not None else None
+        self.ablation_evidence_path = Path(ablation_evidence_path) if ablation_evidence_path is not None else None
         self.campaign_id = resolved_campaign_id
         self.policy_context = context
         self.policy_fingerprint = campaign_policy_fingerprint(context)
         self.campaign_metadata = dict(campaign_metadata or {})
+        self._signal_capture: Callable[..., tuple[DecisionTrace, SignalEvaluationInputs]] | None = None
+        self._ablation_adapter: ProductionAblationAdapter | None = None
+        if self.ablation_evidence_path is not None:
+            if self.execute:
+                raise ValueError("paired ablation capture is restricted to shadow campaigns")
+            capture = getattr(engine, "evaluate_with_signal_inputs", None)
+            if not callable(capture):
+                raise ValueError("paired ablation capture requires an engine with signal-input capture")
+            fusion_policy = getattr(engine, "fusion_policy", None)
+            if not isinstance(fusion_policy, RegimeAwareSignalFusionPolicy):
+                raise ValueError("paired ablation capture requires RegimeAwareSignalFusionPolicy")
+            self._signal_capture = capture
+            self._ablation_adapter = CapturedProductionSignalAblationEvaluator(fusion_policy).adapter()
 
     def run_cycle(self, cycle: int = 1) -> CampaignCycleReport:
         if cycle < 1:
@@ -138,6 +181,7 @@ class PracticeCampaignRunner:
         rejection_codes: Counter[str] = Counter()
         risk_denial_reasons: Counter[str] = Counter()
         error_types: Counter[str] = Counter()
+        ablation_error_types: Counter[str] = Counter()
         order_statuses: Counter[str] = Counter()
         evaluated = 0
         trade_candidates = 0
@@ -154,13 +198,20 @@ class PracticeCampaignRunner:
         emergency_close = 0
         unresolved = 0
         errors = 0
+        ablation_snapshots = 0
+        ablation_rows = 0
+        ablation_errors = 0
         stopped_early = False
         stop_reason: str | None = None
 
         for instrument in self.instruments:
             may_submit = self.execute and submitted < self.max_new_orders_per_cycle
+            captured_inputs: SignalEvaluationInputs | None = None
             try:
-                trace = self.engine.evaluate(instrument, execute=may_submit)
+                if self._signal_capture is not None:
+                    trace, captured_inputs = self._signal_capture(instrument, execute=False)
+                else:
+                    trace = self.engine.evaluate(instrument, execute=may_submit)
             except Exception as exc:
                 errors += 1
                 error_types[type(exc).__name__] += 1
@@ -195,6 +246,25 @@ class PracticeCampaignRunner:
             else:
                 abstentions += 1
                 rejection_codes[candidate.rejection_code or "UNSPECIFIED_ABSTENTION"] += 1
+
+            if captured_inputs is not None:
+                try:
+                    rows = self._capture_ablations(
+                        cycle=cycle,
+                        instrument=instrument,
+                        trace=trace,
+                        inputs=captured_inputs,
+                    )
+                except Exception as exc:
+                    ablation_errors += 1
+                    ablation_error_types[type(exc).__name__] += 1
+                else:
+                    ablation_snapshots += 1
+                    ablation_rows += len(rows)
+                    for row in rows:
+                        if row.error_type is not None:
+                            ablation_errors += 1
+                            ablation_error_types[row.error_type] += 1
 
             if trace.risk is not None:
                 if trace.risk.disposition is RiskDisposition.GRANTED:
@@ -258,11 +328,15 @@ class PracticeCampaignRunner:
             orders_emergency_close=emergency_close,
             orders_unresolved=unresolved,
             errors=errors,
+            ablation_snapshots=ablation_snapshots,
+            ablation_rows=ablation_rows,
+            ablation_errors=ablation_errors,
             stopped_early=stopped_early,
             stop_reason=stop_reason,
             rejection_codes=dict(rejection_codes.most_common()),
             risk_denial_reasons=dict(risk_denial_reasons.most_common()),
             error_types=dict(error_types.most_common()),
+            ablation_error_types=dict(ablation_error_types.most_common()),
             order_statuses=dict(order_statuses.most_common()),
             promotion_ready=promotion_ready,
         )
@@ -293,6 +367,33 @@ class PracticeCampaignRunner:
                 sleeper(interval_seconds)
         return CampaignReport(tuple(cycles))
 
+    def _capture_ablations(
+        self,
+        *,
+        cycle: int,
+        instrument: str,
+        trace: DecisionTrace,
+        inputs: SignalEvaluationInputs,
+    ) -> tuple[ProspectiveAblationDecision, ...]:
+        if self._ablation_adapter is None or self.ablation_evidence_path is None:
+            return ()
+        snapshot = freeze_captured_signal_snapshot(
+            snapshot_id=_ablation_snapshot_id(
+                self.campaign_id,
+                cycle,
+                instrument,
+                trace.candidate.signal_time,
+            ),
+            policy_fingerprint=self.policy_fingerprint,
+            inputs=inputs,
+        )
+        rows = self._ablation_adapter.collect(snapshot)
+        if not rows:
+            raise ValueError("paired ablation adapter returned no rows")
+        validate_full_against_trace(trace, rows[0])
+        append_ablation_decisions(self.ablation_evidence_path, rows)
+        return rows
+
     def _append_evidence(self, report: CampaignCycleReport) -> None:
         if self.evidence_path is None:
             return
@@ -305,6 +406,16 @@ class PracticeCampaignRunner:
         if self.decision_evidence_path is None:
             return
         append_decision_evidence(self.decision_evidence_path, record)
+
+
+def _ablation_snapshot_id(
+    campaign_id: str,
+    cycle: int,
+    instrument: str,
+    signal_time: datetime,
+) -> str:
+    raw = f"{campaign_id}|{cycle}|{instrument.upper()}|{signal_time.isoformat()}".encode()
+    return "ab-" + hashlib.sha256(raw).hexdigest()[:32]
 
 
 def _safe_policy_context(engine: object) -> dict[str, object]:
