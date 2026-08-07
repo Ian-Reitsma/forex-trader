@@ -194,8 +194,6 @@ def _json_safe(value: object) -> object:
         return str(value)
     if isinstance(value, Enum):
         return value.value
-    if hasattr(value, "__dataclass_fields__"):
-        return _json_safe(asdict(value))
     if isinstance(value, dict):
         return {str(key): _json_safe(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
@@ -254,7 +252,7 @@ def main() -> None:
         "policy_fingerprint": evidence.policy_fingerprint,
         "dataset_id": evidence.dataset_id,
         "evidence_digest": evidence.bundle_digest,
-        "assessment": _json_safe(assessment),
+        "assessment": _json_safe(asdict(assessment)),
         "metrics": {
             "labeled_trades": evidence.labeled_trades,
             "validation_predictions": evidence.validation_predictions,
