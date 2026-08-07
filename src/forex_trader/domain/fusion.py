@@ -3,16 +3,17 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Decimal
 
+from forex_trader.domain.component_confirmation import confirmation_evidence_for_components
 from forex_trader.domain.context import (
     PolicyAuthority,
     StrategyPolicyRegistry,
     classify_regime,
-    confirmation_evidence,
 )
+from forex_trader.domain.decision_components import DecisionComponentPolicy, PRODUCTION_DECISION_COMPONENTS
 from forex_trader.domain.enums import DecisionDisposition
 from forex_trader.domain.instruments import pip_size_for
 from forex_trader.domain.models import FundamentalAssessment, Quote, TechnicalAssessment, TradeCandidate
-from forex_trader.domain.sessions import classify_phase
+from forex_trader.domain.sessions import SessionPhase, classify_phase
 from forex_trader.domain.strategy import SignalFusionPolicy
 
 
@@ -73,6 +74,7 @@ class RegimeAwareSignalFusionPolicy(SignalFusionPolicy):
         quote: Quote,
         *,
         maximum_spread_pips: Decimal | None = None,
+        components: DecisionComponentPolicy = PRODUCTION_DECISION_COMPONENTS,
     ) -> TradeCandidate:
         candidate = super().evaluate(
             technical,
@@ -81,15 +83,16 @@ class RegimeAwareSignalFusionPolicy(SignalFusionPolicy):
             maximum_spread_pips=maximum_spread_pips,
         )
         spread_limit = self.maximum_spread_pips if maximum_spread_pips is None else maximum_spread_pips
-        phase = classify_phase(quote.time)
+        phase = classify_phase(quote.time) if components.session else SessionPhase.OFF_HOURS
         regime = classify_regime(technical, phase=phase)
         policy = self.registry.select(regime.regime, maximum_authority=PolicyAuthority.PRACTICE)
-        confirmations = confirmation_evidence(
+        confirmations = confirmation_evidence_for_components(
             technical,
             fundamental,
             quote,
             spread_limit_pips=spread_limit,
             pip_size=pip_size_for(technical.instrument),
+            components=components,
         )
         evidence = {
             **candidate.evidence,
@@ -104,6 +107,7 @@ class RegimeAwareSignalFusionPolicy(SignalFusionPolicy):
             "independent_confirmation_count": confirmations.independent_confirmation_count,
             "independent_source_count": confirmations.independent_source_count,
             "confirmation_reasons": confirmations.reasons,
+            "decision_components_disabled": components.disabled_components,
         }
         candidate = replace(candidate, evidence=evidence)
         if candidate.disposition is not DecisionDisposition.TRADE:
