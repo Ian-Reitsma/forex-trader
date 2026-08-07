@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "system_version": "0.7",
+  "execution_boundary": {
+    "live_money_enabled": false,
+    "oanda_environment": "fxTrade Practice only",
+    "requires_reconciliation_readiness": true,
+    "unknown_write_policy": "halt_and_reconcile"
+  },
+  "initial_universe": [
+    "EUR_USD",
+    "GBP_USD",
+    "USD_JPY",
+    "USD_CHF",
+    "AUD_USD",
+    "USD_CAD",
+    "NZD_USD",
+    "EUR_GBP",
+    "EUR_JPY",
+    "GBP_JPY"
+  ],
+  "strategy_policies": [
+    {
+      "name": "sweep_reclaim",
+      "version": "v1",
+      "authority": "practice",
+      "minimum_independent_confirmations": 2,
+      "minimum_independent_sources": 2,
+      "flow_requirement": "optional"
+    },
+    {
+      "name": "zone_continuation",
+      "version": "v1",
+      "authority": "shadow",
+      "flow_requirement": "optional"
+    },
+    {
+      "name": "breakout_retest",
+      "version": "v1",
+      "authority": "shadow",
+      "flow_requirement": "optional"
+    },
+    {
+      "name": "post_news_continuation",
+      "version": "v1",
+      "authority": "shadow",
+      "flow_requirement": "required"
+    },
+    {
+      "name": "post_news_failure",
+      "version": "v1",
+      "authority": "research",
+      "flow_requirement": "required"
+    }
+  ],
+  "fundamental_policy": {
+    "pair_orientation": "base_minus_quote",
+    "horizons": ["immediate", "session", "intraday", "background"],
+    "event_surprise": "actual_vs_point_in_time_consensus_with_revision",
+    "news_copies_are_independent_evidence": false,
+    "llm_can_submit_orders": false
+  },
+  "flow_policy": {
+    "broker_tick_activity_is_institutional_flow": false,
+    "institutional_provider_contract": true,
+    "required_flow_policy_when_provider_unavailable": "abstain"
+  },
+  "research_policy": {
+    "quality_score_is_probability": false,
+    "outcome_probability_requires_calibration": true,
+    "event_replay_order": ["available_at", "provider_sequence", "event_id"],
+    "promotion_requires_positive_profit_only": false,
+    "required_evidence": ["expectancy_after_costs", "drawdown", "calibration", "ablation", "replay_reproducibility"]
+  },
+  "risk_policy": {
+    "version": "practice-risk-v0.7",
+    "default_per_trade_fraction": "0.0015",
+    "default_daily_loss_fraction": "0.01",
+    "default_trailing_drawdown_fraction": "0.10",
+    "default_reserved_risk_fraction": "0.02",
+    "default_gap_stress_multiplier": "1.25",
+    "stop_widening_without_new_authorization": false
+  }
+}
