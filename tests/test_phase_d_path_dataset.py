@@ -85,7 +85,12 @@ def test_candle_archive_rejects_duplicate_instrument_time(tmp_path) -> None:
 def test_build_phase_d_scenarios_requires_complete_combined_horizon() -> None:
     record = decision()
     short = {"EUR_USD": [candle(index) for index in range(1, 5)]}
-    assert build_phase_d_scenarios(record for record in [record], candles_by_instrument=short, maximum_entry_bars=2, maximum_holding_bars=3) == ()
+    assert build_phase_d_scenarios(
+        [record],
+        candles_by_instrument=short,
+        maximum_entry_bars=2,
+        maximum_holding_bars=3,
+    ) == ()
 
     complete = {"EUR_USD": [candle(index) for index in range(1, 6)]}
     scenarios = build_phase_d_scenarios(
