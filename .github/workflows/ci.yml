@@ -59,6 +59,7 @@ jobs:
           tests/test_phase_abcd_readiness_api.py
           tests/test_phase_abcd_research_management.py
           tests/test_phase_abcd_runtime_integration.py
+          tests/test_phase_abcd_synthetic_stability.py
           tests/test_phase_d_entry_profit_optimization.py
       - name: Strict Phase A-D typing
         run: >-
