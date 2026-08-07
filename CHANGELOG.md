@@ -2,6 +2,32 @@
 
 All notable changes to this repository are documented here.
 
+## 0.6.0 — 2026-08-07
+
+### Repository integration repair
+
+- Reconciled the full validated v0.5 audit-remediation history with the later Practice-campaign commits after verifying that the hardened remediation tree had not actually reached `main`.
+- Preserved both histories through an explicit merge-parent integration branch instead of force-resetting `main`.
+- Restored the hardened structure-first engine, OANDA safety adapter, risk/session/calendar logic, research stack and remediation tests as the authoritative deployable tree.
+
+### Practice evidence and optimization workflow
+
+- Added an evidence-first Practice campaign runner with a configurable per-cycle new-order budget; remaining instruments continue in shadow after the budget is spent.
+- Added broker-discovered all-currency-pair campaign support and lower-timeframe-aligned campaign cadence.
+- Campaign evidence now records rejection codes, independent risk denials, provider errors, promotion state and the complete hardened broker-order status histogram.
+- Generalized campaign fail-closed behavior from literal `UNKNOWN` only to every unresolved state: created, acknowledged, partially filled, unknown, reconciliation required, closing and emergency close.
+- Added backward-compatible JSONL campaign analysis that classifies execution uncertainty, broker reject/cancel behavior, provider failures, missing fundamental data, market context, strategy formation, portfolio risk, unclassified abstentions and clean/selective operation.
+- Analyzer rejects internally inconsistent evidence and refuses to interpret new/unknown rejection codes as a clean strategy result.
+- Execution uncertainty always outranks strategy tuning; emergency-close evidence explicitly blocks further Practice-risk recommendations until dependent protection behavior is resolved.
+- Added `scripts/analyze_campaign.py` and expanded `docs/25_PRACTICE_CAMPAIGN.md` with the read-only -> sync -> shadow -> broker-minimum round trip -> capped Practice -> diagnosis sequence.
+
+### Validation
+
+- Exact reconciled v0.6 head passes the complete Python 3.11 and 3.13 CI matrix.
+- **222 tests pass** with **87.02% branch-aware coverage**; the repository fail-under remains **85%**.
+- Package install, bytecode compile, `pip check`, secret-assignment scan and executed offline paper-order smoke pass on both Python versions.
+- No authenticated OANDA Practice execution is claimed because the required Practice credentials are not available to this execution environment.
+
 ## 0.5.0 — 2026-08-07
 
 ### Strategy fidelity
@@ -47,12 +73,6 @@ All notable changes to this repository are documented here.
 - Changed multi-instrument validation to select one globally deployable threshold rather than pair-specific thresholds.
 - Updated all OANDA historical research scripts to use the same configured timeframe policy as runtime.
 - Added research-only management comparison for the structural single-target baseline versus a 50%-at-1R / breakeven-runner hypothesis, with a CI equivalence guard for the baseline replay.
-
-### Validation
-
-- Current verified remediation state: 197 tests passing on Python 3.11 and 3.13, 87.29% branch-aware coverage with the 85% fail-under gate enforced.
-- Package install, compile, dependency integrity, secret assignment scan and executed offline paper-order smoke pass on both CI Python versions.
-- A gated authenticated OANDA Practice probe was attempted but stopped before external access because credentials are not available in this environment. No real OANDA Practice trade is claimed.
 
 ## 0.4.0 — 2026-08-07
 
