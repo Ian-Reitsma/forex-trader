@@ -2,7 +2,7 @@
 
 ## Current release
 
-Version 0.6.2 is the hardened offline-simulation and OANDA fxTrade Practice platform. It contains the reconciled structure-first runtime, cohort-safe Practice evidence, fundamental-eligibility preflight, and implementation-bound evidence identity. It remains intentionally Practice/paper-only and contains no live-money endpoint.
+Version 0.6.4 is the hardened offline-simulation and OANDA fxTrade Practice platform. It contains the reconciled structure-first runtime, cohort-safe Practice evidence, fundamental-eligibility preflight, implementation-bound evidence identity, a fail-closed broker-minimum round-trip helper, and an operator-driven staged Practice-validation workflow. It remains intentionally Practice/paper-only and contains no live-money endpoint.
 
 ```text
 completed configured lower/higher candles + depth-aware quote
@@ -42,6 +42,7 @@ completed configured lower/higher candles + depth-aware quote
 - OANDA Practice account discovery, candles/history, pricing, instrument metadata, positions, conversion, protected orders and trade closing.
 - Broker metadata drives pip/display/unit/margin handling; size-aware pricing and worst-price `priceBound` are used before submission.
 - Deterministic reject vs ambiguous-write classification, broker reconciliation, protection verification/repair, emergency-close handling and persistent uncertainty halts.
+- Broker-minimum Practice round-trip validation is refactored into a testable helper that always attempts to close a known filled probe trade even when protection verification fails or raises; failed/unverifiable closes are critical stop conditions.
 - Risk from lower(balance,NAV), currency conversion, 5-p.m.-New-York marked-loss latch, position/unit limits, gross/concentrated currency exposure, margin reserve and signed correlation veto.
 - Learned session costs/slippage can tighten but never widen hard execution ceilings.
 - Practice promotion gates require sustained multi-day/multi-instrument evidence and zero unresolved execution/risk halts.
@@ -65,9 +66,9 @@ Campaign analysis is cohort-safe:
 - unresolved execution/provider/broker integrity problems outrank strategy tuning;
 - new rejection semantics remain unclassified until mapped and tested.
 
-## v0.6.2 implementation identity
+## v0.6.4 implementation identity
 
-`forex_trader.__version__` is the authoritative semantic version. Setuptools derives installed distribution metadata from it, and FastAPI/OpenAPI exposes the same value. This removes the prior package/runtime/API version drift.
+`forex_trader.__version__` is the authoritative semantic version. Setuptools derives installed distribution metadata from it, and FastAPI/OpenAPI exposes the same value. This removes package/runtime/API version drift.
 
 Campaign policy context includes:
 
@@ -82,19 +83,21 @@ For local Git campaigns, operators should set:
 export FOREX_BUILD_REVISION="$(git rev-parse HEAD)"
 ```
 
+The manual OANDA Practice workflow sets `FOREX_BUILD_REVISION` to the exact GitHub workflow SHA automatically.
+
 ## Current automated validation
 
-The exact v0.6.2 code/test head passed the complete CI matrix on Python 3.11 and Python 3.13:
+The v0.6.4 Practice-readiness branch passed the complete CI matrix on Python 3.11 and Python 3.13 before documentation-only follow-up commits:
 
-- **243 tests passed**;
-- **87.29% branch-aware coverage**;
+- **260 tests passed** on each Python version;
+- **87.37% branch-aware coverage** on Python 3.11;
 - repository minimum coverage gate: **85%**;
-- fresh dynamic package installation and bytecode compilation passed;
-- `pip check` dependency integrity passed;
+- fresh dynamic package installation as `forex-trader==0.6.4` passed;
+- bytecode compilation and `pip check` dependency integrity passed;
 - secret-assignment scan passed;
 - executed offline paper-order smoke passed on both Python versions.
 
-These checks establish software/invariant quality. They do not establish a profitable trading edge.
+The final documentation/workflow head must pass the same CI matrix before merge. These checks establish software/invariant quality. They do not establish a profitable trading edge or authenticated broker success.
 
 ## Research/operator commands
 
@@ -113,19 +116,15 @@ python scripts/analyze_campaign.py campaign-evidence.jsonl
 
 ## Authenticated OANDA Practice boundary
 
-This environment does not expose `OANDA_API_TOKEN` / `OANDA_ACCOUNT_ID`; no real authenticated OANDA Practice round trip is claimed.
+The repository never stores OANDA credentials and does not infer authenticated success from CI. Local runtime or GitHub Actions must receive credentials externally.
 
-Once credentials are configured outside chat/Git, the required sequence is:
+The manual `OANDA Practice Validation` workflow implements three ordered stages from `main`:
 
-1. read-only Practice account/pricing/candle/instrument probe;
-2. transaction synchronization/reconciliation;
-3. broker currency-universe discovery;
-4. all-pair shadow campaign and cohort analysis;
-5. separately gated broker-minimum protected open -> verify -> close round trip;
-6. capped Practice campaign starting with at most one new order per cycle;
-7. same-policy/same-implementation cohort diagnosis before any threshold/timeframe/management change.
+1. `read-only` — requires `OANDA_API_TOKEN`; explicit account ID is optional because the adapter can discover an authorized Practice account. It runs the authenticated probe, transaction sync, one-cycle all-pair shadow campaign and analyzer.
+2. `round-trip` — additionally requires explicit `OANDA_ACCOUNT_ID` and `confirm_practice_write=true`. It repeats the software/read-only gates, executes the broker-minimum protected open -> verify -> close probe, then reconciles broker state again.
+3. `campaign` — only after those gates, runs the capped all-pair Practice campaign, analyzer and promotion report. Initial operation should remain at one new order per cycle.
 
-A changed policy or implementation must generate a new fingerprint so before/after evidence cannot be silently pooled.
+Authenticated Practice evidence—not software confidence—must determine whether the next bottleneck is data coverage, setup formation frequency, execution conditions, portfolio constraints or actual strategy expectancy. A changed policy or implementation generates a new fingerprint so before/after evidence cannot be silently pooled.
 
 ## Still evidence-gated
 
