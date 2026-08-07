@@ -10,7 +10,7 @@ The campaign is designed to answer operational questions with data:
 - How often did the structure/location strategy produce a trade candidate?
 - Which rejection codes dominate abstentions?
 - Which independent risk rules deny otherwise valid candidates?
-- How often are orders submitted, protected, rejected, or left in an unknown state?
+- Which broker states occur after submission, including reject/cancel/protected/reconciliation/emergency outcomes?
 - Does observed slippage/spread remain inside configured limits?
 - Does the persistent promotion gate remain blocked, and why?
 
@@ -30,9 +30,19 @@ The campaign is designed to answer operational questions with data:
 - protection verification;
 - persistent execution-uncertainty halts.
 
-A campaign also adds an operator-level **new-order budget per cycle**. Once that budget is spent, remaining instruments continue to be evaluated with `execute=False`. This preserves opportunity and rejection evidence without increasing risk.
+A campaign adds an operator-level **new-order budget per cycle**. Once that budget is spent, remaining instruments continue to be evaluated with `execute=False`. This preserves opportunity/rejection evidence without increasing risk.
 
-If a submitted order is recorded as `UNKNOWN`, the campaign stops the current cycle immediately. The engine's reconciliation/halt logic remains authoritative.
+The campaign treats these broker states as unresolved and stops the current cycle immediately by default:
+
+- `created`;
+- `acknowledged`;
+- `partially_filled`;
+- `unknown`;
+- `reconciliation_required`;
+- `closing`;
+- `emergency_close`.
+
+The engine's reconciliation/halt logic remains authoritative. A cancelled or deterministically rejected order is recorded distinctly and does not become permission to alter strategy thresholds.
 
 ## Required sequence before execution
 
@@ -59,9 +69,15 @@ Do not begin with an all-pair write campaign. Use this order:
      --max-cycles 1
    ```
 
-5. Review `campaign-evidence.jsonl`, recent decisions, cost samples, and `forex-trader promotion`.
-6. Separately verify the broker-minimum protected open/verify/close plumbing test.
-7. Only then enable OANDA Practice writes in `.env`:
+5. Review `campaign-evidence.jsonl`, recent decisions, cost samples and `forex-trader promotion`.
+6. Analyze the shadow evidence:
+
+   ```bash
+   python scripts/analyze_campaign.py campaign-evidence.jsonl
+   ```
+
+7. Separately verify the broker-minimum protected open/verify/close plumbing test.
+8. Only then enable OANDA Practice writes in `.env`:
 
    ```dotenv
    FOREX_PROVIDER=oanda
@@ -71,7 +87,7 @@ Do not begin with an all-pair write campaign. Use this order:
    OANDA_ACCOUNT_ID=...
    ```
 
-8. Start with one new order maximum per cycle:
+9. Start with one new order maximum per cycle:
 
    ```bash
    python scripts/run_practice_campaign.py \
@@ -81,7 +97,7 @@ Do not begin with an all-pair write campaign. Use this order:
      --max-cycles 12
    ```
 
-The default interval is one configured lower-timeframe bar. With `FOREX_LOWER_TIMEFRAME=M5`, 12 cycles therefore represent roughly one hour of scan cadence.
+The default interval is one configured lower-timeframe bar. With `FOREX_LOWER_TIMEFRAME=M5`, 12 cycles represent roughly one hour of scan cadence.
 
 ## Evidence output
 
@@ -90,20 +106,35 @@ Each cycle appends one JSON object to the configured JSONL evidence path. Fields
 - requested/evaluated instrument counts;
 - trade candidates and abstentions;
 - risk grants and denials;
-- submitted/filled/protected/rejected/unknown order counts;
+- submitted/filled/protected/rejected/cancelled/unknown/reconciliation/emergency counts;
+- generalized unresolved-order count;
+- complete broker `order_statuses` histogram;
 - error counts and exception classes;
 - rejection-code histogram;
 - primary risk-denial reason histogram;
 - promotion-ready snapshot;
 - start/finish timestamps.
 
-Analyze accumulated evidence with:
+The analyzer is backward-compatible with campaign evidence written before generalized unresolved-state accounting. If legacy evidence contains `orders_unknown` but no `orders_unresolved`, unresolved state is inferred conservatively.
 
-```bash
-python scripts/analyze_campaign.py campaign-evidence.jsonl
-```
+The analyzer fails closed on internally inconsistent evidence. For new evidence with an order-status histogram it verifies that status counts equal submissions and agree with explicit counters. Unknown/new abstention codes remain unclassified until their semantics are explicitly mapped and tested.
 
-The analyzer fails closed on internally inconsistent evidence and treats unknown/new abstention codes as unclassified until their semantics are explicitly mapped and tested.
+## Diagnosis precedence
+
+Operational integrity outranks strategy optimization. Diagnosis precedence is deliberately conservative:
+
+1. unresolved broker execution/protection state;
+2. provider/authentication/data errors when material;
+3. deterministic broker rejection/cancellation when material;
+4. evidence sufficiency;
+5. unclassified rejection semantics;
+6. fundamental-data bottlenecks;
+7. market-context constraints;
+8. strategy-formation constraints;
+9. portfolio-risk constraints;
+10. clean/selective operation.
+
+An emergency-close observation explicitly means dependent protection could not be verified and blocks further Practice-risk recommendations until broker protection behavior is resolved.
 
 ## How optimization should use campaign evidence
 
@@ -112,15 +143,16 @@ Do not react to low trade frequency by simply lowering `FOREX_MINIMUM_SCORE` or 
 Optimization should first classify the bottleneck:
 
 - **No location/sweep**: inspect whether the declared liquidity map is missing a legitimate pool or the universe/session is inappropriate.
-- **No structure shift/retest**: the market did not complete the setup; abstention is the intended behavior.
+- **No structure shift/retest**: the market did not complete the setup; abstention is intended behavior.
 - **Fundamental uncalibrated**: improve the point-in-time data feed rather than disabling fundamentals blindly.
 - **Spread/late entry**: execution conditions are poor; do not compensate by increasing target or risk.
 - **Correlation/margin/currency exposure**: the candidate may be good in isolation but bad for the portfolio.
-- **Broker reject**: inspect broker metadata/order constraints and request payloads.
-- **Unknown order**: reconcile broker state before any new risk.
+- **Broker reject/cancel**: inspect broker metadata, order constraints and broker response payloads.
+- **Any unresolved order/protection state**: stop new Practice risk and reconcile before further submissions.
+- **Unclassified rejection code**: map/test the semantics before drawing an optimization conclusion.
 
-A threshold or management change should only be proposed after the same hypothesis improves untouched historical validation **and** relevant Practice evidence after costs.
+A threshold, timeframe or management change should only be proposed after the same hypothesis improves untouched historical validation **and** relevant Practice evidence after costs.
 
 ## Current external blocker
 
-This execution environment does not currently expose OANDA Practice credentials. The campaign and analyzer can therefore be fully software-tested and simulation-tested here, but a real authenticated Practice campaign cannot be honestly claimed until those credentials are configured externally.
+This execution environment does not currently expose OANDA Practice credentials. The campaign and analyzer are software/simulation-tested here, but a real authenticated Practice campaign cannot be honestly claimed until those credentials are configured externally.
