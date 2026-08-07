@@ -186,6 +186,7 @@ def load_macro_file(
     path: str | Path | None,
     *,
     use_demo_defaults: bool = True,
+    as_of: datetime | None = None,
 ) -> FundamentalBook:
     if path is None and use_demo_defaults:
         data = {
@@ -194,13 +195,13 @@ def load_macro_file(
             "GBP": {"policy": "0.05", "inflation": "0.05", "growth": "0", "labor": "0", "news": "0", "confidence": "0.65"},
             "JPY": {"policy": "-0.20", "inflation": "-0.05", "growth": "-0.05", "labor": "0", "news": "0", "confidence": "0.65"},
         }
-        as_of = datetime.now(UTC)
+        snapshot_time = as_of or datetime.now(UTC)
     elif path is None:
         data = {currency: {"confidence": "0"} for currency in ("EUR", "USD", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD")}
-        as_of = datetime(2000, 1, 1, tzinfo=UTC)
+        snapshot_time = datetime(2000, 1, 1, tzinfo=UTC)
     else:
         data = json.loads(Path(path).read_text())
-        as_of = datetime.now(UTC)
+        snapshot_time = as_of or datetime.now(UTC)
     snapshots = [
         CurrencyFundamentals(
             currency=currency,
@@ -210,7 +211,7 @@ def load_macro_file(
             labor=Decimal(str(values.get("labor", 0))),
             news=Decimal(str(values.get("news", 0))),
             confidence=Decimal(str(values.get("confidence", 0))),
-            as_of=as_of,
+            as_of=snapshot_time,
         )
         for currency, values in data.items()
     ]
@@ -222,11 +223,6 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
     if errors:
         raise ValueError("; ".join(errors))
     repository = AdvancedTradingRepository(config.database_path)
-    seed_book = load_macro_file(macro_file, use_demo_defaults=config.provider is ProviderKind.SIMULATION)
-    fundamentals = PointInTimeFundamentalBook(
-        repository.macro_observations(),
-        seeds=seed_book.snapshots(),
-    )
 
     if config.provider is ProviderKind.OANDA:
         assert config.oanda_token is not None
@@ -238,12 +234,24 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
             timeout_seconds=config.oanda_timeout_seconds,
         )
         broker = ReconciliationGuardedBroker(provider, repository)
+        macro_as_of = None
     else:
         provider = SyntheticMarketData(
             direction="long",
             quote_granularity=config.lower_timeframe,
         )
         broker = SimulatedPaperBroker(provider)
+        macro_as_of = provider.anchor
+
+    seed_book = load_macro_file(
+        macro_file,
+        use_demo_defaults=config.provider is ProviderKind.SIMULATION,
+        as_of=macro_as_of,
+    )
+    fundamentals = PointInTimeFundamentalBook(
+        repository.macro_observations(),
+        seeds=seed_book.snapshots(),
+    )
     market_data = TimeframeMappedMarketData(
         provider,
         lower_timeframe=config.lower_timeframe,
