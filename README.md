@@ -4,7 +4,7 @@ A Practice-only FX research and execution platform built around explicit market 
 
 The codebase is **not** a promise of profitability and is **not** approved for live-money trading. Its purpose is to keep strategy, research, risk, OANDA Practice execution and evidence consistent enough to measure honestly.
 
-## Current v0.6.1 architecture
+## Current v0.6.2 architecture
 
 ```text
 complete configured lower/higher candles
@@ -31,7 +31,7 @@ priceBound + protected OANDA Practice order
         ↓
 reconciliation + protection verification + persistent uncertainty halt
         ↓
-cohort-fingerprinted capped Practice campaign + fail-closed diagnosis
+implementation-bound cohort-fingerprinted campaign + fail-closed diagnosis
 ```
 
 EMA, RSI and ATR are secondary diagnostics/regime features. They do not substitute for location, declared liquidity or pivot-derived structure. Spot broker tick activity is explicitly a low-confidence activity proxy and is **not** presented as centralized footprint/delta order flow.
@@ -69,9 +69,17 @@ OANDA writes are locked to Practice. The send path includes account-scoped execu
 
 Campaigns are wrappers around `TradingEngine`; they cannot bypass strategy, context, risk or execution safeguards. They cap new Practice submissions per cycle, continue the remaining universe in shadow after the budget is spent, and stop immediately on unresolved broker states.
 
-Each new evidence row now carries a `campaign_id`, deterministic secret-free `policy_fingerprint`, JSON-safe `policy_context` and campaign/universe metadata. The fingerprint covers strategy/risk/timeframe/correlation/cost-model configuration plus campaign execution policy. Credentials and account IDs are excluded.
+Each new evidence row carries a `campaign_id`, deterministic secret-free `policy_fingerprint`, JSON-safe `policy_context` and campaign/universe metadata. The fingerprint covers strategy/risk/timeframe/correlation/cost-model configuration plus campaign execution policy. Credentials and account IDs are excluded.
 
-When fundamentals are required, **Practice-execution campaigns automatically pre-filter pairs that cannot currently meet the configured fundamental-confidence gate** before spending OANDA candle/pricing requests on guaranteed abstentions. This only saves unnecessary requests; the selected pairs still pass the complete quote-time engine pipeline.
+As of v0.6.2, the same cohort identity also includes the authoritative installed implementation version. `forex_trader.__version__`, installed package metadata and FastAPI/OpenAPI all use the same single version source. For exact source-level reproducibility, set `FOREX_BUILD_REVISION` to an immutable Git SHA; GitHub Actions automatically contributes `GITHUB_SHA` when present. Different implementation versions/revisions therefore cannot silently share the same policy fingerprint.
+
+For a local Git deployment:
+
+```bash
+export FOREX_BUILD_REVISION="$(git rev-parse HEAD)"
+```
+
+When fundamentals are required, **Practice-execution campaigns automatically pre-filter pairs that cannot currently meet the configured fundamental-confidence gate** before spending OANDA candle/pricing requests on guaranteed abstentions. This only saves unnecessary requests; selected pairs still pass the complete quote-time engine pipeline.
 
 Shadow mode scans the full universe by default to diagnose missing fundamental coverage. To use only currently eligible pairs in shadow mode:
 
@@ -124,7 +132,7 @@ OANDA historical candles are midpoint OHLC. Execution stress does not reconstruc
 
 ## Installation and offline validation
 
-Target Python is 3.13; CI also verifies Python 3.11.
+Target Python is 3.13; CI also verifies Python 3.11. Package metadata derives its version from `forex_trader.__version__`, preventing build/runtime/API version drift.
 
 ```bash
 cd ~/projects
@@ -188,12 +196,12 @@ A separate gated GitHub Actions workflow exists for authenticated Practice valid
 
 ## Current validation state
 
-The exact v0.6.1 code/test head passes on Python 3.11 and Python 3.13:
+The exact v0.6.2 code/test head passes on Python 3.11 and Python 3.13:
 
-- **238 tests passed**;
-- **87.27% branch-aware coverage**;
+- **243 tests passed**;
+- **87.29% branch-aware coverage**;
 - enforced minimum coverage: **85%**;
-- install and bytecode compilation passed;
+- fresh dynamic package installation and bytecode compilation passed;
 - `pip check` dependency integrity passed;
 - secret-assignment scan passed;
 - executed offline paper-order smoke passed.
@@ -204,6 +212,6 @@ Authenticated OANDA Practice validation is still pending in this environment bec
 
 The repository does not fabricate centralized order flow from spot tick counts, substitute unlicensed scraping for production news/economic-calendar feeds, claim midpoint candle backtests equal executable quote history, grant live authority to unvalidated scale-out/runner logic, infer profitability from CI, or expose a live-money execution mode.
 
-The next evidence milestone is authenticated OANDA Practice access, followed by broker reconciliation, a broker-minimum protected round trip, current-market shadow scanning and a sustained multi-regime capped Practice campaign. Strategy changes should be evaluated as new policy fingerprints so before/after evidence cannot be mixed.
+The next evidence milestone is authenticated OANDA Practice access, followed by broker reconciliation, a broker-minimum protected round trip, current-market shadow scanning and a sustained multi-regime capped Practice campaign. Strategy or implementation changes produce new evidence identities so before/after data cannot be silently pooled.
 
 See `docs/16_IMPLEMENTATION_STATUS.md` for the runtime boundary and `docs/25_PRACTICE_CAMPAIGN.md` for campaign operations.
