@@ -8,7 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlparse
 
-from forex_trader.adapters.oanda_safe import SafeOandaPracticeClient
+from forex_trader.adapters.oanda_optimized import OptimizedOandaPracticeClient
 from forex_trader.adapters.simulator import SimulatedPaperBroker
 from forex_trader.adapters.synthetic import SyntheticMarketData
 from forex_trader.adapters.timeframe import TimeframeMappedMarketData
@@ -205,7 +205,7 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
 
     if config.provider is ProviderKind.OANDA:
         assert config.oanda_token is not None
-        provider = SafeOandaPracticeClient(
+        provider = OptimizedOandaPracticeClient(
             token=config.oanda_token,
             account_id=config.oanda_account_id,
             rest_url=config.oanda_rest_url,
