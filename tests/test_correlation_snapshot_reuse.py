@@ -64,7 +64,9 @@ def test_higher_timeframe_technical_snapshot_is_reused_by_correlation_guard() ->
         result = guard.evaluate(candidate(), positions)
 
     assert len(technical_context) == 200
-    assert result.observations >= 40
+    assert len(result.pairs) == 1
+    assert result.pairs[0].existing_instrument == "GBP_USD"
+    assert result.pairs[0].observations >= 40
     # EUR_USD correlation needs 81 bars, but the already-fetched 200-bar technical
     # snapshot satisfies it. Only the genuinely new GBP_USD history is fetched.
     assert provider.calls == [
