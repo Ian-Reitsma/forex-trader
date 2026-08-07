@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
 
@@ -21,7 +22,24 @@ class FxTradingEngine(TradingEngine):
         scope_factory = getattr(self.market_data, "evaluation_scope", None)
         scope = scope_factory() if callable(scope_factory) else nullcontext()
         with scope:
-            return super().evaluate(instrument, execute=execute)
+            trace = super().evaluate(instrument, execute=execute)
+        metadata = dict(trace.metadata)
+        selected_policy = trace.candidate.evidence.get("selected_policy")
+        if selected_policy:
+            metadata["strategy_policy"] = selected_policy
+        metadata["regime"] = trace.candidate.evidence.get("regime")
+        metadata["independent_confirmation_count"] = trace.candidate.evidence.get("independent_confirmation_count")
+        metadata["independent_source_count"] = trace.candidate.evidence.get("independent_source_count")
+        if trace.risk is not None and trace.risk.risk_policy_version:
+            metadata["risk_policy"] = trace.risk.risk_policy_version
+        account = metadata.get("account_snapshot")
+        if isinstance(account, dict) and account.get("account_id"):
+            readiness = getattr(self.repository, "execution_readiness", None)
+            if readiness is not None:
+                metadata["execution_readiness"] = readiness(str(account["account_id"]))
+        enriched = replace(trace, metadata=metadata)
+        self.repository.save_trace(enriched)
+        return enriched
 
     def _observe_latched_loss(self, account, signal_time: datetime, capital_base: Decimal) -> bool:  # type: ignore[no-untyped-def]
         observe = getattr(self.repository, "observe_risk_day", None)
