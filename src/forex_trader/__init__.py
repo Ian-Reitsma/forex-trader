@@ -1,3 +1,3 @@
-"""Forex Trader paper-trading platform."""
+"""Forex Trader Practice-only FX research and execution platform."""
 
-__version__ = "0.2.0"
+__version__ = "0.6.2"
