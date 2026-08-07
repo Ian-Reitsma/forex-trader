@@ -2,7 +2,8 @@
 
 The script never changes strategy thresholds. It can discover OANDA's real currency-pair
 universe, caps new submissions per cycle, keeps evaluating remaining instruments in shadow
-after the order budget is spent, and writes one JSONL evidence record per cycle.
+after the order budget is spent, and writes one cohort-fingerprinted JSONL evidence record
+per cycle.
 
 Before an authenticated campaign, run `forex-trader sync` and the read-only Practice probe.
 Never put OANDA credentials on the command line; provide them through the local environment.
@@ -11,9 +12,11 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import Counter
 from pathlib import Path
 
 from forex_trader.application.campaign import PracticeCampaignRunner
+from forex_trader.application.campaign_policy import campaign_policy_context, select_campaign_universe
 from forex_trader.config import AppConfig, build_engine
 from forex_trader.domain.enums import OperatingMode, ProviderKind
 from forex_trader.domain.timeframes import granularity_duration
@@ -25,6 +28,14 @@ parser.add_argument(
     "--all-currency-pairs",
     action="store_true",
     help="Use the broker-discovered currency universe instead of FOREX_INSTRUMENTS",
+)
+parser.add_argument(
+    "--eligible-only",
+    action="store_true",
+    help=(
+        "In shadow mode, pre-filter pairs that cannot meet the configured fundamental-confidence gate. "
+        "Execution campaigns apply this automatically when fundamentals are required."
+    ),
 )
 parser.add_argument("--max-instruments", type=int, default=None)
 parser.add_argument("--max-orders-per-cycle", type=int, default=1)
@@ -62,13 +73,33 @@ if args.execute:
 
 engine = build_engine(config)
 if args.all_currency_pairs:
-    instruments = engine.instrument_universe()
+    discovered = tuple(engine.instrument_universe())
+    universe_source = "broker"
 else:
-    instruments = config.instruments
-if args.max_instruments is not None:
-    instruments = instruments[: args.max_instruments]
-if not instruments:
+    discovered = tuple(config.instruments)
+    universe_source = "configured"
+if not discovered:
     raise SystemExit("campaign instrument universe is empty")
+
+fundamental_preflight = bool(config.require_fundamentals and (args.execute or args.eligible_only))
+selection = select_campaign_universe(
+    engine,
+    list(discovered),
+    require_fundamental_coverage=fundamental_preflight,
+)
+eligible = selection.selected
+if not eligible:
+    if fundamental_preflight:
+        raise SystemExit(
+            "campaign has no instruments that can meet the current fundamental-confidence gate. "
+            "Populate legitimate point-in-time fundamental data or run a shadow diagnostic without --eligible-only; "
+            "do not lower strategy/risk gates merely to manufacture trades."
+        )
+    raise SystemExit("campaign instrument universe is empty after normalization")
+
+instruments = eligible[: args.max_instruments] if args.max_instruments is not None else eligible
+if not instruments:
+    raise SystemExit("campaign instrument universe is empty after --max-instruments")
 
 interval = (
     args.interval_seconds
@@ -78,6 +109,23 @@ interval = (
 if interval < 0:
     raise SystemExit("--interval-seconds cannot be negative")
 
+exclusion_categories = Counter(_exclusion_category(reason) for reason in selection.excluded.values())
+policy_context = campaign_policy_context(engine)
+policy_context["campaign"] = {
+    "execute": bool(args.execute),
+    "max_new_orders_per_cycle": args.max_orders_per_cycle,
+    "fundamental_preflight": fundamental_preflight,
+}
+campaign_metadata = {
+    "universe_source": universe_source,
+    "discovered_count": len(selection.discovered),
+    "eligible_count": len(eligible),
+    "run_count": len(instruments),
+    "excluded_count": selection.excluded_count,
+    "fundamental_preflight": fundamental_preflight,
+    "excluded_reason_categories": dict(exclusion_categories),
+}
+
 runner = PracticeCampaignRunner(
     engine,
     instruments,
@@ -85,6 +133,8 @@ runner = PracticeCampaignRunner(
     max_new_orders_per_cycle=args.max_orders_per_cycle,
     stop_on_unresolved=True,
     evidence_path=args.evidence_path,
+    policy_context=policy_context,
+    campaign_metadata=campaign_metadata,
 )
 
 
@@ -101,13 +151,15 @@ print(
     json.dumps(
         {
             "campaign_complete": True,
+            "campaign_id": runner.campaign_id,
+            "policy_fingerprint": runner.policy_fingerprint,
             "mode": "practice-execution" if args.execute else "shadow",
             "provider": config.provider.value,
             "timeframe_policy": {
                 "lower": config.lower_timeframe,
                 "higher": config.higher_timeframe,
             },
-            "instruments": len(instruments),
+            "universe": campaign_metadata,
             "cycles": len(result.cycles),
             "evaluations": result.evaluated,
             "orders_submitted": result.submitted,
@@ -123,3 +175,14 @@ print(
         sort_keys=True,
     )
 )
+
+
+def _exclusion_category(reason: str) -> str:
+    lowered = reason.lower()
+    if "missing fundamental state" in lowered:
+        return "missing_fundamental_state"
+    if "below" in lowered and "confidence" in lowered:
+        return "low_fundamental_confidence"
+    if "preflight failed" in lowered:
+        return "fundamental_preflight_error"
+    return "other_fundamental_exclusion"
