@@ -122,7 +122,10 @@ def calibration_report(observations: Iterable[PredictionObservation], *, bin_cou
     for index in range(bin_count):
         lower = width * Decimal(index)
         upper = Decimal("1") if index == bin_count - 1 else width * Decimal(index + 1)
-        selected = [item for item in values if lower <= item.probability <= upper if index == bin_count - 1 else lower <= item.probability < upper]
+        if index == bin_count - 1:
+            selected = [item for item in values if lower <= item.probability <= upper]
+        else:
+            selected = [item for item in values if lower <= item.probability < upper]
         if not selected:
             continue
         mean_probability = sum((item.probability for item in selected), Decimal("0")) / Decimal(len(selected))
@@ -195,11 +198,19 @@ def expected_net_r(
     adverse_selection_r: Decimal = Decimal("0"),
     operational_uncertainty_r: Decimal = Decimal("0"),
 ) -> Decimal:
-    costs = spread_cost_r + slippage_cost_r + commission_cost_r + financing_cost_r + adverse_selection_r + operational_uncertainty_r
-    if any(value < 0 for value in (expected_gain_r, expected_loss_r, *(
-        spread_cost_r, slippage_cost_r, commission_cost_r, financing_cost_r, adverse_selection_r, operational_uncertainty_r
-    ))):
+    values = (
+        expected_gain_r,
+        expected_loss_r,
+        spread_cost_r,
+        slippage_cost_r,
+        commission_cost_r,
+        financing_cost_r,
+        adverse_selection_r,
+        operational_uncertainty_r,
+    )
+    if any(value < 0 for value in values):
         raise ValueError("gain/loss magnitudes and costs cannot be negative")
+    costs = sum(values[2:], Decimal("0"))
     return estimate.p_target_before_stop * expected_gain_r - estimate.p_stop_before_target * expected_loss_r - costs
 
 
