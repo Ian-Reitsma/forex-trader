@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from forex_trader.domain.enums import DecisionDisposition, Direction
 from forex_trader.domain.models import Candle, TradeCandidate
-from forex_trader.research.management import HALF_AT_ONE_R_RUNNER, STRUCTURAL_SINGLE_TARGET
+from forex_trader.research.management import HALF_AT_ONE_R_RUNNER
 from forex_trader.research.order_types import OrderStyle, evaluate_entry_style
 from forex_trader.research.phase_d import (
     PairedVariantComparison,
