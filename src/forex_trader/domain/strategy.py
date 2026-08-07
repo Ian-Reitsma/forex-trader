@@ -13,6 +13,14 @@ from forex_trader.domain.setup import SetupState
 
 
 class SignalFusionPolicy:
+    """Apply independent evidence gates and produce a non-probabilistic quality ranking.
+
+    `TradeCandidate.score` is an ordering/eligibility score, not a calibrated probability
+    of profit. Fundamentals have independent freshness/confidence/directional-conflict
+    authority. They are preserved as evidence but are not mixed into the technical quality
+    score with an arbitrary fixed percentage. Execution cost can only reduce the score.
+    """
+
     def __init__(
         self,
         *,
@@ -94,17 +102,28 @@ class SignalFusionPolicy:
         if self.require_fundamentals and directional_fundamental < -self.maximum_fundamental_conflict:
             return self._abstain(technical, fundamental, "FUNDAMENTAL_CONFLICT", "fundamental context conflicts with direction", reasons)
 
-        if self.require_fundamentals:
-            normalized = max(Decimal("0"), min(Decimal("1"), (directional_fundamental + Decimal("1")) / Decimal("2")))
-            effective_fundamental = normalized * max(Decimal("0"), min(Decimal("1"), fundamental.confidence))
-            score = technical.score * Decimal("0.80") + effective_fundamental * Decimal("0.20")
-        else:
-            effective_fundamental = Decimal("0")
-            score = technical.score
-        score -= min(Decimal("0.08"), (spread_pips / spread_limit) * Decimal("0.04"))
-        score = max(Decimal("0"), min(Decimal("1"), score))
+        effective_fundamental = _effective_fundamental(
+            directional_fundamental,
+            fundamental.confidence,
+        ) if self.require_fundamentals else Decimal("0")
+        # Quality ranking is structure/location evidence only. Fundamental context has
+        # already exercised its independent confidence/conflict gates above. Do not turn
+        # two heterogeneous evidence families into a fake probability using fixed weights.
+        score = technical.score
+        spread_penalty = min(
+            Decimal("0.08"),
+            (spread_pips / spread_limit) * Decimal("0.04"),
+        )
+        score = max(Decimal("0"), min(Decimal("1"), score - spread_penalty))
         if score < self.minimum_score:
-            return self._abstain(technical, fundamental, "SCORE_BELOW_POLICY", f"combined quality {score:.3f} is below {self.minimum_score}", reasons, score=score)
+            return self._abstain(
+                technical,
+                fundamental,
+                "SCORE_BELOW_POLICY",
+                f"quality ranking {score:.3f} is below {self.minimum_score}",
+                reasons,
+                score=score,
+            )
 
         execution_key = _execution_key(
             technical.instrument,
@@ -113,7 +132,13 @@ class SignalFusionPolicy:
             technical.setup_family,
             technical.zone_id or "no-zone",
         )
-        reasons.extend((f"executable structural reward/risk={reward_risk:.2f}", f"combined quality {score:.3f} passed"))
+        reasons.extend(
+            (
+                f"executable structural reward/risk={reward_risk:.2f}",
+                f"quality ranking {score:.3f} passed; score is not a win probability",
+                "fundamental context passed independent confidence/conflict gates and is not blended into score",
+            )
+        )
         return TradeCandidate(
             candidate_id=uuid4(),
             instrument=technical.instrument,
@@ -132,7 +157,12 @@ class SignalFusionPolicy:
             setup_family=technical.setup_family,
             setup_state=technical.setup_state,
             evidence={
+                "score_semantics": "quality_ranking_not_probability",
+                "score_inputs": "technical_structure_location_minus_spread_penalty",
+                "spread_penalty": spread_penalty,
                 "raw_fundamental_differential": fundamental.differential,
+                "directional_fundamental": directional_fundamental,
+                "fundamental_gate_score": effective_fundamental,
                 "zone_id": technical.zone_id,
                 "zone_quality": technical.zone_quality,
                 "liquidity_kind": technical.liquidity_kind,
@@ -187,9 +217,14 @@ class SignalFusionPolicy:
     ) -> TradeCandidate:
         reasons.append(f"{code}: {reason}")
         preserved_score = technical.score if score is None else score
-        directional = fundamental.differential if technical.direction is Direction.LONG else -fundamental.differential if technical.direction is Direction.SHORT else Decimal("0")
-        normalized = max(Decimal("0"), min(Decimal("1"), (directional + Decimal("1")) / Decimal("2")))
-        effective_fundamental = normalized * max(Decimal("0"), min(Decimal("1"), fundamental.confidence))
+        directional = (
+            fundamental.differential
+            if technical.direction is Direction.LONG
+            else -fundamental.differential
+            if technical.direction is Direction.SHORT
+            else Decimal("0")
+        )
+        effective_fundamental = _effective_fundamental(directional, fundamental.confidence)
         return TradeCandidate(
             candidate_id=uuid4(),
             instrument=technical.instrument,
@@ -209,7 +244,9 @@ class SignalFusionPolicy:
             setup_state=technical.setup_state,
             rejection_code=code,
             evidence={
+                "score_semantics": "quality_ranking_not_probability",
                 "raw_fundamental_differential": fundamental.differential,
+                "fundamental_gate_score": effective_fundamental,
                 "zone_id": technical.zone_id,
                 "zone_quality": technical.zone_quality,
                 "liquidity_kind": technical.liquidity_kind,
@@ -219,6 +256,14 @@ class SignalFusionPolicy:
             },
             expires_at=technical.signal_time + timedelta(minutes=10),
         )
+
+
+def _effective_fundamental(directional: Decimal, confidence: Decimal) -> Decimal:
+    normalized = max(
+        Decimal("0"),
+        min(Decimal("1"), (directional + Decimal("1")) / Decimal("2")),
+    )
+    return normalized * max(Decimal("0"), min(Decimal("1"), confidence))
 
 
 def _validate_instruments(technical: TechnicalAssessment, fundamental: FundamentalAssessment, quote: Quote) -> None:
