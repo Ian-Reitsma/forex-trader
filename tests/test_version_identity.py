@@ -13,7 +13,7 @@ from forex_trader.application.campaign_policy import (
 
 
 def test_runtime_and_installed_distribution_versions_match() -> None:
-    assert __version__ == "0.6.2"
+    assert __version__ == "0.6.4"
     assert distribution_version("forex-trader") == __version__
 
 

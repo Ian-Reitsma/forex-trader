@@ -50,7 +50,9 @@ Changing a strategy/risk/timeframe/campaign policy produces a different fingerpr
 
 ## Required sequence before execution
 
-1. Configure OANDA Practice credentials outside Git/chat.
+The sequence is intentionally progressive. A later stage must never be used to skip an earlier failure.
+
+1. Configure the OANDA Practice token outside Git. Read-only operation can discover the authorized account from the token; broker writes additionally require an explicit `OANDA_ACCOUNT_ID`.
 2. Run the read-only probe:
 
    ```bash
@@ -63,19 +65,20 @@ Changing a strategy/risk/timeframe/campaign policy produces a different fingerpr
    forex-trader sync
    ```
 
-4. Run one all-pair shadow cycle:
+4. Run one all-pair shadow cycle and analyze the exact policy cohort:
 
    ```bash
    python scripts/run_practice_campaign.py \
      --all-currency-pairs \
      --max-cycles 1
+   python scripts/analyze_campaign.py campaign-evidence.jsonl
    ```
 
-5. Review `campaign-evidence.jsonl`, decisions, cost samples and `forex-trader promotion`.
-6. Analyze that policy cohort.
-7. Separately verify the broker-minimum protected open/verify/close round trip.
-8. Only then enable OANDA Practice writes.
-9. Begin with at most one new order per cycle.
+5. Review provider failures, rejection/risk histograms, cost samples, unresolved states and `forex-trader promotion`. Do not tune strategy thresholds merely to increase entry frequency.
+6. Run the separately gated broker-minimum protected open/verify/close round trip. A known fill is always sent through the close path even when protection verification fails; an unverified close is a critical stop condition.
+7. Reconcile broker state again after the round trip.
+8. Only then enable OANDA Practice writes for the strategy campaign.
+9. Begin with at most one new order per cycle and analyze the resulting cohort before changing thresholds, timeframes or trade management.
 
 ```dotenv
 FOREX_PROVIDER=oanda
@@ -94,6 +97,16 @@ python scripts/run_practice_campaign.py \
 ```
 
 The default interval is one configured lower-timeframe bar. With `FOREX_LOWER_TIMEFRAME=M5`, 12 cycles represent roughly one hour of scan cadence.
+
+## Manual GitHub Actions path
+
+The `OANDA Practice Validation` workflow implements the same sequence as an operator-driven `workflow_dispatch` flow on `main`:
+
+- `read-only`: token required, account ID optional; probe -> sync -> one all-pair shadow campaign -> analyzer -> artifact.
+- `round-trip`: explicit account ID and `confirm_practice_write=true` required; the software gate and read-only path run before the protected minimum-size round trip, followed by reconciliation.
+- `campaign`: the same gates plus the protected round trip run before the capped strategy campaign; campaign evidence, analyzer output and promotion status are uploaded together.
+
+Authenticated validation jobs are serialized. Campaign stage inputs are bounded to 1–24 cycles and 1–3 new orders per cycle; one order per cycle is the initial recommended cap. `FOREX_BUILD_REVISION` is set to the workflow SHA so evidence is tied to the exact source build.
 
 ## Evidence output
 
@@ -150,6 +163,10 @@ Do not respond to low trade frequency by blindly lowering `FOREX_MINIMUM_SCORE`,
 
 A threshold, timeframe or management change should only be proposed when the hypothesis improves untouched historical validation and relevant after-cost Practice evidence. The resulting campaign must have a new policy fingerprint so before/after evidence remains separable.
 
-## Current external blocker
+## Authenticated-validation boundary
 
-This execution environment does not currently expose OANDA Practice credentials. Campaign/cohort/analyzer behavior can be software- and simulation-tested here, but a real authenticated Practice campaign cannot be honestly claimed until those credentials are configured externally.
+Software CI can prove implementation invariants but cannot substitute for a real OANDA Practice response. The repository therefore never claims authenticated success simply because the test suite is green.
+
+The only remaining external requirement for the read-only stage is to expose the Practice token to the runtime as `OANDA_API_TOKEN` (or the same-named GitHub Actions secret). Write stages additionally require the explicit Practice `OANDA_ACCOUNT_ID` and the workflow write confirmation. Neither credential is stored in campaign evidence, policy fingerprints, source files or workflow artifacts.
+
+After the authenticated evidence exists, optimization priority is determined by the analyzer: provider/data coverage, setup frequency, execution behavior, portfolio constraints or actual strategy expectancy—not arbitrary EMA/RSI retuning.

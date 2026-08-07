@@ -8,7 +8,8 @@ from forex_trader.adapters.synthetic import SyntheticMarketData
 from forex_trader.adapters.timeframe import TimeframeMappedMarketData
 from forex_trader.domain.correlation_risk import CorrelationRiskGuard
 from forex_trader.domain.enums import DecisionDisposition, Direction
-from forex_trader.domain.models import OpenPosition, TradeCandidate
+from forex_trader.domain.models import TradeCandidate
+from forex_trader.domain.portfolio import OpenPosition
 
 
 class CountingProvider:
@@ -63,10 +64,11 @@ def test_higher_timeframe_technical_snapshot_is_reused_by_correlation_guard() ->
         result = guard.evaluate(candidate(), positions)
 
     assert len(technical_context) == 200
-    assert result.observations >= 40
-    # EUR_USD correlation needs 81 bars, but the already-fetched 200-bar technical
+    assert len(result.pairs) == 1
+    assert result.pairs[0].observations >= 40
+    # EUR_USD correlation needs 80 bars, but the already-fetched 200-bar technical
     # snapshot satisfies it. Only the genuinely new GBP_USD history is fetched.
     assert provider.calls == [
         ("EUR_USD", "H1", 200),
-        ("GBP_USD", "H1", 81),
+        ("GBP_USD", "H1", 80),
     ]
