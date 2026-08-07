@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from random import Random
 
 from forex_trader.domain.instruments import pip_size_for
 from forex_trader.domain.models import Candle, Quote
 from forex_trader.domain.timeframes import granularity_duration
+
+DEFAULT_SYNTHETIC_ANCHOR = datetime(2025, 1, 15, 19, 0, tzinfo=UTC)
 
 
 class SyntheticMarketData:
@@ -17,11 +19,10 @@ class SyntheticMarketData:
     configured interval before the anchor. This keeps no-lookahead signal timestamps,
     quotes, and point-in-time fundamentals coherent across M5..M30 and H1/H4 policies.
 
-    The default anchor is the next weekday at 19:00 UTC. Earlier versions rounded wall
-    clock time to the next hour, which made the synthetic setup change meaning when CI
-    crossed a session boundary (for example 19:59 -> 20:00 UTC). A test provider must be
-    deterministic with respect to market/session structure, not merely deterministic
-    conditional on the hour at which pytest happened to start.
+    The default uses a fixed weekday/New-York-continuation logical clock. Synthetic market
+    behavior must not change merely because CI started at a different wall-clock hour or
+    crossed a weekend. Callers that need another session pass an explicit anchor. Demo
+    fundamentals are seeded at this same logical time by runtime configuration.
 
     Quotes reuse the deepest cached series for the configured lower granularity whenever
     one exists. Runtime may request more than 200 lower bars to preserve full session/day
@@ -41,8 +42,7 @@ class SyntheticMarketData:
         self.direction = direction
         self.quote_granularity = quote_granularity.upper()
         granularity_duration(self.quote_granularity)
-        if anchor is None:
-            anchor = _stable_future_anchor(datetime.now(UTC))
+        anchor = DEFAULT_SYNTHETIC_ANCHOR if anchor is None else anchor
         if anchor.tzinfo is None:
             raise ValueError("synthetic anchor must be timezone-aware")
         self.anchor = anchor.astimezone(UTC)
@@ -142,16 +142,3 @@ class SyntheticMarketData:
             ]
         for offset, (open_price, close, high, low) in enumerate(values):
             candles[-14 + offset] = Candle(times[offset], open_price, high, low, close, vol + offset * 20)
-
-
-def _stable_future_anchor(now: datetime) -> datetime:
-    """Choose a future New-York-continuation anchor on a weekday."""
-    if now.tzinfo is None:
-        raise ValueError("synthetic clock must be timezone-aware")
-    instant = now.astimezone(UTC)
-    candidate = datetime.combine(instant.date(), time(19, 0), tzinfo=UTC)
-    if candidate <= instant:
-        candidate += timedelta(days=1)
-    while candidate.weekday() >= 5:
-        candidate += timedelta(days=1)
-    return candidate
