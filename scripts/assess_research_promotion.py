@@ -59,10 +59,13 @@ def _required_decimal(value: object, name: str) -> Decimal:
     return Decimal(str(value))
 
 
-def _canonical_json_hash(path: Path) -> str:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+def _canonical_payload_hash(payload: object) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _canonical_json_hash(path: Path) -> str:
+    return _canonical_payload_hash(json.loads(path.read_text(encoding="utf-8")))
 
 
 def _load_ablations(path: Path | None, *, dataset_id: str) -> tuple[AblationEvidence, ...]:
@@ -91,21 +94,41 @@ def _load_ablations(path: Path | None, *, dataset_id: str) -> tuple[AblationEvid
             )
         )
     if any(item.dataset_id != dataset_id for item in results):
-        # Keep the mismatch visible to the library assessment as a hard failure; this
-        # early message only makes accidental file mixups easier to diagnose.
         print("warning: one or more ablations reference a different immutable dataset_id")
     return tuple(results)
 
 
-def _load_replay(manifest: Path | None, result_paths: list[Path]) -> ReplayReproducibilityEvidence | None:
+def _load_replay(
+    manifest: Path | None,
+    result_paths: list[Path],
+    *,
+    expected_setup: str,
+    expected_policy_fingerprint: str,
+    expected_dataset_id: str,
+) -> ReplayReproducibilityEvidence | None:
     if manifest is None and not result_paths:
         return None
     if manifest is None or not result_paths:
         raise SystemExit("replay evidence requires --replay-manifest and at least one --replay-result")
-    manifest_hash = _canonical_json_hash(manifest)
+    result_hashes: list[str] = []
+    for path in result_paths:
+        payload = _load_json_object(path)
+        policy = _required_text(payload.get("policy_fingerprint"), f"{path}:policy_fingerprint")
+        setup = _required_text(payload.get("setup_family_filter"), f"{path}:setup_family_filter")
+        dataset = _required_mapping(payload.get("dataset"), f"{path}:dataset")
+        dataset_id = _required_text(dataset.get("dataset_id"), f"{path}:dataset.dataset_id")
+        if policy != expected_policy_fingerprint:
+            raise SystemExit(
+                f"replay result {path} policy fingerprint mismatch: {policy} != {expected_policy_fingerprint}"
+            )
+        if setup != expected_setup:
+            raise SystemExit(f"replay result {path} setup mismatch: {setup} != {expected_setup}")
+        if dataset_id != expected_dataset_id:
+            raise SystemExit(f"replay result {path} dataset mismatch: {dataset_id} != {expected_dataset_id}")
+        result_hashes.append(_canonical_payload_hash(payload))
     return ReplayReproducibilityEvidence(
-        manifest_hash=manifest_hash,
-        result_hashes=tuple(_canonical_json_hash(path) for path in result_paths),
+        manifest_hash=_canonical_json_hash(manifest),
+        result_hashes=tuple(result_hashes),
     )
 
 
@@ -131,12 +154,10 @@ def _load_phase_d(path: Path | None) -> PhaseDHoldoutEvidence | None:
         variant.get("lower_confidence_delta_r"),
         "holdout.variants[0].lower_confidence_delta_r",
     )
-    recommendation = payload.get("holdout_recommendation")
-    recommendation_mapping = _required_mapping(recommendation, "holdout_recommendation")
-    confirmed = bool(recommendation_mapping.get("eligible"))
+    recommendation = _required_mapping(payload.get("holdout_recommendation"), "holdout_recommendation")
     return PhaseDHoldoutEvidence(
         policy_name=policy_name,
-        confirmed=confirmed,
+        confirmed=bool(recommendation.get("eligible")),
         holdout_scenarios=holdout_scenarios,
         lower_confidence_delta_r=lower,
     )
@@ -170,16 +191,26 @@ def main() -> None:
     args = parser.parse_args()
 
     report = _load_json_object(args.research_report)
+    setup_family = args.setup_family.strip()
+    if not setup_family:
+        raise SystemExit("--setup-family cannot be empty")
+    policy_fingerprint = _required_text(report.get("policy_fingerprint"), "policy_fingerprint")
     dataset = _required_mapping(report.get("dataset"), "dataset")
     dataset_id = _required_text(dataset.get("dataset_id"), "dataset.dataset_id")
     decisions = load_decision_evidence(args.decision_evidence)
     ablations = _load_ablations(args.ablation_evidence, dataset_id=dataset_id)
-    replay = _load_replay(args.replay_manifest, list(args.replay_result))
+    replay = _load_replay(
+        args.replay_manifest,
+        list(args.replay_result),
+        expected_setup=setup_family,
+        expected_policy_fingerprint=policy_fingerprint,
+        expected_dataset_id=dataset_id,
+    )
     phase_d = _load_phase_d(args.phase_d_report)
     evidence = evidence_from_research_report(
         report,
         decisions,
-        setup_family=args.setup_family,
+        setup_family=setup_family,
         dataset_id=dataset_id,
         ablations=ablations,
         replay=replay,
