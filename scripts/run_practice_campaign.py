@@ -2,8 +2,9 @@
 
 The script never changes strategy thresholds. It can discover OANDA's real currency-pair
 universe, caps new submissions per cycle, keeps evaluating remaining instruments in shadow
-after the order budget is spent, writes cohort-fingerprinted cycle aggregates, and can write
-one point-in-time decision evidence row per instrument evaluation.
+after the order budget is spent, writes cohort-fingerprinted cycle aggregates, can write
+one point-in-time decision evidence row per instrument evaluation, and can capture six
+paired research ablations from each exact shadow decision snapshot.
 
 Before an authenticated campaign, run `forex-trader sync` and the read-only Practice probe.
 Never put OANDA credentials on the command line; provide them through the local environment.
@@ -69,6 +70,15 @@ parser.add_argument(
     default=None,
     help="Optional per-instrument point-in-time decision JSONL evidence",
 )
+parser.add_argument(
+    "--ablation-evidence-path",
+    type=Path,
+    default=None,
+    help=(
+        "Optional shadow-only paired ablation JSONL. Emits full/no-fundamentals/no-flow/"
+        "no-session/no-zone-quality/no-retest rows from one frozen production signal snapshot."
+    ),
+)
 args = parser.parse_args()
 
 config = AppConfig.from_env()
@@ -81,6 +91,8 @@ if args.max_orders_per_cycle < 0:
     raise SystemExit("--max-orders-per-cycle cannot be negative")
 if args.max_cycles < 1:
     raise SystemExit("--max-cycles must be positive")
+if args.execute and args.ablation_evidence_path is not None:
+    raise SystemExit("--ablation-evidence-path is shadow-only and cannot be combined with --execute")
 if args.execute:
     if config.provider is not ProviderKind.OANDA:
         raise SystemExit("--execute campaign is reserved for the OANDA Practice provider")
@@ -133,6 +145,7 @@ policy_context["campaign"] = {
     "execute": bool(args.execute),
     "max_new_orders_per_cycle": args.max_orders_per_cycle,
     "fundamental_preflight": fundamental_preflight,
+    "paired_ablation_capture": args.ablation_evidence_path is not None,
 }
 campaign_metadata = {
     "universe_source": universe_source,
@@ -141,6 +154,7 @@ campaign_metadata = {
     "run_count": len(instruments),
     "excluded_count": selection.excluded_count,
     "fundamental_preflight": fundamental_preflight,
+    "paired_ablation_capture": args.ablation_evidence_path is not None,
     "excluded_reason_categories": dict(exclusion_categories),
 }
 
@@ -152,6 +166,7 @@ runner = PracticeCampaignRunner(
     stop_on_unresolved=True,
     evidence_path=args.evidence_path,
     decision_evidence_path=args.decision_evidence_path,
+    ablation_evidence_path=args.ablation_evidence_path,
     policy_context=policy_context,
     campaign_metadata=campaign_metadata,
 )
@@ -184,11 +199,16 @@ print(
             "orders_submitted": result.submitted,
             "unknown_orders": result.unknown,
             "unresolved_orders": result.unresolved,
+            "ablation_snapshots": result.ablation_snapshots,
+            "ablation_rows": result.ablation_rows,
+            "ablation_errors": result.ablation_errors,
             "evidence_path": str(args.evidence_path),
             "decision_evidence_path": str(args.decision_evidence_path) if args.decision_evidence_path else None,
+            "ablation_evidence_path": str(args.ablation_evidence_path) if args.ablation_evidence_path else None,
             "note": (
                 "Trade frequency is an observed outcome. The campaign does not lower strategy/risk gates "
-                "to manufacture fills. Any unresolved broker state stops further campaign risk."
+                "to manufacture fills. Paired ablations are shadow-only and cannot authorize broker writes. "
+                "Any unresolved broker state stops further campaign risk."
             ),
         },
         indent=2,
