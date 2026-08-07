@@ -6,8 +6,10 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Mapping
+from uuid import uuid4
 
+from forex_trader.application.campaign_policy import campaign_policy_context, campaign_policy_fingerprint
 from forex_trader.application.engine import TradingEngine
 from forex_trader.domain.enums import DecisionDisposition, OrderStatus, RiskDisposition
 
@@ -25,6 +27,10 @@ _UNRESOLVED_ORDER_STATUSES = {
 
 @dataclass(frozen=True, slots=True)
 class CampaignCycleReport:
+    campaign_id: str
+    policy_fingerprint: str
+    policy_context: dict[str, object]
+    campaign_metadata: dict[str, object]
     cycle: int
     started_at: datetime
     finished_at: datetime
@@ -86,8 +92,8 @@ class PracticeCampaignRunner:
     The campaign never modifies strategy/risk thresholds. It caps new submissions per
     cycle, keeps evaluating the remaining universe in shadow after the submission budget
     is spent, records all broker order states, and stops immediately when a broker outcome
-    is unresolved. TradingEngine remains the only component allowed to submit orders and
-    retains execution locks, send-time revalidation, reconciliation and persistent halts.
+    is unresolved. Every evidence row carries a deterministic policy fingerprint so
+    incompatible strategy/risk cohorts cannot be pooled silently during analysis.
     """
 
     def __init__(
@@ -99,18 +105,29 @@ class PracticeCampaignRunner:
         max_new_orders_per_cycle: int = 1,
         stop_on_unresolved: bool = True,
         evidence_path: str | Path | None = None,
+        campaign_id: str | None = None,
+        policy_context: Mapping[str, object] | None = None,
+        campaign_metadata: Mapping[str, object] | None = None,
     ) -> None:
         normalized = tuple(dict.fromkeys(item.strip().upper() for item in instruments if item.strip()))
         if not normalized:
             raise ValueError("campaign requires at least one instrument")
         if max_new_orders_per_cycle < 0:
             raise ValueError("max_new_orders_per_cycle cannot be negative")
+        resolved_campaign_id = (campaign_id or uuid4().hex).strip()
+        if not resolved_campaign_id:
+            raise ValueError("campaign_id cannot be empty")
+        context = dict(policy_context) if policy_context is not None else _safe_policy_context(engine)
         self.engine = engine
         self.instruments = normalized
         self.execute = execute
         self.max_new_orders_per_cycle = max_new_orders_per_cycle
         self.stop_on_unresolved = stop_on_unresolved
         self.evidence_path = Path(evidence_path) if evidence_path is not None else None
+        self.campaign_id = resolved_campaign_id
+        self.policy_context = context
+        self.policy_fingerprint = campaign_policy_fingerprint(context)
+        self.campaign_metadata = dict(campaign_metadata or {})
 
     def run_cycle(self, cycle: int = 1) -> CampaignCycleReport:
         if cycle < 1:
@@ -194,6 +211,10 @@ class PracticeCampaignRunner:
 
         promotion_ready = _promotion_ready(self.engine)
         report = CampaignCycleReport(
+            campaign_id=self.campaign_id,
+            policy_fingerprint=self.policy_fingerprint,
+            policy_context=dict(self.policy_context),
+            campaign_metadata=dict(self.campaign_metadata),
             cycle=cycle,
             started_at=started,
             finished_at=datetime.now(UTC),
@@ -255,6 +276,17 @@ class PracticeCampaignRunner:
         with self.evidence_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(report.to_jsonable(), sort_keys=True))
             handle.write("\n")
+
+
+def _safe_policy_context(engine: object) -> dict[str, object]:
+    try:
+        return campaign_policy_context(engine)  # type: ignore[arg-type]
+    except (AttributeError, TypeError):
+        return {
+            "schema": "campaign-policy-v1",
+            "engine_class": type(engine).__name__,
+            "policy_introspection": "unavailable",
+        }
 
 
 def _primary_reason(reasons: tuple[str, ...]) -> str:
