@@ -115,16 +115,55 @@ def report() -> dict[str, object]:
     }
 
 
-def ablations(*, dataset_id: str = DATASET, harmful: str | None = None) -> tuple[AblationEvidence, ...]:
+def ablations(
+    *,
+    dataset_id: str = DATASET,
+    harmful: str | None = None,
+    uncertain: str | None = None,
+    raw_only: bool = False,
+    sample_size: int = 50,
+    full_expectancy_r: Decimal = Decimal("0.25"),
+) -> tuple[AblationEvidence, ...]:
     rows = []
     for name in ABLATION_NAMES:
+        ablated = (
+            Decimal("0.35")
+            if name == harmful
+            else Decimal("0.29")
+            if name == uncertain
+            else Decimal("0.20")
+        )
+        kwargs: dict[str, object] = {}
+        if not raw_only:
+            if name == harmful:
+                lower, upper = Decimal("-0.14"), Decimal("-0.07")
+                wins, losses, ties = 10, 35, 5
+            elif name == uncertain:
+                lower, upper = Decimal("-0.08"), Decimal("0.01")
+                wins, losses, ties = 20, 25, 5
+            else:
+                lower, upper = Decimal("0.01"), Decimal("0.09")
+                wins, losses, ties = 30, 15, 5
+            if sample_size != 50:
+                wins, losses, ties = sample_size, 0, 0
+            kwargs = {
+                "lower_confidence_component_increment_r": lower,
+                "upper_confidence_component_increment_r": upper,
+                "paired_wins": wins,
+                "paired_losses": losses,
+                "paired_ties": ties,
+                "confidence": Decimal("0.90"),
+                "bootstrap_iterations": 2000,
+                "bootstrap_seed": 20260807,
+            }
         rows.append(
             AblationEvidence(
                 name=name,
-                full_expectancy_r=Decimal("0.25"),
-                ablated_expectancy_r=Decimal("0.35") if name == harmful else Decimal("0.20"),
-                sample_size=50,
+                full_expectancy_r=full_expectancy_r,
+                ablated_expectancy_r=ablated,
+                sample_size=sample_size,
                 dataset_id=dataset_id,
+                **kwargs,  # type: ignore[arg-type]
             )
         )
     return tuple(rows)
@@ -174,7 +213,7 @@ def test_complete_positive_bundle_can_only_nominate_shadow_candidate() -> None:
     assert assessment.practice_authority_changed is False
 
 
-def test_ablation_that_materially_beats_full_policy_rejects_bundle() -> None:
+def test_confidently_harmful_component_rejects_bundle() -> None:
     assessment = assess_research_promotion(
         build_evidence(
             ablation_rows=ablations(harmful="no_fundamentals"),
@@ -182,7 +221,30 @@ def test_ablation_that_materially_beats_full_policy_rejects_bundle() -> None:
         )
     )
     assert assessment.disposition is ResearchPromotionDisposition.REJECTED
-    assert any("no_fundamentals" in item and "outperforms" in item for item in assessment.hard_failures)
+    assert any("no_fundamentals" in item and "confidently harmful" in item for item in assessment.hard_failures)
+
+
+def test_uncertain_material_harm_is_insufficient_not_rejected() -> None:
+    assessment = assess_research_promotion(
+        build_evidence(
+            ablation_rows=ablations(uncertain="no_flow"),
+            replay_evidence=replay("same", "same"),
+        )
+    )
+    assert assessment.disposition is ResearchPromotionDisposition.INSUFFICIENT_EVIDENCE
+    assert assessment.hard_failures == ()
+    assert any(item.startswith("ablation_uncertainty:no_flow") for item in assessment.missing_evidence)
+
+
+def test_raw_mean_only_ablation_artifact_is_insufficient() -> None:
+    assessment = assess_research_promotion(
+        build_evidence(
+            ablation_rows=ablations(raw_only=True),
+            replay_evidence=replay("same", "same"),
+        )
+    )
+    assert assessment.disposition is ResearchPromotionDisposition.INSUFFICIENT_EVIDENCE
+    assert all(f"ablation_uncertainty:{name}" in assessment.missing_evidence for name in ABLATION_NAMES)
 
 
 def test_ablation_dataset_mismatch_rejects_bundle() -> None:
@@ -194,6 +256,26 @@ def test_ablation_dataset_mismatch_rejects_bundle() -> None:
     )
     assert assessment.disposition is ResearchPromotionDisposition.REJECTED
     assert any("dataset_id mismatch" in item for item in assessment.hard_failures)
+
+
+def test_ablation_denominator_or_full_baseline_mismatch_rejects_bundle() -> None:
+    wrong_count = assess_research_promotion(
+        build_evidence(
+            ablation_rows=ablations(sample_size=49),
+            replay_evidence=replay("same", "same"),
+        )
+    )
+    assert wrong_count.disposition is ResearchPromotionDisposition.REJECTED
+    assert any("sample_size 49 != untouched_test_trades 50" in item for item in wrong_count.hard_failures)
+
+    wrong_full = assess_research_promotion(
+        build_evidence(
+            ablation_rows=ablations(full_expectancy_r=Decimal("0.24")),
+            replay_evidence=replay("same", "same"),
+        )
+    )
+    assert wrong_full.disposition is ResearchPromotionDisposition.REJECTED
+    assert any("full_expectancy_r 0.24" in item for item in wrong_full.hard_failures)
 
 
 def test_nondeterministic_replay_rejects_bundle() -> None:
@@ -255,6 +337,18 @@ def test_report_must_be_isolated_to_requested_setup_family() -> None:
             [decision(index) for index in range(10)],
             setup_family=SETUP,
             dataset_id=DATASET,
+        )
+
+
+def test_partial_uncertainty_contract_is_rejected_at_construction() -> None:
+    with pytest.raises(ValueError, match="supplied together"):
+        AblationEvidence(
+            name="no_flow",
+            full_expectancy_r=Decimal("0.25"),
+            ablated_expectancy_r=Decimal("0.20"),
+            sample_size=50,
+            dataset_id=DATASET,
+            lower_confidence_component_increment_r=Decimal("0.01"),
         )
 
 
