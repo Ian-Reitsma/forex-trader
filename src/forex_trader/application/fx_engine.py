@@ -1,14 +1,27 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime
 from decimal import Decimal
 
 from forex_trader.application.engine import TradingEngine
+from forex_trader.domain.models import DecisionTrace
 from forex_trader.domain.risk_day import fx_risk_day_key
 
 
 class FxTradingEngine(TradingEngine):
-    """Deployable FX engine with a 5 p.m. New York persistent risk-day boundary."""
+    """Deployable FX engine with FX risk-day and evaluation-snapshot semantics."""
+
+    def evaluate(self, instrument: str, *, execute: bool = False) -> DecisionTrace:
+        """Evaluate one instrument inside an optional completed-candle snapshot scope.
+
+        The market-data adapter may reuse completed candles inside this one decision. Live
+        quotes, account state and broker writes are deliberately outside that cache.
+        """
+        scope_factory = getattr(self.market_data, "evaluation_scope", None)
+        scope = scope_factory() if callable(scope_factory) else nullcontext()
+        with scope:
+            return super().evaluate(instrument, execute=execute)
 
     def _observe_latched_loss(self, account, signal_time: datetime, capital_base: Decimal) -> bool:  # type: ignore[no-untyped-def]
         observe = getattr(self.repository, "observe_risk_day", None)
