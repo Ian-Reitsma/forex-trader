@@ -107,8 +107,9 @@ class RegimeAwareSignalFusionPolicy(SignalFusionPolicy):
             "independent_confirmation_count": confirmations.independent_confirmation_count,
             "independent_source_count": confirmations.independent_source_count,
             "confirmation_reasons": confirmations.reasons,
-            "decision_components_disabled": components.disabled_components,
         }
+        if components.disabled_components:
+            evidence["decision_components_disabled"] = components.disabled_components
         candidate = replace(candidate, evidence=evidence)
         if candidate.disposition is not DecisionDisposition.TRADE:
             return candidate
