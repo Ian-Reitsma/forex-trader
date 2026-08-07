@@ -62,7 +62,7 @@ class RiskPolicy:
         reasons: list[str] = []
         if candidate.disposition is not DecisionDisposition.TRADE:
             return self.deny(candidate, "candidate is not tradeable", account_id=account.account_id)
-        if candidate.expired:
+        if candidate.expires_at is not None and quote.time > candidate.expires_at:
             return self.deny(candidate, "candidate expired before risk authorization", account_id=account.account_id)
         if candidate.entry_price is None or candidate.stop_loss is None or candidate.take_profit is None:
             return self.deny(candidate, "candidate lacks entry, stop, or target", account_id=account.account_id)
