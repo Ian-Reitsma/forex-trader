@@ -1,7 +1,8 @@
 """Chronological score-threshold calibration using OANDA Practice history.
 
 Defaults to persisted point-in-time macro/news observations. Threshold selection uses
-rolling development folds and reports a final untouched holdout.
+rolling development folds and reports a final untouched holdout. Historical OANDA bars
+are midpoint OHLC; this script is research evidence, not a fill-quality simulation.
 """
 from __future__ import annotations
 
@@ -10,13 +11,13 @@ import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from forex_trader.adapters.oanda import OandaPracticeClient
+from forex_trader.adapters.oanda_safe import SafeOandaPracticeClient
 from forex_trader.config import AppConfig, load_macro_file
 from forex_trader.domain.fundamentals import FundamentalBook
 from forex_trader.domain.macro_history import PointInTimeFundamentalBook
 from forex_trader.domain.models import CurrencyFundamentals, jsonable
 from forex_trader.domain.strategy import SignalFusionPolicy
-from forex_trader.infrastructure.repository import SqliteDecisionRepository
+from forex_trader.infrastructure.trading_repository import TradingRepository
 from forex_trader.research.backtest import run_walk_forward_backtest
 from forex_trader.research.validation import rolling_threshold_validation
 
@@ -36,11 +37,11 @@ if not config.oanda_token:
     raise SystemExit("OANDA_API_TOKEN is required")
 instrument = (args.instrument or config.instruments[0]).upper()
 base, quote = instrument.split("_", maxsplit=1)
-repo = SqliteDecisionRepository(config.database_path)
+repo = TradingRepository(config.database_path)
 if args.technical_only:
     fundamentals: FundamentalBook | PointInTimeFundamentalBook = FundamentalBook([
-        CurrencyFundamentals(base, confidence=Decimal("0")),
-        CurrencyFundamentals(quote, confidence=Decimal("0")),
+        CurrencyFundamentals(base, confidence=Decimal("0"), as_of=datetime(2000, 1, 1, tzinfo=UTC)),
+        CurrencyFundamentals(quote, confidence=Decimal("0"), as_of=datetime(2000, 1, 1, tzinfo=UTC)),
     ])
 else:
     observations = repo.macro_observations()
@@ -53,13 +54,14 @@ else:
 
 end = datetime.now(UTC)
 start = end - timedelta(days=args.days)
-with OandaPracticeClient(
+with SafeOandaPracticeClient(
     token=config.oanda_token,
     account_id=config.oanda_account_id,
     rest_url=config.oanda_rest_url,
     stream_url=config.oanda_stream_url,
     timeout_seconds=config.oanda_timeout_seconds,
 ) as client:
+    spec = client.instrument_spec(instrument)
     lower = client.candles_between(instrument, "M5", start, end)
     higher = client.candles_between(instrument, "H1", start - timedelta(days=10), end)
 
@@ -89,10 +91,11 @@ except ValueError as exc:
 print(json.dumps({
     "scope": "technical-only" if args.technical_only else "point-in-time combined",
     "instrument": instrument,
+    "pip_size": str(spec.pip_size),
     "baseline": jsonable(baseline),
     "rolling_validation": jsonable(validation),
     "adoption_rule": (
         "Do not change the production threshold from this output alone. Require positive "
-        "untouched-holdout expectancy and stability across multiple instruments/windows."
+        "untouched-holdout expectancy, stressed execution resilience and stability across multiple instruments/windows."
     ),
 }, indent=2, sort_keys=True))
