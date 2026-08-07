@@ -2,8 +2,8 @@
 
 The script never changes strategy thresholds. It can discover OANDA's real currency-pair
 universe, caps new submissions per cycle, keeps evaluating remaining instruments in shadow
-after the order budget is spent, and writes one cohort-fingerprinted JSONL evidence record
-per cycle.
+after the order budget is spent, writes cohort-fingerprinted cycle aggregates, and can write
+one point-in-time decision evidence row per instrument evaluation.
 
 Before an authenticated campaign, run `forex-trader sync` and the read-only Practice probe.
 Never put OANDA credentials on the command line; provide them through the local environment.
@@ -61,6 +61,13 @@ parser.add_argument(
     "--evidence-path",
     type=Path,
     default=Path("campaign-evidence.jsonl"),
+    help="Cycle-level aggregate JSONL evidence",
+)
+parser.add_argument(
+    "--decision-evidence-path",
+    type=Path,
+    default=None,
+    help="Optional per-instrument point-in-time decision JSONL evidence",
 )
 args = parser.parse_args()
 
@@ -144,6 +151,7 @@ runner = PracticeCampaignRunner(
     max_new_orders_per_cycle=args.max_orders_per_cycle,
     stop_on_unresolved=True,
     evidence_path=args.evidence_path,
+    decision_evidence_path=args.decision_evidence_path,
     policy_context=policy_context,
     campaign_metadata=campaign_metadata,
 )
@@ -177,6 +185,7 @@ print(
             "unknown_orders": result.unknown,
             "unresolved_orders": result.unresolved,
             "evidence_path": str(args.evidence_path),
+            "decision_evidence_path": str(args.decision_evidence_path) if args.decision_evidence_path else None,
             "note": (
                 "Trade frequency is an observed outcome. The campaign does not lower strategy/risk gates "
                 "to manufacture fills. Any unresolved broker state stops further campaign risk."
