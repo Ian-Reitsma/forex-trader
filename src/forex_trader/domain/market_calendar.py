@@ -18,7 +18,7 @@ class CurrencyHoliday:
 # Currency -> (holiday calendar code, local market timezone, is_financial_calendar).
 # EUR uses TARGET/ECB settlement closures rather than a single member-state calendar.
 _CURRENCY_CALENDARS: dict[str, tuple[str, str, bool]] = {
-    "EUR": ("XECB", "Europe/Frankfurt", True),
+    "EUR": ("XECB", "Europe/Berlin", True),
     "USD": ("US", "America/New_York", False),
     "GBP": ("GB", "Europe/London", False),
     "JPY": ("JP", "Asia/Tokyo", False),
