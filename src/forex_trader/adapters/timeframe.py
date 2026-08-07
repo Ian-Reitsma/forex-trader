@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from forex_trader.application.ports import MarketDataProvider
 from forex_trader.domain.models import Candle, Quote
-from forex_trader.domain.timeframes import validate_timeframe_pair
+from forex_trader.domain.timeframes import minimum_lower_history_count, validate_timeframe_pair
 
 
 class TimeframeMappedMarketData:
-    """Translate the engine's semantic lower/higher requests into configured research policy.
+    """Translate semantic lower/higher requests into the configured research policy.
 
-    The engine historically requested M5/H1 directly. This adapter preserves the stable
-    application port while making those requests semantic aliases for the configured lower
-    and higher strategy timeframes. Broker execution remains on the underlying provider.
+    The application layer historically requests M5/H1 as semantic lower/higher aliases.
+    This adapter maps them to the configured research pair. For lower-timeframe requests,
+    it also enforces enough completed history to reconstruct a full current FX day plus
+    the full prior day; otherwise finalized Asia/prior-day liquidity could be computed
+    from a truncated M5 window.
     """
 
     def __init__(
@@ -24,17 +26,19 @@ class TimeframeMappedMarketData:
         self.provider = provider
         self.lower_timeframe = lower
         self.higher_timeframe = higher
+        self.minimum_lower_count = minimum_lower_history_count(lower)
 
     def candles(self, instrument: str, granularity: str, count: int) -> list[Candle]:
         requested = granularity.upper()
-        mapped = (
-            self.lower_timeframe
-            if requested == "M5"
-            else self.higher_timeframe
-            if requested == "H1"
-            else requested
-        )
-        return self.provider.candles(instrument, mapped, count)
+        if requested == "M5":
+            return self.provider.candles(
+                instrument,
+                self.lower_timeframe,
+                max(count, self.minimum_lower_count),
+            )
+        if requested == "H1":
+            return self.provider.candles(instrument, self.higher_timeframe, count)
+        return self.provider.candles(instrument, requested, count)
 
     def quote(self, instrument: str) -> Quote:
         return self.provider.quote(instrument)
