@@ -189,7 +189,6 @@ _NUMERIC_FIELDS = (
     "orders_unknown",
     "orders_reconciliation_required",
     "orders_emergency_close",
-    "orders_unresolved",
     "errors",
 )
 
@@ -230,12 +229,30 @@ def aggregate_campaign(records: Iterable[Mapping[str, object]]) -> CampaignAggre
             field: _nonnegative_int(record.get(field, 0), field=field, cycle=index)
             for field in _NUMERIC_FIELDS
         }
-        _validate_cycle(values, record, index)
+        statuses = _counter_mapping(record.get("order_statuses"), "order_statuses", index)
+        raw_unresolved = record.get("orders_unresolved")
+        if raw_unresolved is not None:
+            values["orders_unresolved"] = _nonnegative_int(
+                raw_unresolved, field="orders_unresolved", cycle=index
+            )
+        elif statuses:
+            values["orders_unresolved"] = sum(
+                count for status_name, count in statuses.items() if status_name in _UNRESOLVED_STATUS_NAMES
+            )
+        else:
+            # Backward compatibility for evidence written before the generalized
+            # unresolved-state counter existed.
+            values["orders_unresolved"] = (
+                values["orders_unknown"]
+                + values["orders_reconciliation_required"]
+                + values["orders_emergency_close"]
+            )
+        _validate_cycle(values, record, index, statuses=statuses)
         totals.update(values)
         rejection_codes.update(_counter_mapping(record.get("rejection_codes"), "rejection_codes", index))
         risk_denials.update(_counter_mapping(record.get("risk_denial_reasons"), "risk_denial_reasons", index))
         error_types.update(_counter_mapping(record.get("error_types"), "error_types", index))
-        order_statuses.update(_counter_mapping(record.get("order_statuses"), "order_statuses", index))
+        order_statuses.update(statuses)
         readiness = record.get("promotion_ready")
         if readiness is True:
             promotion["true"] += 1
@@ -427,7 +444,13 @@ def _recommendations(
     return recommendations
 
 
-def _validate_cycle(values: Mapping[str, int], record: Mapping[str, object], cycle: int) -> None:
+def _validate_cycle(
+    values: Mapping[str, int],
+    record: Mapping[str, object],
+    cycle: int,
+    *,
+    statuses: Counter[str] | None = None,
+) -> None:
     requested = values["instruments_requested"]
     evaluated = values["instruments_evaluated"]
     candidates = values["trade_candidates"]
@@ -463,7 +486,7 @@ def _validate_cycle(values: Mapping[str, int], record: Mapping[str, object], cyc
     rejections = _counter_mapping(record.get("rejection_codes"), "rejection_codes", cycle)
     risk_reasons = _counter_mapping(record.get("risk_denial_reasons"), "risk_denial_reasons", cycle)
     errors = _counter_mapping(record.get("error_types"), "error_types", cycle)
-    statuses = _counter_mapping(record.get("order_statuses"), "order_statuses", cycle)
+    statuses = statuses if statuses is not None else _counter_mapping(record.get("order_statuses"), "order_statuses", cycle)
     if sum(rejections.values()) != abstentions:
         raise ValueError(f"campaign cycle {cycle} rejection-code counts must equal abstentions")
     if sum(risk_reasons.values()) != denials:
