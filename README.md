@@ -2,9 +2,9 @@
 
 A Practice-only FX research and execution platform built around explicit market location, declared liquidity, structure confirmation, point-in-time macro context, independent portfolio risk, broker-safe execution and auditable validation.
 
-The current codebase is **not** a promise of profitability and is **not** approved for live-money trading. Its purpose is to make the strategy specification, research path, risk path and OANDA Practice execution path consistent enough to measure honestly.
+The current codebase is **not** a promise of profitability and is **not** approved for live-money trading. Its purpose is to keep strategy, research, risk, OANDA Practice execution and campaign evidence consistent enough to measure honestly.
 
-## Current v0.5 architecture
+## Current v0.6 architecture
 
 The deployable decision path is structure-first rather than indicator-first:
 
@@ -32,6 +32,8 @@ account lock + fresh size-aware quote + send-time revalidation
 priceBound + protected OANDA Practice order
         ↓
 reconciliation + protection verification + persistent uncertainty halt
+        ↓
+capped Practice campaign + fail-closed campaign diagnosis
 ```
 
 EMA, RSI and ATR remain useful diagnostics/regime features. They do not substitute for price location, declared liquidity or pivot-derived structure. Spot broker tick activity is explicitly labeled as a low-confidence activity proxy and is **not** represented as centralized footprint/delta order flow.
@@ -50,11 +52,11 @@ Runtime technical assessment includes:
 - post-sweep market-structure confirmation and retest/hold state;
 - structural invalidation stops and nearest credible opposing liquidity/zone objectives.
 
-Source-time rules prevent a bar from “sweeping” a level it just created. Runtime retains enough lower-timeframe history to reconstruct complete day/session liquidity rather than silently using truncated M5 data.
+Source-time rules prevent a bar from “sweeping” a level it just created. Runtime retains enough lower-timeframe history to reconstruct complete day/session liquidity rather than silently using truncated M5/M10 data.
 
 ## Runtime timeframes
 
-The production path can deploy the same timeframe combinations represented by research:
+The deployable path accepts the same timeframe combinations represented by research:
 
 - lower: `M5`, `M10`, `M15`, `M30`;
 - higher: `H1`, `H4`.
@@ -70,10 +72,10 @@ OANDA candle timestamps are bar starts. Signals are timestamped at the completed
 
 ## Fundamentals and events
 
-Macro state is point-in-time and immutable. The runtime supports:
+Macro state is point-in-time and immutable. Runtime supports:
 
 - releases with actual / forecast / previous values;
-- revision effects;
+- prior-period revision effects;
 - separate policy, inflation, growth, labor and news components;
 - component-specific freshness/decay;
 - central-bank statement comparison;
@@ -81,13 +83,13 @@ Macro state is point-in-time and immutable. The runtime supports:
 - scheduled high-impact event blackouts;
 - conservative currency holiday blackouts, including ECB/TARGET2 settlement closures.
 
-Fundamentals are independent admissibility/regime evidence. They can reject stale, low-confidence or directionally conflicting setups. They are **not** mixed into the technical quality score with an arbitrary fixed percentage. `TradeCandidate.score` is a quality ranking, not a calibrated probability of profit.
+Fundamentals are independent admissibility/regime evidence. They can reject stale, low-confidence or directionally conflicting setups. They are **not** mixed into technical quality with an arbitrary fixed percentage. `TradeCandidate.score` is a quality ranking, not a calibrated probability of profit.
 
 ## Risk
 
 Independent risk authorization includes:
 
-- stop-distance sizing from the lower of balance/NAV;
+- stop-distance sizing from lower(balance, NAV);
 - quote-to-account currency conversion;
 - configurable per-trade risk;
 - 5-p.m.-New-York marked daily-loss circuit with persistent latch;
@@ -96,7 +98,7 @@ Independent risk authorization includes:
 - single-currency concentration;
 - margin reserve;
 - signed recent-return correlation veto against existing positions;
-- expiring authorization that is rerun on fresh send-time state.
+- expiring authorization rerun on fresh send-time state.
 
 Correlation can only deny duplicated P/L risk. It never increases position size.
 
@@ -116,16 +118,56 @@ The send path includes:
 8. deterministic rejection vs ambiguous-write classification;
 9. reconciliation of ambiguous outcomes rather than blind resubmission;
 10. dependent stop-loss/take-profit verification;
-11. repair attempt and emergency close path if protection is absent;
+11. protection repair attempt and emergency close path if protection is absent;
 12. persistent execution-uncertainty halt if broker state cannot be proven.
 
-There is deliberately no live-money endpoint in v0.5.
+There is deliberately no live-money endpoint.
+
+## Evidence-first Practice campaign
+
+The campaign layer is an operator/evidence wrapper around `TradingEngine`; it cannot bypass strategy, context, risk or execution safeguards.
+
+It can:
+
+- scan configured pairs or the broker-discovered currency universe;
+- cap new Practice submissions per cycle;
+- continue scanning the remainder of the universe in shadow after the order budget is spent;
+- persist one JSONL evidence record per cycle;
+- record rejection codes, independent risk denials, provider errors, promotion state and the complete broker-order status histogram;
+- stop immediately on any unresolved broker state, not only literal `UNKNOWN`;
+- preserve explicit counts for rejects, cancellations, reconciliation-required and emergency-close outcomes.
+
+Shadow all-pair campaign:
+
+```bash
+python scripts/run_practice_campaign.py \
+  --all-currency-pairs \
+  --max-cycles 1
+```
+
+After the broker-minimum protected round-trip is verified, a capped Practice campaign can begin with at most one new order per cycle:
+
+```bash
+python scripts/run_practice_campaign.py \
+  --execute \
+  --all-currency-pairs \
+  --max-orders-per-cycle 1 \
+  --max-cycles 12
+```
+
+Analyze accumulated evidence:
+
+```bash
+python scripts/analyze_campaign.py campaign-evidence.jsonl
+```
+
+The analyzer classifies execution uncertainty, broker rejection/cancellation, provider failure, missing fundamental data, market context, strategy formation, portfolio risk, unclassified abstentions and clean/selective operation. It rejects internally inconsistent evidence and will not interpret an unknown future rejection code as a successful strategy state.
 
 ## Research and backtesting
 
-The research layer is explicitly separate from code coverage and from paper-trading evidence.
+The research layer is explicitly separate from code coverage and from Practice-trading evidence.
 
-Implemented research support includes:
+Implemented support includes:
 
 - no-lookahead completed-candle replay;
 - gap-through-stop losses;
@@ -133,10 +175,10 @@ Implemented research support includes:
 - MAE/MFE and ambiguous-bar frequency;
 - chronological rolling validation with untouched final holdouts;
 - one globally deployable threshold in multi-instrument validation;
-- fair-value-gap detection and zone-overlap measurement as a descriptive feature;
-- research-only management comparison between the current structural single-target baseline and a 50%-at-1R / breakeven-runner hypothesis.
+- fair-value-gap detection and zone-overlap measurement as descriptive features;
+- research-only management comparison between the structural single-target baseline and a 50%-at-1R / breakeven-runner hypothesis.
 
-The management runner is **not** wired into live Practice execution. It must demonstrate incremental after-cost out-of-sample value before receiving runtime authority.
+The management runner is **not** wired into Practice execution. It must demonstrate incremental after-cost out-of-sample value before receiving runtime authority.
 
 Useful commands:
 
@@ -147,7 +189,7 @@ python scripts/validate_oanda.py --instruments EUR_USD,GBP_USD,USD_JPY --days 18
 python scripts/compare_management_oanda.py --instrument EUR_USD --days 180
 ```
 
-OANDA historical candles are midpoint OHLC. Execution stress does not magically reconstruct historical executable bid/ask depth that is absent from the source data.
+OANDA historical candles are midpoint OHLC. Execution stress does not reconstruct historical executable bid/ask depth that is absent from the source data.
 
 ## Installation
 
@@ -162,7 +204,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 cp .env.example .env
-pytest --cov=forex_trader --cov-report=term-missing
+pytest --cov=forex_trader --cov-branch --cov-report=term-missing
 forex-trader doctor
 ```
 
@@ -202,39 +244,36 @@ OANDA_REST_URL=https://api-fxpractice.oanda.com
 OANDA_STREAM_URL=https://stream-fxpractice.oanda.com
 ```
 
-Read-only probe:
+Required progression:
 
 ```bash
 python scripts/smoke_oanda.py
+forex-trader sync
+python scripts/run_practice_campaign.py --all-currency-pairs --max-cycles 1
 ```
 
-Only after the read-only probe succeeds should Practice writes be enabled:
+Then verify the separately gated broker-minimum protected open/verify/close path. Only after those checks remain clean should Practice writes be enabled:
 
 ```dotenv
 FOREX_MODE=paper
 FOREX_ENABLE_PAPER_ORDERS=true
 ```
 
-```bash
-forex-trader doctor
-forex-trader demo --instrument EUR_USD --execute
-```
-
 A separate gated GitHub Actions workflow exists for authenticated Practice validation. Ordinary pushes do not place broker orders.
 
 ## Current validation state
 
-The current v0.5 remediation state has passed on both Python 3.11 and 3.13:
+The exact reconciled v0.6 integration state passes on both Python 3.11 and 3.13:
 
-- **197 tests**;
-- **87.29% branch-aware coverage**;
+- **222 tests**;
+- **87.02% branch-aware coverage**;
 - enforced minimum coverage: **85%**;
 - install and bytecode compilation;
 - `pip check` dependency integrity;
 - secret-assignment scan;
 - executed offline paper-order smoke.
 
-Authenticated OANDA Practice validation is still pending in this environment because the Practice credentials are not available to GitHub Actions or the local runtime. No real OANDA Practice trade is claimed.
+Authenticated OANDA Practice validation is still pending in this environment because Practice credentials are not available to GitHub Actions or the local runtime. No real OANDA Practice trade is claimed.
 
 ## Deliberate boundaries
 
@@ -243,10 +282,10 @@ The repository still does **not** pretend to have things it does not have:
 - no fabricated centralized order flow from spot tick counts;
 - no unlicensed production news/economic-calendar scraping;
 - no claim that midpoint candle backtests equal executable quote history;
-- no automatic live runner/scale-out policy without evidence;
+- no automatic runtime scale-out/runner policy without after-cost evidence;
 - no profitability or win-rate claim from CI;
 - no live-money execution mode.
 
-The next evidence milestone is authenticated OANDA Practice access, followed by a broker-minimum protected round trip, current-market shadow scan, and a sustained multi-regime Practice campaign.
+The next evidence milestone is authenticated OANDA Practice access, followed by broker reconciliation, a broker-minimum protected round trip, current-market shadow scanning and a sustained multi-regime capped Practice campaign.
 
-For the detailed runtime boundary see `docs/16_IMPLEMENTATION_STATUS.md`; for the remediation record see `docs/23_AUDIT_REMEDIATION_2026-08-07.md`.
+For the detailed runtime boundary see `docs/16_IMPLEMENTATION_STATUS.md`; for campaign operations see `docs/25_PRACTICE_CAMPAIGN.md`.
