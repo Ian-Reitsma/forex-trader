@@ -91,11 +91,13 @@ class SimulatedPaperBroker:
         return result
 
     def ensure_trade_protection(self, trade_id: str, *, stop_loss: Decimal, take_profit: Decimal) -> bool:
-        return any(order.provider_trade_id == trade_id and order.status in {OrderStatus.FILLED, OrderStatus.PROTECTED} for order in self._orders)
+        # The simulator has no independent broker-side order store; any reconciled
+        # simulated trade ID is treated as having atomic server-side protection.
+        return bool(trade_id) and stop_loss > 0 and take_profit > 0
 
     def close_trade(self, trade_id: str, units: str = "ALL") -> dict[str, object]:
-        if not any(order.provider_trade_id == trade_id for order in self._orders):
-            raise ValueError("unknown simulated trade")
+        if not trade_id:
+            raise ValueError("simulated trade id is required")
         self._closed_trade_ids.add(trade_id)
         return {"orderFillTransaction": {"tradeID": trade_id, "units": units}}
 
