@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from decimal import Decimal
 
+from forex_trader.domain.decision_components import DecisionComponentPolicy, PRODUCTION_DECISION_COMPONENTS
 from forex_trader.domain.enums import Direction
 from forex_trader.domain.instruments import pip_size_for
 from forex_trader.domain.liquidity import build_liquidity_map, find_recent_sweep, target_levels
@@ -65,13 +66,13 @@ def assess_technicals(
     higher: list[Candle],
     *,
     minimum_structural_reward_risk: Decimal = Decimal("1.35"),
+    components: DecisionComponentPolicy = PRODUCTION_DECISION_COMPONENTS,
 ) -> TechnicalAssessment:
-    """Derive a Forex-Scalper-style setup from location, liquidity and structure.
+    """Derive a structure-first setup using default-on production components.
 
-    The decision hierarchy is intentionally not indicator-first:
-    higher-timeframe pivots -> supply/demand location -> declared liquidity sweep ->
-    post-sweep structure break -> retest/hold -> structural target. EMA/RSI/ATR and
-    broker tick activity remain secondary diagnostics/regime evidence.
+    The normal runtime uses ``PRODUCTION_DECISION_COMPONENTS``. Research-only paired
+    ablations may disable one component while keeping the exact same candle snapshot; the
+    raw market calculations remain deterministic and ordinary callers retain prior behavior.
     """
     instrument = instrument.upper()
     completed_lower = [c for c in lower if c.complete]
@@ -137,7 +138,7 @@ def assess_technicals(
         direction=direction,
         price=anchor_price,
         maximum_distance=current_atr * Decimal("1.6"),
-        minimum_quality=Decimal("0.28"),
+        minimum_quality=Decimal("0.28") if components.zone_quality else Decimal("0"),
     ) if direction is not Direction.FLAT else None
     if zone is not None:
         reasons.append(
@@ -217,6 +218,7 @@ def assess_technicals(
         retest_confirmed=retest_confirmed,
         location_score=location_score,
         invalidated=bool(zone and zone.broken),
+        require_retest=components.retest,
     )
     reasons.extend(setup.reasons)
 
@@ -268,24 +270,26 @@ def assess_technicals(
 
     score = Decimal("0")
     score += pivot_authority if direction is not Direction.FLAT else Decimal("0")
-    score += min(Decimal("0.25"), location_score * Decimal("0.25"))
+    if components.zone_quality:
+        score += min(Decimal("0.25"), location_score * Decimal("0.25"))
     if directional_sweep is not None:
         score += directional_sweep.level.strength * Decimal("0.20")
     if structure_shift:
         score += Decimal("0.25")
-    if retest_confirmed:
+    if components.retest and retest_confirmed:
         score += Decimal("0.10")
     if displacement:
         score += Decimal("0.05")
-    if flow.direction is direction:
+    if components.flow and flow.direction is direction:
         score += min(Decimal("0.04"), flow.confidence * Decimal("0.12"))
-    if phase in {SessionPhase.LONDON_OPEN, SessionPhase.NEW_YORK_OPEN, SessionPhase.LONDON_NEW_YORK_OVERLAP, SessionPhase.LONDON_CONTINUATION}:
-        score += Decimal("0.04")
-    elif phase is SessionPhase.ASIA:
-        score += Decimal("0.02")
-    if phase is SessionPhase.ROLLOVER:
-        score = min(score, Decimal("0.30"))
-        reasons.append("rollover phase suppresses setup quality")
+    if components.session:
+        if phase in {SessionPhase.LONDON_OPEN, SessionPhase.NEW_YORK_OPEN, SessionPhase.LONDON_NEW_YORK_OVERLAP, SessionPhase.LONDON_CONTINUATION}:
+            score += Decimal("0.04")
+        elif phase is SessionPhase.ASIA:
+            score += Decimal("0.02")
+        if phase is SessionPhase.ROLLOVER:
+            score = min(score, Decimal("0.30"))
+            reasons.append("rollover phase suppresses setup quality")
     reasons.append(f"EMA diagnostic H20/H50={h_fast}/{h_slow}; L9/L21={l_fast}/{l_slow}")
     reasons.append(f"RSI diagnostic={current_rsi:.1f}")
 
@@ -315,6 +319,6 @@ def assess_technicals(
         retest_confirmed=retest_confirmed,
         location_score=location_score,
         structural_target=target,
-        flow_pressure=flow.directional_pressure,
-        flow_source=flow.source_kind,
+        flow_pressure=flow.directional_pressure if components.flow else Decimal("0"),
+        flow_source=flow.source_kind if components.flow else "none",
     )
