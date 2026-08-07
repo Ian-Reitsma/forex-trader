@@ -60,6 +60,7 @@ def derive_setup_state(
     retest_confirmed: bool,
     location_score: Decimal,
     invalidated: bool = False,
+    require_retest: bool = True,
 ) -> SetupContext:
     reasons: list[str] = []
     state = SetupState.OBSERVE
@@ -79,11 +80,14 @@ def derive_setup_state(
     if sweep_index is not None and structure_shift:
         state = SetupState.STRUCTURE_SHIFT_CONFIRMED
         reasons.append("post-sweep structure shift confirmed")
-    if sweep_index is not None and structure_shift and latest_index > sweep_index:
+    if sweep_index is not None and structure_shift and latest_index > sweep_index and require_retest:
         state = SetupState.RETEST_PENDING
-    if sweep_index is not None and structure_shift and retest_confirmed:
+    if sweep_index is not None and structure_shift and (retest_confirmed or not require_retest):
         state = SetupState.ENTRY_CONFIRMED
-        reasons.append("post-shift retest/continuation entry confirmed")
+        if retest_confirmed:
+            reasons.append("post-shift retest/continuation entry confirmed")
+        else:
+            reasons.append("post-shift structure is entry-ready without a retest requirement")
     if invalidated:
         state = SetupState.INVALIDATED
         reasons.append("location was invalidated")
