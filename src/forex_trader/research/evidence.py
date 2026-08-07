@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Mapping
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from forex_trader.domain.enums import DecisionDisposition, Direction
 from forex_trader.domain.models import Candle, TradeCandidate
@@ -61,7 +62,7 @@ class DecisionEvidence:
         return cohort_key(self)
 
     def to_jsonable(self) -> dict[str, object]:
-        return _json_safe(
+        safe = _json_safe(
             {
                 "campaign_id": self.campaign_id,
                 "policy_fingerprint": self.policy_fingerprint,
@@ -102,6 +103,9 @@ class DecisionEvidence:
                 "error_message": self.error_message,
             }
         )
+        if not isinstance(safe, dict):
+            raise TypeError("decision evidence serialization must produce an object")
+        return {str(key): value for key, value in safe.items()}
 
     @classmethod
     def from_trace(
@@ -350,9 +354,7 @@ def _from_payload(payload: Mapping[str, object], *, line_number: int) -> Decisio
         raise ValueError(f"invalid decision evidence JSONL line {line_number}: {exc}") from exc
 
 
-def _uuid_for_evidence(record: DecisionEvidence):  # type: ignore[no-untyped-def]
-    from uuid import NAMESPACE_URL, UUID, uuid5
-
+def _uuid_for_evidence(record: DecisionEvidence) -> UUID:
     if record.candidate_id:
         try:
             return UUID(record.candidate_id)
@@ -422,7 +424,7 @@ def _string_tuple(value: object) -> tuple[str, ...]:
     return ()
 
 
-def _json_safe(value: Any) -> Any:
+def _json_safe(value: object) -> object:
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, datetime):
