@@ -6,8 +6,11 @@ from datetime import datetime
 from decimal import Decimal
 
 from forex_trader.application.engine import TradingEngine
+from forex_trader.application.signal_capture import SignalEvaluationInputs
+from forex_trader.domain.events import pair_event_blackout
 from forex_trader.domain.models import DecisionTrace
 from forex_trader.domain.risk_day import fx_risk_day_key
+from forex_trader.domain.sessions import SessionPhase, classify_phase
 
 
 class FxTradingEngine(TradingEngine):
@@ -45,6 +48,56 @@ class FxTradingEngine(TradingEngine):
         enriched = replace(trace, metadata=metadata)
         self.repository.save_trace(enriched)
         return enriched
+
+    def evaluate_with_signal_inputs(
+        self,
+        instrument: str,
+        *,
+        execute: bool = False,
+    ) -> tuple[DecisionTrace, SignalEvaluationInputs]:
+        """Evaluate once and capture the exact pre-risk signal inputs without provider rereads.
+
+        This path is intentionally shadow-only. It opens an outer completed-candle snapshot,
+        invokes the normal production evaluation inside that scope, and then reuses the
+        already-cached candle responses before the scope closes. The quote comes from the
+        actual trace; fundamentals and the adaptive spread ceiling are point-in-time pure
+        reads at that quote timestamp. No broker write or second executable quote is allowed.
+        """
+        if execute:
+            raise ValueError("signal input capture is restricted to shadow evaluation")
+        scope_factory = getattr(self.market_data, "evaluation_scope", None)
+        if not callable(scope_factory):
+            raise RuntimeError("signal input capture requires evaluation-scoped market data")
+        normalized = instrument.upper()
+        with scope_factory():
+            trace = self.evaluate(normalized, execute=False)
+            if not isinstance(trace, DecisionTrace):
+                raise TypeError("signal input capture requires a DecisionTrace result")
+            lower = tuple(self.market_data.candles(normalized, "M5", 200))
+            higher = tuple(self.market_data.candles(normalized, "H1", 200))
+            quote = trace.quote
+            fundamental = self.fundamentals.assess_pair(normalized, as_of=quote.time)
+            spread_limit = self.cost_model.spread_limit(
+                normalized,
+                quote.time,
+                configured_maximum=self.fusion_policy.maximum_spread_pips,
+            )
+            _, event_reasons = pair_event_blackout(
+                normalized,
+                quote.time,
+                self._scheduled_events_near(quote.time),
+            )
+            captured = SignalEvaluationInputs(
+                instrument=normalized,
+                lower_candles=lower,
+                higher_candles=higher,
+                quote=quote,
+                fundamental=fundamental,
+                maximum_spread_pips=spread_limit,
+                event_blackout_reasons=tuple(event_reasons),
+                rollover_blackout=classify_phase(quote.time) is SessionPhase.ROLLOVER,
+            )
+        return trace, captured
 
     def _observe_latched_loss(self, account, signal_time: datetime, capital_base: Decimal) -> bool:  # type: ignore[no-untyped-def]
         observe = getattr(self.repository, "observe_risk_day", None)
