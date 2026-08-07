@@ -1,12 +1,12 @@
 # Forex Trader
 
-A Practice-only FX research and execution platform built around explicit market location, declared liquidity, structure confirmation, point-in-time macro context, independent portfolio risk, broker-safe execution and auditable evidence.
+A Practice-only FX research and execution platform built around explicit market location, declared liquidity, structure confirmation, point-in-time macro context, independent portfolio risk, broker-safe execution, and auditable research evidence.
 
 The codebase is **not** a promise of profitability and is **not** approved for live-money trading. OANDA integration is locked to fxTrade Practice endpoints.
 
-## Current release: v0.7.1
+## Current release: v0.7.6
 
-The deployable path is structure-first:
+The deployable decision path remains structure-first:
 
 ```text
 completed lower/higher candles + point-in-time macro/event context
@@ -19,40 +19,61 @@ regime/policy selection + independent confirmation categories
                               ↓
 structural invalidation/target + fundamental/cost admissibility
                               ↓
-independent currency/margin/correlation/drawdown risk authorization
+independent portfolio risk authorization
                               ↓
 account lock + fresh size-aware quote + send-time revalidation
                               ↓
 priceBound + protected OANDA Practice order
                               ↓
 reconciliation + protection verification + persistent uncertainty halt
-                              ↓
-per-cycle operations evidence + point-in-time per-decision research evidence
-                              ↓
-mature outcome labeling + chronological cohort calibration + research EV analysis
-                              ↓
-paired Phase-D entry/management counterfactuals on immutable signal/path datasets
 ```
 
-EMA, RSI and ATR are secondary diagnostics rather than substitutes for location, liquidity and market structure. Spot broker tick activity is explicitly treated as a low-confidence activity proxy, not centralized footprint/delta order flow.
+Research is intentionally separated from execution authority:
+
+```text
+point-in-time decision evidence
+        ↓
+mature outcome labels
+        ↓
+chronological calibration + conservative after-cost EV
+        ↓
+paired Phase-D entry/management counterfactuals
+        ↓
+prospective paired component ablations on frozen snapshots
+        ↓
+setup-isolated research-promotion bundle
+        ↓
+shadow candidate only
+```
+
+EMA, RSI and ATR are secondary diagnostics rather than substitutes for location, liquidity, and market structure. Spot broker tick activity is explicitly treated as a low-confidence activity proxy, not centralized footprint/delta order flow.
+
+## v0.7.6 integration repair
+
+v0.7.6 repairs merge drift introduced while the v0.7.2-v0.7.5 research-ablation work was landing concurrently:
+
+- authoritative package/distribution/OpenAPI/campaign identity is again synchronized at `0.7.6`;
+- paired-ablation matured-outcome loading, primary-dataset binding, paired-artifact hashing, and evidence writing are restored as one coherent API;
+- frozen ablation snapshots retain canonical immutable payload JSON as well as its SHA-256 identity so full and masked evaluators can consume the exact same point-in-time market snapshot;
+- pytest can import operator/research script helpers without runtime `sys.path` mutation;
+- repeated replay evidence is accepted only when setup family, policy fingerprint, and immutable dataset identity match the primary research report before canonical hashes are compared;
+- all ablation/runtime surfaces remain shadow/research-only and cannot enable broker writes.
+
+The production-ablation adapter added in v0.7.5 is deliberately a **contract**, not yet proof of real component attribution. It requires explicit hooks for `no_fundamentals`, `no_flow`, `no_session`, `no_zone_quality`, and `no_retest`, but synthetic hooks do not establish that those masks traverse the real production decision path. The next research tranche wires those masks into concrete production seams and verifies same-snapshot differences prospectively.
 
 ## Runtime and evidence integrity
 
 Supported deployable timeframe policy is lower `M5/M10/M15/M30` with higher `H1/H4`. OANDA bar-start timestamps are converted to completed-bar signal times for no-lookahead freshness logic.
 
-Within one FX evaluation, completed candles may be reused for a later smaller same-instrument/same-granularity request. Executable quotes are never cached and candle snapshots never cross the evaluation boundary.
+Completed candles may be reused only inside one evaluation for a later smaller same-instrument/same-granularity request. Executable quotes are never cached and candle snapshots do not cross the evaluation boundary.
 
-Fundamentals are immutable point-in-time evidence with component-specific decay, horizon-specific currency context, central-bank comparison, scheduled-event blackouts and holiday context. They operate as independent admissibility/conflict gates rather than an arbitrary percentage blended into the technical score.
+Fundamentals are immutable point-in-time evidence with component-specific decay, horizon-specific currency context, central-bank comparison, scheduled-event blackouts, and holiday context. They operate as independent admissibility/conflict gates rather than an arbitrary percentage blended into the technical score.
 
-Independent confirmation categories are explicit: price, fundamentals, flow, cross-asset and execution. Duplicate/syndicated information is not counted as multiple independent sources. Broker tick activity cannot satisfy a policy that requires real institutional flow.
+Independent confirmation categories are explicit: price, fundamentals, flow, cross-asset, and execution. Duplicate/syndicated information is not counted as multiple independent sources. Broker tick activity cannot satisfy a policy that requires real institutional flow.
 
-Risk includes lower(balance, NAV) capital sizing, broker-priced currency conversion, a persistent 5-p.m.-New-York marked-loss circuit, position/unit limits, gross currency exposure, concentration, margin reserve, signed recent-return correlation veto, trailing drawdown, loss-streak observation, reserved risk and gap-stress loss. Risk can deny an otherwise valid candidate and never increases size because of low correlation.
+Risk includes lower(balance, NAV) capital sizing, broker-priced currency conversion, a persistent 5-p.m.-New-York marked-loss circuit, position/unit limits, gross currency exposure, concentration, margin reserve, signed recent-return correlation veto, trailing drawdown, loss-streak observation, reserved risk, and gap-stress loss.
 
 Campaign evidence includes a secret-free policy fingerprint plus semantic implementation version and exact build revision when available. Mixed policy/build cohorts cannot be silently pooled by the analyzer.
-
-v0.7.x records one point-in-time decision row per instrument attempt when requested. Detailed rows retain setup/regime/session, confirmation categories and sources, candidate geometry, quote, risk result, order state and raw feature evidence. Mature decisions can later be labeled with read-only OANDA candles and evaluated through chronological cohort calibration and a research-only conservative expected-value gate.
-
-v0.7.1 adds paired Phase-D counterfactual replay. Market, limit, market-if-touched, stop, structural-target and partial/runner variants are evaluated on the same original signals and future paths. No-fill signals stay in the denominator at 0R, invalid management geometry is penalized instead of excluded, and variant deltas use deterministic paired-bootstrap confidence intervals. Pending pullback orders are cancelled when the original setup invalidates or reaches target before fill; ambiguous same-bar trigger/invalidation paths are not granted favorable ordering.
 
 ## Installation and offline verification
 
@@ -79,15 +100,13 @@ forex-trader demo --instrument EUR_USD
 
 ## OANDA Practice validation
 
-Keep OANDA credentials outside chat and source control. Local configuration belongs in `.env`; GitHub-hosted validation uses repository Actions secrets.
+Keep OANDA credentials outside source control. Local configuration belongs in `.env`; GitHub-hosted validation uses repository Actions secrets.
 
-The authenticated validation workflow is **manual-only**, restricted to `main`, serialized so two broker-validation runs cannot overlap, and has three explicit stages: `read-only`, `round-trip`, and `campaign`. The read-only stage can discover an authorized Practice account from `OANDA_API_TOKEN`; any stage that can submit a Practice order additionally requires an explicit `OANDA_ACCOUNT_ID` and operator confirmation.
+The authenticated validation workflow is manual-only, restricted to `main`, serialized so broker-validation runs cannot overlap, and has explicit `read-only`, `round-trip`, and `campaign` stages. Read-only may discover the authorized Practice account from the token; any stage capable of submitting a Practice order additionally requires an explicit Practice account ID and operator confirmation.
 
-The token-only read-only contract is covered end to end with mocked OANDA responses: shadow configuration accepts no account ID, the adapter discovers the authorized Practice account, transaction synchronization continues through that discovered ID, and enabling Practice writes without an explicit account ID remains invalid.
+The broker-minimum round-trip helper fails closed. Once a known fill exists, it attempts to close that exact probe trade even if protection verification fails or raises, and failed/unverifiable close state is a critical reconciliation condition.
 
-The broker-minimum round-trip helper fails closed: after a known fill it attempts to close that exact probe trade even if protection verification fails or raises, and treats failed/unverifiable close state as a critical reconciliation condition.
-
-See `docs/17_OANDA_PAPER_SETUP.md` for credential/setup and staged workflow details. See `docs/25_PRACTICE_CAMPAIGN.md` for campaign evidence/analysis rules.
+See `docs/17_OANDA_PAPER_SETUP.md` and `docs/25_PRACTICE_CAMPAIGN.md`.
 
 ## Research evidence workflow
 
@@ -109,17 +128,16 @@ python scripts/label_decision_evidence.py \
   --output outcome-evidence.jsonl
 ```
 
-Then analyze one immutable policy cohort chronologically:
+Analyze one setup family chronologically:
 
 ```bash
 python scripts/analyze_research_dataset.py \
   decision-evidence.jsonl \
-  outcome-evidence.jsonl
+  outcome-evidence.jsonl \
+  --setup-family zone_continuation
 ```
 
-The outcome model distinguishes target hits, stop hits and time exits. A profitable timeout does not inflate target-hit probability. The EV layer requires sample size, confidence width, validation calibration and positive ordinary plus conservative after-cost expectancy. It is research-only and cannot authorize a broker write.
-
-For paired Phase-D research, supply the same decision evidence plus an immutable JSONL candle archive and run:
+For paired Phase-D entry/management research:
 
 ```bash
 python scripts/analyze_phase_d_paths.py \
@@ -127,31 +145,35 @@ python scripts/analyze_phase_d_paths.py \
   candle-archive.jsonl
 ```
 
-The analyzer first compares predefined policies on a chronological development subset, selects at most one candidate, then requires the same candidate to retain a positive paired lower-confidence-bound R improvement on an untouched holdout. This remains research-only and does not alter Practice authority.
+For matured paired component-ablation evidence:
 
-See `docs/27_RESEARCH_EVIDENCE_AND_EV.md` for the evidence/calibration lifecycle.
+```bash
+python scripts/assemble_paired_ablations.py \
+  matured-ablation-outcomes.jsonl \
+  --primary-research-report zone-continuation-research.json \
+  --output zone-continuation-ablations.json
+```
+
+Research promotion remains fail-closed and non-executable. Missing evidence yields `insufficient_evidence`; observed empirical/integrity failure yields `rejected`; the strongest successful state is `shadow_candidate`.
+
+See `docs/27_RESEARCH_EVIDENCE_AND_EV.md`, `docs/28_PHASE_D_PAIRED_COUNTERFACTUALS.md`, `docs/29_RESEARCH_PROMOTION_BUNDLE.md`, `docs/31_PROSPECTIVE_PAIRED_ABLATIONS.md`, and `docs/32_V0_7_4_SHADOW_ABLATION_RUNTIME.md`.
 
 ## Current validation
 
-The v0.7.1 Phase-D implementation head passed the full Python 3.11 and Python 3.13 matrix before the final release-identity/documentation commit:
+The v0.7.6 repair implementation head passed both Python 3.11 and Python 3.13 through install, bytecode compilation, dependency integrity, secret scanning, critical Ruff checks, strict deterministic-research typing, full pytest/coverage, and the executed protected simulation smoke.
 
-- **329 tests passed**;
-- **86.80% branch-aware coverage**;
-- enforced coverage minimum: **85%**;
-- critical Ruff checks passed;
-- strict mypy checks passed for deterministic Phase A-D/research contracts;
-- dynamic package installation, bytecode compilation and `pip check` passed;
-- secret-assignment scan passed;
-- executed offline protected paper-order smoke passed on both Python versions.
+On Python 3.11 the full suite reported:
 
-A final CI run validates the exact v0.7.1 release identity before merge.
+- **366 tests passed**;
+- **86.07% branch-aware coverage**;
+- repository coverage floor: **85%**.
 
-Software CI does **not** prove authenticated broker behavior or trading profitability. No real OANDA Practice success is claimed until the externally configured staged validation is actually run and its evidence is reviewed.
+The exact documentation-aligned v0.7.6 head is revalidated before merge.
+
+Software CI does **not** prove authenticated broker behavior or trading profitability. No OANDA Practice success is claimed until the externally configured staged validation is run and its evidence is reviewed.
 
 ## Deliberate boundaries
 
-The repository does not expose a live-money execution endpoint, fabricate centralized order flow from spot tick counts, substitute unlicensed scraping for production news/economic-calendar feeds, claim midpoint candle backtests equal executable quote history, or grant runtime authority to unvalidated scale-out/runner logic.
+The repository does not expose a live-money execution endpoint, fabricate centralized order flow from spot tick counts, substitute unlicensed scraping for production news/economic-calendar feeds, claim midpoint candle backtests equal executable quote history, grant runtime authority to unvalidated scale-out/runner logic, or treat an offline research nomination as Practice authority.
 
-The next evidence milestone is authenticated OANDA Practice validation plus accumulation of a meaningful immutable decision/outcome/path dataset. That evidence should determine whether the remaining bottleneck is fundamental-data coverage, setup formation, market/execution conditions, portfolio constraints, entry/management policy, or actual strategy expectancy before production thresholds or management authority are changed.
-
-For the detailed runtime boundary see `docs/16_IMPLEMENTATION_STATUS.md`; for OANDA setup see `docs/17_OANDA_PAPER_SETUP.md`; for campaign operations see `docs/25_PRACTICE_CAMPAIGN.md`; for calibration/EV research see `docs/27_RESEARCH_EVIDENCE_AND_EV.md`.
+The next evidence milestone is twofold: restore a fully green authoritative `main`, then wire the prospective ablation masks into real production decision seams on one frozen snapshot. Authenticated OANDA Practice evidence and a meaningful immutable decision/outcome/path corpus should determine whether the actual bottleneck is data coverage, setup formation, market/execution conditions, portfolio constraints, component value, entry/management policy, or strategy expectancy before production thresholds are changed.
