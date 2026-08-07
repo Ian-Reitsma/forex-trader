@@ -9,11 +9,28 @@ from forex_trader.domain.models import Candle, Quote
 
 
 class SyntheticMarketData:
-    """Deterministic provider for local development and complete setup-path tests."""
+    """Deterministic-price provider for local development and setup-path tests.
 
-    def __init__(self, *, seed: int = 7, direction: str = "long") -> None:
+    Prices are seeded deterministically; timestamps share one explicit anchor so M5/H1
+    end at the same logical decision time. The default anchor is the next UTC hour,
+    keeping normal test fundamentals point-in-time eligible without hard-coding an old date.
+    """
+
+    def __init__(
+        self,
+        *,
+        seed: int = 7,
+        direction: str = "long",
+        anchor: datetime | None = None,
+    ) -> None:
         self.seed = seed
         self.direction = direction
+        if anchor is None:
+            now = datetime.now(UTC)
+            anchor = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        if anchor.tzinfo is None:
+            raise ValueError("synthetic anchor must be timezone-aware")
+        self.anchor = anchor.astimezone(UTC)
         self._cache: dict[tuple[str, str, int], list[Candle]] = {}
 
     def candles(self, instrument: str, granularity: str, count: int) -> list[Candle]:
@@ -26,7 +43,14 @@ class SyntheticMarketData:
         candles = self.candles(instrument, "M5", 200)
         mid = candles[-1].close
         half = pip_size_for(instrument) * Decimal("0.45")
-        return Quote(instrument, mid - half, mid + half, candles[-1].time + timedelta(seconds=1), bid_liquidity=Decimal("10000000"), ask_liquidity=Decimal("10000000"))
+        return Quote(
+            instrument,
+            mid - half,
+            mid + half,
+            candles[-1].time + timedelta(seconds=1),
+            bid_liquidity=Decimal("10000000"),
+            ask_liquidity=Decimal("10000000"),
+        )
 
     def quote_for_units(self, instrument: str, units: int | None) -> Quote:
         return self.quote(instrument)
@@ -34,7 +58,7 @@ class SyntheticMarketData:
     def _generate(self, instrument: str, granularity: str, count: int) -> list[Candle]:
         random = Random(f"{self.seed}:{instrument}:{granularity}:{self.direction}")
         step = timedelta(minutes=5 if granularity == "M5" else 60)
-        now = datetime(2026, 1, 5, tzinfo=UTC)
+        start = self.anchor - step * (count - 1)
         base = Decimal("1.1000") if not instrument.endswith("_JPY") else Decimal("150.00")
         pip = pip_size_for(instrument)
         trend_sign = Decimal("1") if self.direction == "long" else Decimal("-1")
@@ -47,7 +71,7 @@ class SyntheticMarketData:
             close = price + drift + noise
             high = max(open_price, close) + pip * Decimal(str(random.uniform(0.25, 0.75)))
             low = min(open_price, close) - pip * Decimal(str(random.uniform(0.25, 0.75)))
-            candles.append(Candle(now + step * index, open_price, high, low, close, 100 + index))
+            candles.append(Candle(start + step * index, open_price, high, low, close, 100 + index))
             price = close
 
         if granularity == "M5" and count >= 30:
@@ -71,11 +95,8 @@ class SyntheticMarketData:
                 (reference + pip * Decimal("4.0"), reference + pip * Decimal("3.3"), reference + pip * Decimal("4.3"), reference + pip * Decimal("2.4")),
                 (reference + pip * Decimal("3.3"), reference + pip * Decimal("4.1"), reference + pip * Decimal("4.9"), reference + pip * Decimal("2.9")),
                 (reference + pip * Decimal("4.1"), reference + pip * Decimal("3.7"), reference + pip * Decimal("4.4"), reference + pip * Decimal("2.8")),
-                # Declared sell-side liquidity at the confirmed 1.6-pip swing low is swept.
                 (reference + pip * Decimal("3.7"), reference + pip * Decimal("2.3"), reference + pip * Decimal("3.9"), reference + pip * Decimal("0.9")),
-                # Post-sweep close breaks the prior local swing high.
                 (reference + pip * Decimal("2.3"), reference + pip * Decimal("5.2"), reference + pip * Decimal("5.6"), reference + pip * Decimal("2.1")),
-                # Pullback holds the broken structure and resumes upward.
                 (reference + pip * Decimal("4.8"), reference + pip * Decimal("5.4"), reference + pip * Decimal("5.8"), reference + pip * Decimal("4.2")),
             ]
         else:
