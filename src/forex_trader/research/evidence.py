@@ -314,7 +314,7 @@ def _from_payload(payload: Mapping[str, object], *, line_number: int) -> Decisio
         return DecisionEvidence(
             campaign_id=str(payload["campaign_id"]),
             policy_fingerprint=str(payload["policy_fingerprint"]),
-            cycle=int(payload["cycle"]),
+            cycle=_required_integer(payload.get("cycle"), "cycle"),
             instrument=str(payload["instrument"]),
             trace_id=_text(payload.get("trace_id")),
             candidate_id=_text(payload.get("candidate_id")),
@@ -392,7 +392,14 @@ def _decimal(value: object) -> Decimal | None:
 def _integer(value: object) -> int | None:
     if value is None or value == "":
         return None
-    return int(value)
+    return int(str(value))
+
+
+def _required_integer(value: object, name: str) -> int:
+    parsed = _integer(value)
+    if parsed is None:
+        raise ValueError(f"{name} is required")
+    return parsed
 
 
 def _datetime(value: object) -> datetime | None:
