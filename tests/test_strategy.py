@@ -58,12 +58,24 @@ def test_fusion_trades_aligned_setup() -> None:
     assert result.direction is Direction.LONG
     assert result.setup_state == "entry_confirmed"
     assert result.rejection_code is None
+    assert result.evidence["score_semantics"] == "quality_ranking_not_probability"
 
 
 def test_fusion_abstains_on_conflict() -> None:
     result = SignalFusionPolicy().evaluate(technical(), fundamental("-0.8"), quote())
     assert result.disposition is DecisionDisposition.ABSTAIN
     assert result.rejection_code == "FUNDAMENTAL_CONFLICT"
+
+
+def test_admissible_fundamental_strength_does_not_arbitrarily_blend_into_quality_score() -> None:
+    policy = SignalFusionPolicy(minimum_score=Decimal("0.5"))
+    modest = policy.evaluate(technical(), fundamental("0.10", "0.60"), quote())
+    strong = policy.evaluate(technical(), fundamental("0.90", "1.00"), quote())
+    assert modest.disposition is DecisionDisposition.TRADE
+    assert strong.disposition is DecisionDisposition.TRADE
+    assert modest.score == strong.score
+    assert modest.fundamental_score != strong.fundamental_score
+    assert modest.evidence["score_inputs"] == "technical_structure_location_minus_spread_penalty"
 
 
 def test_fusion_abstains_on_wide_spread_preserving_setup_score() -> None:
