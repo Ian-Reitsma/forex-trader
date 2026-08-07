@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import Iterable, Mapping
 
@@ -11,7 +12,7 @@ from forex_trader.research.advanced import (
     PredictionObservation,
     calibration_report,
 )
-from forex_trader.research.backtest import BacktestTrade
+from forex_trader.research.backtest import BacktestTrade, OutcomeStatus
 from forex_trader.research.evidence import DecisionEvidence
 
 
@@ -65,10 +66,20 @@ class ExpectedValueDecision:
     conservative_net_r: Decimal
     probability_target: Decimal
     probability_target_lower: Decimal
+    probability_stop: Decimal
+    probability_timeout: Decimal
+    expected_timeout_r: Decimal
     sample_size: int
     confidence_half_width: Decimal
     calibration_error: Decimal | None
     reasons: tuple[str, ...]
+
+
+def _sort_key(item: LabeledDecision) -> tuple[datetime, str, str]:
+    signal_time = item.decision.signal_time
+    if signal_time is None:
+        raise ValueError("labeled decision requires signal_time")
+    return signal_time, item.decision.instrument, item.decision.trace_id or ""
 
 
 def chronological_split(
@@ -77,7 +88,7 @@ def chronological_split(
     train_fraction: Decimal = Decimal("0.60"),
     validation_fraction: Decimal = Decimal("0.20"),
 ) -> ChronologicalSplit:
-    values = tuple(sorted(records, key=lambda item: (item.decision.signal_time, item.decision.instrument, item.decision.trace_id or "")))
+    values = tuple(sorted(records, key=_sort_key))
     if len(values) < 3:
         raise ValueError("chronological split requires at least three labeled decisions")
     if not Decimal("0") < train_fraction < Decimal("1"):
@@ -208,11 +219,22 @@ class ResearchExpectedValueGate:
         expected = (
             estimate.p_target_before_stop * expected_gain_r
             - estimate.p_stop_before_target * expected_loss_r
+            + estimate.p_timeout * estimate.expected_timeout_r
             - costs
         )
         lower_target = max(Decimal("0"), estimate.p_target_before_stop - estimate.confidence_half_width)
         upper_stop = min(Decimal("1"), estimate.p_stop_before_target + estimate.confidence_half_width)
-        conservative = lower_target * expected_gain_r - upper_stop * expected_loss_r - costs
+        timeout_probability = (
+            max(Decimal("0"), estimate.p_timeout - estimate.confidence_half_width)
+            if estimate.expected_timeout_r >= 0
+            else min(Decimal("1"), estimate.p_timeout + estimate.confidence_half_width)
+        )
+        conservative = (
+            lower_target * expected_gain_r
+            - upper_stop * expected_loss_r
+            + timeout_probability * estimate.expected_timeout_r
+            - costs
+        )
 
         reasons: list[str] = []
         if estimate.sample_size < self.minimum_sample_size:
@@ -236,6 +258,9 @@ class ResearchExpectedValueGate:
             conservative_net_r=conservative,
             probability_target=estimate.p_target_before_stop,
             probability_target_lower=lower_target,
+            probability_stop=estimate.p_stop_before_target,
+            probability_timeout=estimate.p_timeout,
+            expected_timeout_r=estimate.expected_timeout_r,
             sample_size=estimate.sample_size,
             confidence_half_width=estimate.confidence_half_width,
             calibration_error=calibration_error,
@@ -251,7 +276,7 @@ def walk_forward_cohort_calibration(
     include_instrument: bool = False,
     model: EmpiricalOutcomeModel | None = None,
 ) -> CohortCalibrationSummary:
-    values = tuple(sorted(records, key=lambda item: (item.decision.signal_time, item.decision.instrument, item.decision.trace_id or "")))
+    values = tuple(sorted(records, key=_sort_key))
     if minimum_history < 2 or minimum_cohort_trades < 2:
         raise ValueError("history thresholds must be at least 2")
     outcome_model = model or EmpiricalOutcomeModel()
@@ -278,7 +303,7 @@ def walk_forward_cohort_calibration(
                     cohort=selected_key,
                     probability=estimate.p_target_before_stop,
                     confidence_half_width=estimate.confidence_half_width,
-                    outcome=record.outcome.r_multiple > 0,
+                    outcome=record.outcome.status is OutcomeStatus.WIN,
                     signal_time_iso=signal_time.isoformat(),
                     instrument=record.decision.instrument,
                 )
