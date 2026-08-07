@@ -27,6 +27,7 @@ from forex_trader.research.evidence import load_decision_evidence
 parser = argparse.ArgumentParser()
 parser.add_argument("decision_evidence", type=Path)
 parser.add_argument("outcome_evidence", type=Path)
+parser.add_argument("--setup-family", default=None, help="Analyze exactly one setup family; required for setup promotion evidence")
 parser.add_argument("--minimum-labeled-trades", type=int, default=200)
 parser.add_argument("--minimum-cohort-trades", type=int, default=30)
 parser.add_argument("--minimum-ev-sample", type=int, default=50)
@@ -50,9 +51,20 @@ if args.adverse_selection_r < 0 or args.operational_uncertainty_r < 0:
 decisions = load_decision_evidence(args.decision_evidence)
 outcomes = load_outcome_evidence(args.outcome_evidence)
 labeled = join_labeled_decisions(decisions, outcomes)
+if args.setup_family is not None:
+    requested_setup = args.setup_family.strip()
+    if not requested_setup:
+        raise SystemExit("--setup-family cannot be empty")
+    labeled = tuple(item for item in labeled if item.decision.setup_family == requested_setup)
+else:
+    requested_setup = None
+setup_families = sorted({item.decision.setup_family or "unknown" for item in labeled})
+if not labeled:
+    raise SystemExit("research dataset has no labeled trades for the requested setup family")
 if len(labeled) < args.minimum_labeled_trades:
+    scope = f" for setup_family={requested_setup}" if requested_setup is not None else ""
     raise SystemExit(
-        f"research dataset has {len(labeled)} labeled trades; "
+        f"research dataset has {len(labeled)} labeled trades{scope}; "
         f"minimum is {args.minimum_labeled_trades}. Collect more point-in-time evidence rather than weakening gates."
     )
 policy_fingerprints = {item.decision.policy_fingerprint for item in labeled}
@@ -143,6 +155,8 @@ report = {
     "research_only": True,
     "execution_authority": False,
     "policy_fingerprint": next(iter(policy_fingerprints)),
+    "setup_family_filter": requested_setup,
+    "setup_families_observed": setup_families,
     "dataset": {
         "labeled_trades": len(labeled),
         "train": len(split.train),
