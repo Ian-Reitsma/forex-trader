@@ -23,16 +23,59 @@ class AblationEvidence:
     ablated_expectancy_r: Decimal
     sample_size: int
     dataset_id: str
+    lower_confidence_component_increment_r: Decimal | None = None
+    upper_confidence_component_increment_r: Decimal | None = None
+    paired_wins: int | None = None
+    paired_losses: int | None = None
+    paired_ties: int | None = None
+    confidence: Decimal | None = None
+    bootstrap_iterations: int | None = None
+    bootstrap_seed: int | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip() or not self.dataset_id.strip():
             raise ValueError("ablation name and dataset_id are required")
         if self.sample_size < 1:
             raise ValueError("ablation sample_size must be positive")
+        uncertainty = (
+            self.lower_confidence_component_increment_r,
+            self.upper_confidence_component_increment_r,
+            self.paired_wins,
+            self.paired_losses,
+            self.paired_ties,
+            self.confidence,
+            self.bootstrap_iterations,
+            self.bootstrap_seed,
+        )
+        present = tuple(value is not None for value in uncertainty)
+        if any(present) and not all(present):
+            raise ValueError("ablation uncertainty fields must be supplied together")
+        if all(present):
+            assert self.lower_confidence_component_increment_r is not None
+            assert self.upper_confidence_component_increment_r is not None
+            assert self.paired_wins is not None
+            assert self.paired_losses is not None
+            assert self.paired_ties is not None
+            assert self.confidence is not None
+            assert self.bootstrap_iterations is not None
+            if self.lower_confidence_component_increment_r > self.upper_confidence_component_increment_r:
+                raise ValueError("ablation lower confidence bound cannot exceed upper bound")
+            if min(self.paired_wins, self.paired_losses, self.paired_ties) < 0:
+                raise ValueError("ablation paired counts cannot be negative")
+            if self.paired_wins + self.paired_losses + self.paired_ties != self.sample_size:
+                raise ValueError("ablation paired counts must equal sample_size")
+            if not Decimal("0") < self.confidence < Decimal("1"):
+                raise ValueError("ablation confidence must be in (0,1)")
+            if self.bootstrap_iterations < 100:
+                raise ValueError("ablation bootstrap_iterations must be at least 100")
 
     @property
     def component_increment_r(self) -> Decimal:
         return self.full_expectancy_r - self.ablated_expectancy_r
+
+    @property
+    def uncertainty_complete(self) -> bool:
+        return self.lower_confidence_component_increment_r is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +188,20 @@ class ResearchPromotionEvidence:
                     "ablated_expectancy_r": str(item.ablated_expectancy_r),
                     "sample_size": item.sample_size,
                     "dataset_id": item.dataset_id,
+                    "lower_confidence_component_increment_r": (
+                        str(item.lower_confidence_component_increment_r)
+                        if item.lower_confidence_component_increment_r is not None else None
+                    ),
+                    "upper_confidence_component_increment_r": (
+                        str(item.upper_confidence_component_increment_r)
+                        if item.upper_confidence_component_increment_r is not None else None
+                    ),
+                    "paired_wins": item.paired_wins,
+                    "paired_losses": item.paired_losses,
+                    "paired_ties": item.paired_ties,
+                    "confidence": str(item.confidence) if item.confidence is not None else None,
+                    "bootstrap_iterations": item.bootstrap_iterations,
+                    "bootstrap_seed": item.bootstrap_seed,
                 }
                 for item in sorted(self.ablations, key=lambda item: item.name)
             ],
@@ -188,6 +245,9 @@ class ResearchPromotionPolicy:
         "no_zone_quality",
         "no_retest",
     )
+    minimum_ablation_samples: int = 20
+    minimum_ablation_confidence: Decimal = Decimal("0.90")
+    minimum_ablation_bootstrap_iterations: int = 1000
     maximum_ablation_outperformance_r: Decimal = Decimal("0.05")
     minimum_replay_repetitions: int = 2
     minimum_phase_d_holdout_scenarios: int = 30
@@ -198,11 +258,15 @@ class ResearchPromotionPolicy:
             self.minimum_validation_predictions,
             self.minimum_untouched_test_trades,
             self.minimum_ev_eligible_trades,
+            self.minimum_ablation_samples,
+            self.minimum_ablation_bootstrap_iterations,
             self.minimum_replay_repetitions,
             self.minimum_phase_d_holdout_scenarios,
         )
         if any(value < 1 for value in counts):
             raise ValueError("research promotion sample requirements must be positive")
+        if self.minimum_ablation_bootstrap_iterations < 100:
+            raise ValueError("minimum_ablation_bootstrap_iterations must be at least 100")
         for value, name in (
             (self.maximum_validation_ece, "maximum_validation_ece"),
             (self.maximum_validation_brier, "maximum_validation_brier"),
@@ -210,6 +274,8 @@ class ResearchPromotionPolicy:
         ):
             if not Decimal("0") <= value <= Decimal("1"):
                 raise ValueError(f"{name} must be in [0,1]")
+        if not Decimal("0") < self.minimum_ablation_confidence < Decimal("1"):
+            raise ValueError("minimum_ablation_confidence must be in (0,1)")
         if self.maximum_untouched_drawdown_r < 0 or self.maximum_ablation_outperformance_r < 0:
             raise ValueError("drawdown and ablation tolerances cannot be negative")
         if len(set(self.required_ablations)) != len(self.required_ablations):
@@ -317,10 +383,52 @@ def assess_research_promotion(
         if item.dataset_id != evidence.dataset_id:
             hard.append(f"ablation:{name} dataset_id mismatch")
             continue
-        if item.ablated_expectancy_r - item.full_expectancy_r > rules.maximum_ablation_outperformance_r:
+        if item.sample_size != evidence.untouched_test_trades:
             hard.append(
-                f"ablation:{name} outperforms full policy by "
-                f"{item.ablated_expectancy_r - item.full_expectancy_r}R > {rules.maximum_ablation_outperformance_r}R"
+                f"ablation:{name} sample_size {item.sample_size} != untouched_test_trades "
+                f"{evidence.untouched_test_trades}"
+            )
+            continue
+        if item.full_expectancy_r != evidence.untouched_test_expectancy_r:
+            hard.append(
+                f"ablation:{name} full_expectancy_r {item.full_expectancy_r} != untouched_test_expectancy_r "
+                f"{evidence.untouched_test_expectancy_r}"
+            )
+            continue
+        if item.sample_size < rules.minimum_ablation_samples:
+            missing.append(
+                f"ablation_sample:{name}:{item.sample_size}/{rules.minimum_ablation_samples}"
+            )
+            continue
+        if not item.uncertainty_complete:
+            missing.append(f"ablation_uncertainty:{name}")
+            continue
+        assert item.lower_confidence_component_increment_r is not None
+        assert item.upper_confidence_component_increment_r is not None
+        assert item.confidence is not None
+        assert item.bootstrap_iterations is not None
+        if item.confidence < rules.minimum_ablation_confidence:
+            missing.append(
+                f"ablation_confidence:{name}:{item.confidence}/{rules.minimum_ablation_confidence}"
+            )
+            continue
+        if item.bootstrap_iterations < rules.minimum_ablation_bootstrap_iterations:
+            missing.append(
+                f"ablation_bootstrap_iterations:{name}:"
+                f"{item.bootstrap_iterations}/{rules.minimum_ablation_bootstrap_iterations}"
+            )
+            continue
+        harmful_threshold = -rules.maximum_ablation_outperformance_r
+        if item.upper_confidence_component_increment_r < harmful_threshold:
+            hard.append(
+                f"ablation:{name} confidently harmful: upper component increment "
+                f"{item.upper_confidence_component_increment_r}R < {harmful_threshold}R"
+            )
+        elif item.lower_confidence_component_increment_r < harmful_threshold:
+            missing.append(
+                f"ablation_uncertainty:{name}: lower component increment "
+                f"{item.lower_confidence_component_increment_r}R < {harmful_threshold}R "
+                "while interval still overlaps the non-harm region"
             )
         else:
             passed.append(f"ablation:{name}")
