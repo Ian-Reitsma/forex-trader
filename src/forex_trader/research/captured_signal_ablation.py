@@ -98,6 +98,8 @@ def validate_full_against_trace(
         ("stop_loss", row.stop_loss, candidate.stop_loss),
         ("take_profit", row.take_profit, candidate.take_profit),
         ("rejection_code", row.rejection_code, candidate.rejection_code),
+        ("quote_bid", row.quote_bid, trace.quote.bid),
+        ("quote_ask", row.quote_ask, trace.quote.ask),
     )
     mismatches = [name for name, actual, expected in comparisons if actual != expected]
     if mismatches:
