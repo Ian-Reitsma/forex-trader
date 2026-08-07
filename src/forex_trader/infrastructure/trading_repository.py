@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 from forex_trader.domain.events import EventImportance, ScheduledMacroEvent
@@ -15,7 +16,7 @@ from forex_trader.infrastructure.repository import SqliteDecisionRepository
 class TradingRepository(SqliteDecisionRepository):
     """Safety-oriented repository used by the runtime control/execution path."""
 
-    def __init__(self, path: str = ":memory:") -> None:
+    def __init__(self, path: str | Path = ":memory:") -> None:
         super().__init__(path)
         self._migrate_trading_state()
 
@@ -166,7 +167,18 @@ class TradingRepository(SqliteDecisionRepository):
         return halted
 
     def save_scheduled_event(self, event: ScheduledMacroEvent) -> None:
-        payload = json.dumps(jsonable(event), sort_keys=True)
+        payload_object = {
+            "event_id": str(event.event_id),
+            "currency": event.currency,
+            "scheduled_at": event.scheduled_at.isoformat(),
+            "name": event.name,
+            "importance": event.importance.value,
+            "source": event.source,
+            "pre_blackout_seconds": int(event.pre_blackout.total_seconds()),
+            "post_blackout_seconds": int(event.post_blackout.total_seconds()),
+            "confidence": str(event.confidence),
+        }
+        payload = json.dumps(payload_object, sort_keys=True)
         with self._lock, self._connection:
             existing = self._connection.execute(
                 "SELECT payload_json FROM scheduled_events WHERE event_id = ?", (str(event.event_id),)
@@ -202,22 +214,6 @@ class TradingRepository(SqliteDecisionRepository):
 
 
 def _scheduled_from_json(payload: dict[str, object]) -> ScheduledMacroEvent:
-    from datetime import timedelta
-
-    pre = payload.get("pre_blackout", 900)
-    post = payload.get("post_blackout", 300)
-    # jsonable(dataclass) serializes timedelta unchanged, so imported API records
-    # use explicit seconds; tolerate strings/numbers for migration compatibility.
-    def seconds(value: object, default: int) -> int:
-        if isinstance(value, (int, float)):
-            return int(value)
-        if isinstance(value, str):
-            try:
-                return int(float(value))
-            except ValueError:
-                return default
-        return default
-
     return ScheduledMacroEvent(
         event_id=UUID(str(payload["event_id"])),
         currency=str(payload["currency"]),
@@ -225,7 +221,7 @@ def _scheduled_from_json(payload: dict[str, object]) -> ScheduledMacroEvent:
         name=str(payload["name"]),
         importance=EventImportance(str(payload.get("importance", "high"))),
         source=str(payload.get("source", "manual")),
-        pre_blackout=timedelta(seconds=seconds(pre, 900)),
-        post_blackout=timedelta(seconds=seconds(post, 300)),
+        pre_blackout=timedelta(seconds=int(payload.get("pre_blackout_seconds", 900))),
+        post_blackout=timedelta(seconds=int(payload.get("post_blackout_seconds", 300))),
         confidence=Decimal(str(payload.get("confidence", "1"))),
     )
