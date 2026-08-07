@@ -8,6 +8,7 @@ evidence only; it cannot promote a policy or authorize a broker order.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from decimal import Decimal
 from pathlib import Path
@@ -24,9 +25,18 @@ from forex_trader.research.dataset import (
 from forex_trader.research.evidence import load_decision_evidence
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument("decision_evidence", type=Path)
 parser.add_argument("outcome_evidence", type=Path)
+parser.add_argument("--setup-family", default=None, help="Analyze exactly one setup family; required for setup promotion evidence")
 parser.add_argument("--minimum-labeled-trades", type=int, default=200)
 parser.add_argument("--minimum-cohort-trades", type=int, default=30)
 parser.add_argument("--minimum-ev-sample", type=int, default=50)
@@ -37,6 +47,7 @@ parser.add_argument("--minimum-conservative-net-r", type=Decimal, default=Decima
 parser.add_argument("--adverse-selection-r", type=Decimal, default=Decimal("0.03"))
 parser.add_argument("--operational-uncertainty-r", type=Decimal, default=Decimal("0.05"))
 parser.add_argument("--include-instrument-cohort", action="store_true")
+parser.add_argument("--output", type=Path, default=None, help="Optional immutable research-report JSON output")
 args = parser.parse_args()
 
 if args.minimum_labeled_trades < 3:
@@ -46,12 +57,26 @@ if args.minimum_cohort_trades < 2 or args.minimum_ev_sample < 2:
 if args.adverse_selection_r < 0 or args.operational_uncertainty_r < 0:
     raise SystemExit("uncertainty costs cannot be negative")
 
+decision_sha256 = _sha256(args.decision_evidence)
+outcome_sha256 = _sha256(args.outcome_evidence)
+dataset_id = hashlib.sha256(f"{decision_sha256}:{outcome_sha256}".encode()).hexdigest()
 decisions = load_decision_evidence(args.decision_evidence)
 outcomes = load_outcome_evidence(args.outcome_evidence)
 labeled = join_labeled_decisions(decisions, outcomes)
+if args.setup_family is not None:
+    requested_setup = args.setup_family.strip()
+    if not requested_setup:
+        raise SystemExit("--setup-family cannot be empty")
+    labeled = tuple(item for item in labeled if item.decision.setup_family == requested_setup)
+else:
+    requested_setup = None
+setup_families = sorted({item.decision.setup_family or "unknown" for item in labeled})
+if not labeled:
+    raise SystemExit("research dataset has no labeled trades for the requested setup family")
 if len(labeled) < args.minimum_labeled_trades:
+    scope = f" for setup_family={requested_setup}" if requested_setup is not None else ""
     raise SystemExit(
-        f"research dataset has {len(labeled)} labeled trades; "
+        f"research dataset has {len(labeled)} labeled trades{scope}; "
         f"minimum is {args.minimum_labeled_trades}. Collect more point-in-time evidence rather than weakening gates."
     )
 policy_fingerprints = {item.decision.policy_fingerprint for item in labeled}
@@ -142,7 +167,12 @@ report = {
     "research_only": True,
     "execution_authority": False,
     "policy_fingerprint": next(iter(policy_fingerprints)),
+    "setup_family_filter": requested_setup,
+    "setup_families_observed": setup_families,
     "dataset": {
+        "dataset_id": dataset_id,
+        "decision_sha256": decision_sha256,
+        "outcome_sha256": outcome_sha256,
         "labeled_trades": len(labeled),
         "train": len(split.train),
         "validation": len(split.validation),
@@ -200,4 +230,8 @@ report = {
         "ablation, drawdown, replay reproducibility, data-quality, execution and independent evidence requirements remain separate gates."
     ),
 }
-print(json.dumps(report, indent=2, sort_keys=True))
+text = json.dumps(report, indent=2, sort_keys=True)
+if args.output is not None:
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(text + "\n", encoding="utf-8")
+print(text)
