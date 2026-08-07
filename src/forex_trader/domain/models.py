@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -47,6 +47,8 @@ class Quote:
     bid: Decimal
     ask: Decimal
     time: datetime
+    bid_liquidity: Decimal | None = None
+    ask_liquidity: Decimal | None = None
 
     def __post_init__(self) -> None:
         if self.ask < self.bid:
@@ -84,6 +86,8 @@ class InstrumentSpec:
     trade_units_precision: int
     minimum_trade_size: Decimal
     maximum_order_units: Decimal | None = None
+    maximum_position_size: Decimal | None = None
+    margin_rate: Decimal | None = None
 
     @property
     def pip_size(self) -> Decimal:
@@ -152,6 +156,19 @@ class TechnicalAssessment:
     displacement: bool = False
     trend_strength: Decimal = Decimal("0")
     reward_risk: Decimal = Decimal("0")
+    setup_family: str = "legacy_sweep_reclaim"
+    setup_state: str = "observe"
+    zone_id: str | None = None
+    zone_quality: Decimal = Decimal("0")
+    liquidity_kind: str | None = None
+    liquidity_price: Decimal | None = None
+    liquidity_strength: Decimal = Decimal("0")
+    structure_shift: bool = False
+    retest_confirmed: bool = False
+    location_score: Decimal = Decimal("0")
+    structural_target: Decimal | None = None
+    flow_pressure: Decimal = Decimal("0")
+    flow_source: str = "none"
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +187,16 @@ class TradeCandidate:
     signal_time: datetime = field(default_factory=utc_now)
     execution_key: str = ""
     created_at: datetime = field(default_factory=utc_now)
+    setup_family: str = ""
+    setup_state: str = ""
+    rejection_code: str | None = None
+    fundamental_confidence: Decimal = Decimal("0")
+    evidence: dict[str, Any] = field(default_factory=dict)
+    expires_at: datetime | None = None
+
+    @property
+    def expired(self) -> bool:
+        return self.expires_at is not None and utc_now() > self.expires_at
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +208,12 @@ class RiskAuthorization:
     risk_amount: Decimal
     reasons: tuple[str, ...]
     created_at: datetime = field(default_factory=utc_now)
+    account_id: str | None = None
+    expires_at: datetime | None = None
+
+    @property
+    def expired(self) -> bool:
+        return self.expires_at is not None and utc_now() > self.expires_at
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +225,9 @@ class OrderRequest:
     stop_loss: Decimal
     take_profit: Decimal
     execution_key: str = ""
+    intended_price: Decimal | None = None
+    price_bound: Decimal | None = None
+    authorization_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +241,8 @@ class OrderResult:
     provider_trade_id: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=utc_now)
+    broker_time: datetime | None = None
+    protection_confirmed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +254,7 @@ class DecisionTrace:
     order: OrderResult | None
     quote: Quote
     created_at: datetime = field(default_factory=utc_now)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -225,8 +264,14 @@ class DecisionTrace:
         quote: Quote,
         risk: RiskAuthorization | None = None,
         order: OrderResult | None = None,
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> "DecisionTrace":
-        return cls(uuid4(), instrument, candidate, risk, order, quote)
+        return cls(uuid4(), instrument, candidate, risk, order, quote, metadata=metadata or {})
+
+
+def authorization_expiry(seconds: int = 15) -> datetime:
+    return utc_now() + timedelta(seconds=seconds)
 
 
 def jsonable(value: Any) -> Any:
