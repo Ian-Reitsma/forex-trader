@@ -95,6 +95,8 @@ class ProspectiveAblationDecision:
     stop_loss: Decimal | None
     take_profit: Decimal | None
     rejection_code: str | None
+    quote_bid: Decimal | None = None
+    quote_ask: Decimal | None = None
     error_type: str | None = None
     error_message: str | None = None
 
@@ -104,6 +106,10 @@ class ProspectiveAblationDecision:
         if self.signal_time.tzinfo is None:
             raise ValueError("signal_time must be timezone-aware")
         _validate_sha256(self.snapshot_payload_hash, "snapshot_payload_hash")
+        if (self.quote_bid is None) != (self.quote_ask is None):
+            raise ValueError("quote_bid and quote_ask must be supplied together")
+        if self.quote_bid is not None and self.quote_ask is not None and self.quote_ask < self.quote_bid:
+            raise ValueError("quote_ask must be >= quote_bid")
         if self.tradeable and self.error_type is not None:
             raise ValueError("errored ablation decisions cannot be tradeable")
         if self.tradeable and (self.entry_price is None or self.stop_loss is None or self.take_profit is None):
@@ -146,6 +152,7 @@ class ProspectiveAblationCollector:
             try:
                 row = self._evaluator(snapshot, variant)
             except Exception as exc:  # research evidence must retain evaluator failures
+                quote_bid, quote_ask = _snapshot_quote(snapshot)
                 row = ProspectiveAblationDecision(
                     snapshot_id=snapshot.snapshot_id,
                     snapshot_payload_hash=snapshot.payload_hash,
@@ -161,6 +168,8 @@ class ProspectiveAblationCollector:
                     stop_loss=None,
                     take_profit=None,
                     rejection_code="evaluation_error",
+                    quote_bid=quote_bid,
+                    quote_ask=quote_ask,
                     error_type=type(exc).__name__,
                     error_message=str(exc)[:500],
                 )
@@ -194,6 +203,12 @@ class MaturedAblationOutcome:
     variant: AblationVariant
     realized_r: Decimal
     status: str
+    labeled_at: datetime | None = None
+    label_policy: str = ""
+    bars_held: int = 0
+    exit_reason: str = ""
+    ambiguous_bar: bool = False
+    estimated_cost_r: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         if not self.snapshot_id.strip() or not self.policy_fingerprint.strip():
@@ -201,6 +216,12 @@ class MaturedAblationOutcome:
         _validate_sha256(self.snapshot_payload_hash, "snapshot_payload_hash")
         if not self.status.strip():
             raise ValueError("matured ablation status is required")
+        if self.labeled_at is not None and self.labeled_at.tzinfo is None:
+            raise ValueError("matured ablation labeled_at must be timezone-aware")
+        if self.bars_held < 0:
+            raise ValueError("matured ablation bars_held cannot be negative")
+        if self.estimated_cost_r < 0:
+            raise ValueError("matured ablation estimated_cost_r cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,6 +313,12 @@ def paired_artifact_id(outcomes: Iterable[MaturedAblationOutcome]) -> str:
             "variant": row.variant.value,
             "realized_r": str(row.realized_r),
             "status": row.status,
+            "labeled_at": None if row.labeled_at is None else row.labeled_at.isoformat(),
+            "label_policy": row.label_policy,
+            "bars_held": row.bars_held,
+            "exit_reason": row.exit_reason,
+            "ambiguous_bar": row.ambiguous_bar,
+            "estimated_cost_r": str(row.estimated_cost_r),
         }
         for row in sorted(rows, key=lambda item: (item.snapshot_id, item.variant.value))
     ]
@@ -308,7 +335,7 @@ def append_ablation_decisions(path: str | Path, rows: Iterable[ProspectiveAblati
             payload = asdict(row)
             payload["signal_time"] = row.signal_time.isoformat()
             payload["variant"] = row.variant.value
-            for field in ("score", "entry_price", "stop_loss", "take_profit"):
+            for field in ("score", "entry_price", "stop_loss", "take_profit", "quote_bid", "quote_ask"):
                 value = payload[field]
                 payload[field] = str(value) if value is not None else None
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
@@ -316,11 +343,15 @@ def append_ablation_decisions(path: str | Path, rows: Iterable[ProspectiveAblati
     return count
 
 
-def load_matured_ablation_outcomes(path: str | Path) -> tuple[MaturedAblationOutcome, ...]:
+def load_ablation_decisions(
+    path: str | Path,
+    *,
+    require_complete: bool = True,
+) -> tuple[ProspectiveAblationDecision, ...]:
     file_path = Path(path)
     if not file_path.is_file():
         raise FileNotFoundError(file_path)
-    rows: list[MaturedAblationOutcome] = []
+    rows: list[ProspectiveAblationDecision] = []
     for line_number, raw in enumerate(file_path.read_text(encoding="utf-8").splitlines(), start=1):
         if not raw.strip():
             continue
@@ -329,15 +360,87 @@ def load_matured_ablation_outcomes(path: str | Path) -> tuple[MaturedAblationOut
             if not isinstance(payload, dict):
                 raise ValueError("expected JSON object")
             rows.append(
-                MaturedAblationOutcome(
-                    snapshot_id=str(payload["snapshot_id"]),
-                    snapshot_payload_hash=str(payload["snapshot_payload_hash"]),
-                    policy_fingerprint=str(payload["policy_fingerprint"]),
-                    variant=AblationVariant(str(payload["variant"])),
-                    realized_r=Decimal(str(payload["realized_r"])),
-                    status=str(payload["status"]),
+                ProspectiveAblationDecision(
+                    snapshot_id=_required_text(payload.get("snapshot_id"), "snapshot_id"),
+                    snapshot_payload_hash=_required_text(payload.get("snapshot_payload_hash"), "snapshot_payload_hash"),
+                    policy_fingerprint=_required_text(payload.get("policy_fingerprint"), "policy_fingerprint"),
+                    instrument=_required_text(payload.get("instrument"), "instrument"),
+                    signal_time=_required_datetime(payload.get("signal_time"), "signal_time"),
+                    variant=AblationVariant(_required_text(payload.get("variant"), "variant")),
+                    tradeable=_required_bool(payload.get("tradeable"), "tradeable"),
+                    setup_family=_optional_text(payload.get("setup_family")),
+                    direction=_optional_text(payload.get("direction")),
+                    score=_optional_decimal(payload.get("score")),
+                    entry_price=_optional_decimal(payload.get("entry_price")),
+                    stop_loss=_optional_decimal(payload.get("stop_loss")),
+                    take_profit=_optional_decimal(payload.get("take_profit")),
+                    rejection_code=_optional_text(payload.get("rejection_code")),
+                    quote_bid=_optional_decimal(payload.get("quote_bid")),
+                    quote_ask=_optional_decimal(payload.get("quote_ask")),
+                    error_type=_optional_text(payload.get("error_type")),
+                    error_message=_optional_text(payload.get("error_message")),
                 )
             )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(f"invalid prospective ablation JSONL line {line_number}: {exc}") from exc
+    if not rows:
+        raise ValueError("prospective ablation decision file is empty")
+    _validate_prospective_groups(rows, require_complete=require_complete)
+    return tuple(rows)
+
+
+def append_matured_ablation_outcomes(
+    path: str | Path,
+    outcomes: Iterable[MaturedAblationOutcome],
+) -> int:
+    values = tuple(outcomes)
+    if not values:
+        return 0
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with file_path.open("a", encoding="utf-8") as handle:
+        for row in values:
+            payload = asdict(row)
+            payload["variant"] = row.variant.value
+            payload["realized_r"] = str(row.realized_r)
+            payload["estimated_cost_r"] = str(row.estimated_cost_r)
+            payload["labeled_at"] = None if row.labeled_at is None else row.labeled_at.isoformat()
+            handle.write(json.dumps(payload, sort_keys=True) + "\n")
+    return len(values)
+
+
+def load_matured_ablation_outcomes(path: str | Path) -> tuple[MaturedAblationOutcome, ...]:
+    file_path = Path(path)
+    if not file_path.is_file():
+        raise FileNotFoundError(file_path)
+    rows: list[MaturedAblationOutcome] = []
+    seen: set[tuple[str, AblationVariant]] = set()
+    for line_number, raw in enumerate(file_path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not raw.strip():
+            continue
+        try:
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise ValueError("expected JSON object")
+            row = MaturedAblationOutcome(
+                snapshot_id=str(payload["snapshot_id"]),
+                snapshot_payload_hash=str(payload["snapshot_payload_hash"]),
+                policy_fingerprint=str(payload["policy_fingerprint"]),
+                variant=AblationVariant(str(payload["variant"])),
+                realized_r=Decimal(str(payload["realized_r"])),
+                status=str(payload["status"]),
+                labeled_at=_optional_datetime(payload.get("labeled_at"), "labeled_at"),
+                label_policy=_optional_text(payload.get("label_policy")) or "",
+                bars_held=int(str(payload.get("bars_held", 0))),
+                exit_reason=_optional_text(payload.get("exit_reason")) or "",
+                ambiguous_bar=bool(payload.get("ambiguous_bar", False)),
+                estimated_cost_r=Decimal(str(payload.get("estimated_cost_r", "0"))),
+            )
+            key = (row.snapshot_id, row.variant)
+            if key in seen:
+                raise ValueError(f"duplicate matured outcome for {row.snapshot_id}/{row.variant.value}")
+            seen.add(key)
+            rows.append(row)
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError(f"invalid matured ablation JSONL line {line_number}: {exc}") from exc
     if not rows:
@@ -380,6 +483,98 @@ def write_paired_ablation_evidence(
     file_path = Path(path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _validate_prospective_groups(
+    rows: Iterable[ProspectiveAblationDecision],
+    *,
+    require_complete: bool,
+) -> None:
+    grouped: dict[str, dict[AblationVariant, ProspectiveAblationDecision]] = {}
+    identities: dict[str, tuple[object, ...]] = {}
+    for row in rows:
+        identity = (
+            row.snapshot_payload_hash,
+            row.policy_fingerprint,
+            row.instrument,
+            row.signal_time,
+            row.quote_bid,
+            row.quote_ask,
+        )
+        prior = identities.setdefault(row.snapshot_id, identity)
+        if prior != identity:
+            raise ValueError(f"snapshot {row.snapshot_id} has inconsistent prospective identity")
+        bucket = grouped.setdefault(row.snapshot_id, {})
+        if row.variant in bucket:
+            raise ValueError(f"duplicate prospective decision for {row.snapshot_id}/{row.variant.value}")
+        bucket[row.variant] = row
+    if not require_complete:
+        return
+    expected = set(REQUIRED_ABLATION_VARIANTS)
+    for snapshot_id, bucket in grouped.items():
+        missing = expected - set(bucket)
+        if missing:
+            names = ",".join(sorted(item.value for item in missing))
+            raise ValueError(f"snapshot {snapshot_id} is missing prospective variants: {names}")
+
+
+def _snapshot_quote(snapshot: FrozenAblationSnapshot) -> tuple[Decimal | None, Decimal | None]:
+    if snapshot.payload_json is None:
+        return None, None
+    try:
+        payload = snapshot.require_payload()
+        raw = payload.get("quote")
+        if not isinstance(raw, Mapping):
+            return None, None
+        bid = _optional_decimal(raw.get("bid"))
+        ask = _optional_decimal(raw.get("ask"))
+        if bid is None or ask is None or ask < bid:
+            return None, None
+        return bid, ask
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None, None
+
+
+def _optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _required_text(value: object, name: str) -> str:
+    text = _optional_text(value)
+    if text is None:
+        raise ValueError(f"{name} is required")
+    return text
+
+
+def _optional_decimal(value: object) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    return Decimal(str(value))
+
+
+def _required_datetime(value: object, name: str) -> datetime:
+    parsed = _optional_datetime(value, name)
+    if parsed is None:
+        raise ValueError(f"{name} is required")
+    return parsed
+
+
+def _optional_datetime(value: object, name: str) -> datetime | None:
+    if value is None or value == "":
+        return None
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    if parsed.tzinfo is None:
+        raise ValueError(f"{name} must be timezone-aware")
+    return parsed
+
+
+def _required_bool(value: object, name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"{name} must be boolean")
 
 
 def _validate_sha256(value: str, name: str) -> None:
