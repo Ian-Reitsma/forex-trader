@@ -8,7 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Callable, Iterable, Mapping
 
-from forex_trader.research.backtest import BacktestReport, BacktestTrade, summarize_trades
+from forex_trader.research.backtest import BacktestReport, BacktestTrade, OutcomeStatus, summarize_trades
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,41 +145,74 @@ class OutcomeEstimate:
     sample_size: int
     confidence_half_width: Decimal
     calibration_version: str
+    p_timeout: Decimal = Decimal("0")
+    expected_timeout_r: Decimal = Decimal("0")
+
+    def __post_init__(self) -> None:
+        probabilities = (self.p_target_before_stop, self.p_stop_before_target, self.p_timeout)
+        if any(value < 0 or value > 1 for value in probabilities):
+            raise ValueError("outcome probabilities must be in [0,1]")
+        if sum(probabilities, Decimal("0")) != Decimal("1"):
+            raise ValueError("target, stop and timeout probabilities must sum to 1")
+        if self.sample_size < 0:
+            raise ValueError("sample_size cannot be negative")
+        if not Decimal("0") <= self.confidence_half_width <= Decimal("1"):
+            raise ValueError("confidence_half_width must be in [0,1]")
 
 
 class EmpiricalOutcomeModel:
-    """Regularized empirical baseline; deliberately simpler than an unvalidated ML model."""
+    """Regularized three-outcome empirical baseline for target, stop, and time-exit paths."""
 
-    def __init__(self, *, prior_wins: Decimal = Decimal("2"), prior_losses: Decimal = Decimal("2"), calibration_version: str = "empirical-v1") -> None:
-        if prior_wins <= 0 or prior_losses <= 0:
-            raise ValueError("beta prior must be positive")
+    def __init__(
+        self,
+        *,
+        prior_wins: Decimal = Decimal("2"),
+        prior_losses: Decimal = Decimal("2"),
+        prior_timeouts: Decimal = Decimal("1"),
+        calibration_version: str = "empirical-v2-three-outcome",
+    ) -> None:
+        if prior_wins <= 0 or prior_losses <= 0 or prior_timeouts <= 0:
+            raise ValueError("outcome priors must be positive")
         self.prior_wins = prior_wins
         self.prior_losses = prior_losses
+        self.prior_timeouts = prior_timeouts
         self.calibration_version = calibration_version
 
     def estimate(self, trades: Iterable[BacktestTrade]) -> OutcomeEstimate:
         sample = tuple(trades)
-        wins = sum(trade.r_multiple > 0 for trade in sample)
-        losses = sum(trade.r_multiple < 0 for trade in sample)
+        wins = sum(trade.status is OutcomeStatus.WIN for trade in sample)
+        losses = sum(trade.status is OutcomeStatus.LOSS for trade in sample)
+        timeouts = sum(trade.status is OutcomeStatus.TIMEOUT for trade in sample)
         alpha = self.prior_wins + Decimal(wins)
         beta = self.prior_losses + Decimal(losses)
-        p_target = alpha / (alpha + beta)
-        p_stop = beta / (alpha + beta)
+        gamma = self.prior_timeouts + Decimal(timeouts)
+        total = alpha + beta + gamma
+        p_target = alpha / total
+        p_stop = beta / total
+        p_timeout = gamma / total
         count = len(sample)
+        timeout_sample = [item.r_multiple for item in sample if item.status is OutcomeStatus.TIMEOUT]
         if count:
             expected_mfe = sum((item.maximum_favorable_r for item in sample), Decimal("0")) / Decimal(count)
             expected_mae = sum((item.maximum_adverse_r for item in sample), Decimal("0")) / Decimal(count)
             expected_hold = sum((Decimal(item.bars_held) for item in sample), Decimal("0")) / Decimal(count)
         else:
             expected_mfe = expected_mae = expected_hold = Decimal("0")
-        variance = float(p_target * (Decimal("1") - p_target) / (alpha + beta + Decimal("1")))
+        expected_timeout = (
+            sum(timeout_sample, Decimal("0")) / Decimal(len(timeout_sample))
+            if timeout_sample
+            else Decimal("0")
+        )
+        variance = float(p_target * (Decimal("1") - p_target) / (total + Decimal("1")))
         half_width = Decimal(str(1.96 * math.sqrt(max(0.0, variance))))
         return OutcomeEstimate(
             p_target_before_stop=p_target,
             p_stop_before_target=p_stop,
+            p_timeout=p_timeout,
             expected_mfe_r=expected_mfe,
             expected_mae_r=expected_mae,
             expected_holding_bars=expected_hold,
+            expected_timeout_r=expected_timeout,
             sample_size=count,
             confidence_half_width=min(Decimal("1"), half_width),
             calibration_version=self.calibration_version,
@@ -211,7 +244,12 @@ def expected_net_r(
     if any(value < 0 for value in values):
         raise ValueError("gain/loss magnitudes and costs cannot be negative")
     costs = sum(values[2:], Decimal("0"))
-    return estimate.p_target_before_stop * expected_gain_r - estimate.p_stop_before_target * expected_loss_r - costs
+    return (
+        estimate.p_target_before_stop * expected_gain_r
+        - estimate.p_stop_before_target * expected_loss_r
+        + estimate.p_timeout * estimate.expected_timeout_r
+        - costs
+    )
 
 
 @dataclass(frozen=True, slots=True)
