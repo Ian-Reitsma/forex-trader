@@ -4,6 +4,7 @@ from decimal import ROUND_FLOOR, Decimal
 from typing import Callable, Iterable
 from uuid import uuid4
 
+from forex_trader.domain.correlation_risk import CorrelationRiskGuard
 from forex_trader.domain.enums import DecisionDisposition, Direction, RiskDisposition
 from forex_trader.domain.models import AccountSnapshot, Quote, RiskAuthorization, TradeCandidate, authorization_expiry
 from forex_trader.domain.portfolio import OpenPosition, currency_exposure
@@ -23,6 +24,7 @@ class RiskPolicy:
         max_currency_exposure_fraction: Decimal = Decimal("2"),
         margin_buffer_fraction: Decimal = Decimal("0.20"),
         authorization_ttl_seconds: int = 15,
+        correlation_guard: CorrelationRiskGuard | None = None,
     ) -> None:
         if not Decimal("0") < risk_fraction <= Decimal("0.02"):
             raise ValueError("risk_fraction must be greater than 0 and no more than 0.02")
@@ -46,6 +48,7 @@ class RiskPolicy:
         self.max_currency_exposure_fraction = max_currency_exposure_fraction
         self.margin_buffer_fraction = margin_buffer_fraction
         self.authorization_ttl_seconds = authorization_ttl_seconds
+        self.correlation_guard = correlation_guard
 
     def authorize(
         self,
@@ -60,6 +63,7 @@ class RiskPolicy:
         maximum_position_units: Decimal | None = None,
     ) -> RiskAuthorization:
         reasons: list[str] = []
+        existing = list(positions)
         if candidate.disposition is not DecisionDisposition.TRADE:
             return self.deny(candidate, "candidate is not tradeable", account_id=account.account_id)
         if candidate.expires_at is not None and quote.time > candidate.expires_at:
@@ -70,6 +74,19 @@ class RiskPolicy:
             return self.deny(candidate, "risk quote instrument does not match candidate", account_id=account.account_id)
         if account.open_position_count >= self.max_open_positions:
             return self.deny(candidate, "maximum open-position count reached", account_id=account.account_id)
+
+        if self.correlation_guard is not None and existing:
+            correlation = self.correlation_guard.evaluate(candidate, existing)
+            if correlation.blocked:
+                return self.deny(
+                    candidate,
+                    correlation.reason or "correlation risk vetoed the proposed position",
+                    account_id=account.account_id,
+                )
+            if correlation.max_signed_correlation is not None:
+                reasons.append(
+                    f"maximum signed P/L correlation={correlation.max_signed_correlation:.3f}"
+                )
 
         capital_base = min(account.balance, account.nav)
         if capital_base <= 0:
@@ -111,7 +128,6 @@ class RiskPolicy:
         if units < self.minimum_units:
             return self.deny(candidate, "calculated size is below broker minimum", account_id=account.account_id)
 
-        existing = list(positions)
         if conversion_rate is not None:
             signed = Decimal(units if candidate.direction is Direction.LONG else -units)
             hypothetical = [
