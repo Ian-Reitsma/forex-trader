@@ -8,6 +8,7 @@ evidence only; it cannot promote a policy or authorize a broker order.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from decimal import Decimal
 from pathlib import Path
@@ -22,6 +23,14 @@ from forex_trader.research.dataset import (
     spread_cost_r_from_quote,
 )
 from forex_trader.research.evidence import load_decision_evidence
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 parser = argparse.ArgumentParser()
@@ -48,6 +57,9 @@ if args.minimum_cohort_trades < 2 or args.minimum_ev_sample < 2:
 if args.adverse_selection_r < 0 or args.operational_uncertainty_r < 0:
     raise SystemExit("uncertainty costs cannot be negative")
 
+decision_sha256 = _sha256(args.decision_evidence)
+outcome_sha256 = _sha256(args.outcome_evidence)
+dataset_id = hashlib.sha256(f"{decision_sha256}:{outcome_sha256}".encode()).hexdigest()
 decisions = load_decision_evidence(args.decision_evidence)
 outcomes = load_outcome_evidence(args.outcome_evidence)
 labeled = join_labeled_decisions(decisions, outcomes)
@@ -158,6 +170,9 @@ report = {
     "setup_family_filter": requested_setup,
     "setup_families_observed": setup_families,
     "dataset": {
+        "dataset_id": dataset_id,
+        "decision_sha256": decision_sha256,
+        "outcome_sha256": outcome_sha256,
         "labeled_trades": len(labeled),
         "train": len(split.train),
         "validation": len(split.validation),
