@@ -47,6 +47,13 @@ def _required_text(value: object, name: str) -> str:
     return text
 
 
+def _optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _required_int(value: object, name: str) -> int:
     if value is None or value == "":
         raise SystemExit(f"{name} is required")
@@ -115,6 +122,10 @@ def _load_ablations(path: Path | None, *, dataset_id: str) -> tuple[AblationEvid
                 confidence=_optional_decimal(item.get("confidence")),
                 bootstrap_iterations=_optional_int(item.get("bootstrap_iterations")),
                 bootstrap_seed=_optional_int(item.get("bootstrap_seed")),
+                interval_scope=_optional_text(item.get("interval_scope")),
+                multiple_testing_method=_optional_text(item.get("multiple_testing_method")),
+                familywise_confidence=_optional_decimal(item.get("familywise_confidence")),
+                family_size=_optional_int(item.get("family_size")),
             )
         )
     if any(item.dataset_id != dataset_id for item in results):
