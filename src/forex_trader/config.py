@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from forex_trader.adapters.oanda_safe import SafeOandaPracticeClient
 from forex_trader.adapters.simulator import SimulatedPaperBroker
 from forex_trader.adapters.synthetic import SyntheticMarketData
+from forex_trader.adapters.timeframe import TimeframeMappedMarketData
 from forex_trader.application.engine import TradingEngine
 from forex_trader.domain.costs import SessionCostModel
 from forex_trader.domain.enums import OperatingMode, ProviderKind
@@ -19,6 +20,7 @@ from forex_trader.domain.macro_history import PointInTimeFundamentalBook
 from forex_trader.domain.models import CurrencyFundamentals
 from forex_trader.domain.risk import RiskPolicy
 from forex_trader.domain.strategy import SignalFusionPolicy
+from forex_trader.domain.timeframes import validate_timeframe_pair
 from forex_trader.infrastructure.trading_repository import TradingRepository
 
 
@@ -53,6 +55,8 @@ class AppConfig:
     mode: OperatingMode = OperatingMode.SHADOW
     database_path: str = "./forex_trader.db"
     instruments: tuple[str, ...] = ("EUR_USD",)
+    lower_timeframe: str = "M5"
+    higher_timeframe: str = "H1"
     require_fundamentals: bool = True
     enable_paper_orders: bool = False
     minimum_score: Decimal = Decimal("0.66")
@@ -85,6 +89,8 @@ class AppConfig:
             mode=OperatingMode(os.getenv("FOREX_MODE", "shadow").lower()),
             database_path=os.getenv("FOREX_DATABASE_PATH", "./forex_trader.db"),
             instruments=instruments,
+            lower_timeframe=os.getenv("FOREX_LOWER_TIMEFRAME", "M5").upper(),
+            higher_timeframe=os.getenv("FOREX_HIGHER_TIMEFRAME", "H1").upper(),
             require_fundamentals=_bool(os.getenv("FOREX_REQUIRE_FUNDAMENTALS"), True),
             enable_paper_orders=_bool(os.getenv("FOREX_ENABLE_PAPER_ORDERS"), False),
             minimum_score=_decimal_env("FOREX_MINIMUM_SCORE", "0.66"),
@@ -122,6 +128,10 @@ class AppConfig:
             errors.append("paper orders can only be enabled when FOREX_MODE=paper")
         if not self.instruments and not self.auto_discover_currency_instruments:
             errors.append("at least one instrument is required unless auto discovery is enabled")
+        try:
+            validate_timeframe_pair(self.lower_timeframe, self.higher_timeframe)
+        except ValueError as exc:
+            errors.append(str(exc))
         if not Decimal("0") <= self.minimum_score <= Decimal("1"):
             errors.append("FOREX_MINIMUM_SCORE must be between 0 and 1")
         if self.maximum_spread_pips <= 0 or self.maximum_slippage_pips <= 0:
@@ -196,8 +206,13 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
     else:
         provider = SyntheticMarketData(direction="long")
         broker = SimulatedPaperBroker(provider)
+    market_data = TimeframeMappedMarketData(
+        provider,
+        lower_timeframe=config.lower_timeframe,
+        higher_timeframe=config.higher_timeframe,
+    )
     return TradingEngine(
-        market_data=provider,
+        market_data=market_data,
         broker=broker,
         repository=repository,
         fundamentals=fundamentals,
