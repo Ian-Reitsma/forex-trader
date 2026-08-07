@@ -8,7 +8,8 @@ from forex_trader.adapters.synthetic import SyntheticMarketData
 from forex_trader.adapters.timeframe import TimeframeMappedMarketData
 from forex_trader.domain.correlation_risk import CorrelationRiskGuard
 from forex_trader.domain.enums import DecisionDisposition, Direction
-from forex_trader.domain.models import OpenPosition, TradeCandidate
+from forex_trader.domain.models import TradeCandidate
+from forex_trader.domain.portfolio import OpenPosition
 
 
 class CountingProvider:
