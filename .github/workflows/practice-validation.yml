@@ -94,11 +94,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "$OANDA_API_TOKEN" || -z "$OANDA_ACCOUNT_ID" ]]; then
-            echo "OANDA Practice credentials are not configured as repository Actions secrets."
+          if [[ -z "$OANDA_API_TOKEN" ]]; then
+            echo "OANDA_API_TOKEN is not configured as a repository Actions secret."
             exit 2
           fi
-          echo "OANDA Practice credentials are configured; values are intentionally not printed."
+          if [[ "$PRACTICE_STAGE" != "read-only" && -z "$OANDA_ACCOUNT_ID" ]]; then
+            echo "OANDA_ACCOUNT_ID is required for round-trip/campaign Practice writes."
+            exit 2
+          fi
+          echo "OANDA Practice token is configured; value is intentionally not printed."
+          if [[ -n "$OANDA_ACCOUNT_ID" ]]; then
+            echo "Explicit Practice account ID is configured; value is intentionally not printed."
+          else
+            echo "Read-only stage will discover the authorized Practice account from the token."
+          fi
 
       - name: Install
         run: python -m pip install --upgrade pip && pip install -e ".[dev]"
