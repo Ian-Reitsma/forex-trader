@@ -1,0 +1,49 @@
+contracts:
+  RiskAuthorization:
+    version: 1.0.0
+    fields:
+      authorization_id: uuid
+      candidate_id: uuid
+      candidate_hash: string
+      account_id: string
+      environment: [paper, live]
+      approved_side: string
+      maximum_units: decimal string
+      approved_entry_range: object
+      stop: object
+      maximum_loss: object
+      required_protection: object
+      portfolio_snapshot_id: uuid
+      risk_policy_version: string
+      issued_at: timestamp
+      expires_at: timestamp
+      integrity_ref: string
+  OrderIntent:
+    version: 1.0.0
+    fields:
+      order_intent_id: uuid
+      authorization_id: uuid
+      idempotency_key: string
+      broker: string
+      broker_account_ref: string
+      instrument_id: string
+      side: string
+      units: decimal string
+      order_type: string
+      price_constraints: object
+      time_in_force: string
+      stop: object
+      targets: array
+      expires_at: timestamp
+  BrokerEvent:
+    version: 1.0.0
+    fields:
+      provider_event_type: string
+      provider_order_id: optional string
+      provider_trade_id: optional string
+      provider_transaction_id: optional string
+      internal_order_intent_id: optional uuid
+      state: string
+      price: optional decimal string
+      units: optional decimal string
+      raw_payload_ref: string

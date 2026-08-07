@@ -1,0 +1,47 @@
+$title: EventEnvelope
+version: 1.0.0
+type: object
+required:
+  - schema_name
+  - schema_version
+  - event_id
+  - event_type
+  - event_version
+  - occurred_at
+  - observed_at
+  - producer
+  - environment
+  - correlation_id
+  - partition_key
+  - source
+  - payload
+properties:
+  schema_name: {const: EventEnvelope}
+  schema_version: {type: string}
+  event_id: {type: string, format: uuid}
+  event_type: {type: string}
+  event_version: {type: integer, minimum: 1}
+  occurred_at: {type: string, format: date-time}
+  observed_at: {type: string, format: date-time}
+  persisted_at: {type: [string, 'null'], format: date-time}
+  producer: {type: string}
+  environment: {enum: [research, shadow, paper, live]}
+  correlation_id: {type: string, format: uuid}
+  causation_id: {type: [string, 'null']}
+  partition_key: {type: string}
+  idempotency_key: {type: [string, 'null']}
+  source:
+    type: object
+    required: [provider, channel]
+    properties:
+      provider: {type: string}
+      channel: {type: string}
+      provider_sequence: {type: [string, 'null']}
+      payload_ref: {type: [string, 'null']}
+      payload_sha256: {type: [string, 'null']}
+  trace:
+    type: object
+    properties:
+      trace_id: {type: [string, 'null']}
+      span_id: {type: [string, 'null']}
+  payload: {type: object}

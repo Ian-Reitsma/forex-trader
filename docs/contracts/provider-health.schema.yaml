@@ -1,0 +1,19 @@
+$title: ProviderHealth
+version: 1.0.0
+required: [provider, channel, environment, status, evaluated_at]
+fields:
+  provider: string
+  channel: string
+  environment: string
+  status: [HEALTHY, DEGRADED, STALE, GAPPED, RATE_LIMITED, DISCONNECTED, UNAUTHORIZED, HALTED]
+  connected_at: optional timestamp
+  last_message_at: optional timestamp
+  last_heartbeat_at: optional timestamp
+  event_lag_ms: optional number
+  clock_offset_ms: optional number
+  gap_count: integer
+  error_rate_5m: number
+  rate_limit_remaining: optional integer
+  capability_flags: array
+  degradation_reasons: array
+  evaluated_at: timestamp

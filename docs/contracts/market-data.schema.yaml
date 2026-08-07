@@ -1,0 +1,26 @@
+contracts:
+  QuoteNormalized:
+    version: 1.0.0
+    required: [instrument_id, event_time, observed_at, bid, ask, provider, tradeable, quality]
+    fields:
+      instrument_id: canonical pair
+      event_time: provider market timestamp
+      observed_at: local receipt timestamp
+      bid: decimal string
+      ask: decimal string
+      bid_liquidity: optional decimal string
+      ask_liquidity: optional decimal string
+      tradeable: boolean
+      provider: string
+      provider_symbol: string
+      provider_sequence: optional string
+      quality: [GOOD, STALE, GAPPED, INVALID, DEGRADED]
+  CandleClosed:
+    version: 1.0.0
+    required: [instrument_id, timeframe, price_basis, open_time, close_time, available_at, o, h, l, c, revision]
+    fields:
+      price_basis: [BID, ASK, MID, TRADE]
+      revision: integer
+      is_final: boolean
+      input_watermark: timestamp
+      source_event_manifest_ref: string

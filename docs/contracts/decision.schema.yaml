@@ -1,0 +1,26 @@
+contracts:
+  TradeCandidate:
+    version: 1.0.0
+    required: [candidate_id, strategy_policy_version, instrument_id, direction, setup_family, created_at, expires_at, entry_plan, invalidation, targets, evidence, trace_id]
+    fields:
+      candidate_id: uuid
+      direction: [LONG_BASE, SHORT_BASE]
+      setup_family: string
+      regime: string
+      entry_plan: object
+      invalidation: object
+      targets: array
+      technical_snapshot_id: uuid
+      fundamental_snapshot_ids: array
+      conflicts: array
+      gate_results: array
+      score_components: object
+      required_execution_capabilities: array
+  CandidateRejection:
+    version: 1.0.0
+    fields:
+      evaluation_id: uuid
+      rejection_codes: array
+      evidence: object
+      policy_version: string
+      trace_id: uuid

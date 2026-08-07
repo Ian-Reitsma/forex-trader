@@ -1,0 +1,39 @@
+contracts:
+  EconomicEventSnapshot:
+    version: 1.0.0
+    fields:
+      canonical_event_id: uuid
+      provider_event_id: string
+      country: string
+      currency: string
+      indicator_id: string
+      scheduled_at: timestamp
+      snapshot_at: timestamp
+      consensus: optional decimal string
+      previous_as_known: optional decimal string
+      unit: string
+      importance: enum
+      source_ref: string
+  EconomicReleaseObserved:
+    version: 1.0.0
+    fields:
+      canonical_event_id: uuid
+      actual: optional decimal string
+      revised_previous: optional decimal string
+      provider_observed_at: timestamp
+      official_verified_at: optional timestamp
+      normalized_surprise: optional number
+      revision_effect: optional number
+      source_agreement: enum
+  FundamentalAssessment:
+    version: 1.0.0
+    fields:
+      currency: string
+      horizon: [INTRADAY, MULTIDAY, MEDIUM_TERM]
+      as_of: timestamp
+      available_at: timestamp
+      components: object
+      evidence_refs: array
+      disposition: [SUPPORTED, AMBIGUOUS, CONTRADICTORY, UNSUPPORTED]
+      confidence: number
+      model_versions: object
