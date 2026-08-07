@@ -2,6 +2,24 @@
 
 All notable changes to this repository are documented here.
 
+## 0.6.2 — 2026-08-07
+
+### Implementation identity
+
+- Replaced conflicting package/build/API version declarations with `forex_trader.__version__` as the single runtime source and setuptools dynamic package metadata.
+- FastAPI/OpenAPI now exposes the authoritative package version while preserving the existing `/health` response contract.
+- Campaign policy cohorts now include `implementation.version`, preventing otherwise-identical strategy/risk configuration from silently pooling evidence across semantic software releases.
+- Added optional exact source identity through `FOREX_BUILD_REVISION`; GitHub Actions falls back to `GITHUB_SHA` when an explicit revision is not provided.
+- Exact build revision affects the campaign policy fingerprint but never includes credentials or account identifiers.
+- Added `.env.example` documentation for immutable build revision and tests enforcing installed distribution/runtime/OpenAPI/campaign version agreement.
+
+### Validation
+
+- Exact v0.6.2 code/test head passed the complete Python 3.11 and Python 3.13 CI matrix with fresh dynamic package installation.
+- **243 tests passed** with **87.29% branch-aware coverage**; repository fail-under remains **85%**.
+- Install, bytecode compile, `pip check`, secret-assignment scan and executed offline paper-order smoke passed on both Python versions.
+- Authenticated OANDA Practice execution remains externally credential-gated and is not claimed by this release.
+
 ## 0.6.1 — 2026-08-07
 
 ### Evidence integrity and campaign efficiency
