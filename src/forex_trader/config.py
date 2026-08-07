@@ -13,6 +13,7 @@ from forex_trader.adapters.simulator import SimulatedPaperBroker
 from forex_trader.adapters.synthetic import SyntheticMarketData
 from forex_trader.adapters.timeframe import TimeframeMappedMarketData
 from forex_trader.application.engine import TradingEngine
+from forex_trader.domain.correlation_risk import CorrelationRiskGuard
 from forex_trader.domain.costs import SessionCostModel
 from forex_trader.domain.enums import OperatingMode, ProviderKind
 from forex_trader.domain.fundamentals import FundamentalBook
@@ -68,6 +69,8 @@ class AppConfig:
     max_units: int = 100_000
     max_gross_exposure_fraction: Decimal = Decimal("4")
     max_currency_exposure_fraction: Decimal = Decimal("2")
+    max_signed_correlation: float = 0.85
+    correlation_minimum_observations: int = 40
     auto_discover_currency_instruments: bool = False
     api_token: str | None = field(default=None, repr=False)
     oanda_token: str | None = field(default=None, repr=False)
@@ -102,6 +105,8 @@ class AppConfig:
             max_units=int(os.getenv("FOREX_MAX_UNITS", "100000")),
             max_gross_exposure_fraction=_decimal_env("FOREX_MAX_GROSS_EXPOSURE_FRACTION", "4"),
             max_currency_exposure_fraction=_decimal_env("FOREX_MAX_CURRENCY_EXPOSURE_FRACTION", "2"),
+            max_signed_correlation=float(os.getenv("FOREX_MAX_SIGNED_CORRELATION", "0.85")),
+            correlation_minimum_observations=int(os.getenv("FOREX_CORRELATION_MINIMUM_OBSERVATIONS", "40")),
             auto_discover_currency_instruments=_bool(os.getenv("FOREX_AUTO_DISCOVER_CURRENCY_INSTRUMENTS"), False),
             api_token=os.getenv("FOREX_API_TOKEN") or None,
             oanda_token=os.getenv("OANDA_API_TOKEN") or None,
@@ -144,6 +149,10 @@ class AppConfig:
             errors.append("position and unit limits must be positive")
         if self.max_gross_exposure_fraction <= 0 or self.max_currency_exposure_fraction <= 0:
             errors.append("portfolio exposure limits must be positive")
+        if not 0 < self.max_signed_correlation <= 1:
+            errors.append("FOREX_MAX_SIGNED_CORRELATION must be in (0, 1]")
+        if self.correlation_minimum_observations < 10:
+            errors.append("FOREX_CORRELATION_MINIMUM_OBSERVATIONS must be at least 10")
         return errors
 
 
@@ -214,6 +223,11 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
         lower_timeframe=config.lower_timeframe,
         higher_timeframe=config.higher_timeframe,
     )
+    correlation_guard = CorrelationRiskGuard(
+        market_data.candles,
+        minimum_observations=config.correlation_minimum_observations,
+        maximum_signed_correlation=config.max_signed_correlation,
+    )
     return TradingEngine(
         market_data=market_data,
         broker=broker,
@@ -231,6 +245,7 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
             max_units=config.max_units,
             max_gross_exposure_fraction=config.max_gross_exposure_fraction,
             max_currency_exposure_fraction=config.max_currency_exposure_fraction,
+            correlation_guard=correlation_guard,
         ),
         mode=config.mode,
         enable_paper_orders=config.enable_paper_orders,
