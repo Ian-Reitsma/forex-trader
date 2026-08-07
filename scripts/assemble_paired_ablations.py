@@ -2,7 +2,7 @@
 
 This command is offline/research-only. It has no broker client and cannot grant execution
 authority. Every variant must be present for every snapshot before component expectancy and
-paired bootstrap uncertainty are emitted.
+simultaneous family-wise paired bootstrap uncertainty are emitted.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from forex_trader.research.ablation_uncertainty import (
-    paired_ablation_uncertainty_evidence,
+    paired_ablation_familywise_evidence,
     write_paired_ablation_uncertainty_evidence,
 )
 from forex_trader.research.ablations import load_matured_ablation_outcomes, paired_artifact_id
@@ -23,16 +23,16 @@ def main() -> None:
     parser.add_argument("matured_outcomes", type=Path)
     parser.add_argument("--primary-dataset-id", required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--confidence", type=Decimal, default=Decimal("0.90"))
-    parser.add_argument("--bootstrap-iterations", type=int, default=2000)
+    parser.add_argument("--familywise-confidence", type=Decimal, default=Decimal("0.90"))
+    parser.add_argument("--bootstrap-iterations", type=int, default=5000)
     parser.add_argument("--bootstrap-seed", type=int, default=20260807)
     args = parser.parse_args()
 
     outcomes = load_matured_ablation_outcomes(args.matured_outcomes)
-    evidence = paired_ablation_uncertainty_evidence(
+    evidence = paired_ablation_familywise_evidence(
         outcomes,
         primary_dataset_id=args.primary_dataset_id,
-        confidence=args.confidence,
+        familywise_confidence=args.familywise_confidence,
         bootstrap_iterations=args.bootstrap_iterations,
         bootstrap_seed=args.bootstrap_seed,
     )
@@ -45,7 +45,10 @@ def main() -> None:
         "primary_dataset_id": args.primary_dataset_id,
         "paired_artifact_id": artifact_id,
         "paired_snapshots": evidence[0].sample_size if evidence else 0,
-        "confidence": str(args.confidence),
+        "interval_scope": "simultaneous_familywise",
+        "multiple_testing_method": "paired_bootstrap_max_deviation_simultaneous",
+        "familywise_confidence": str(args.familywise_confidence),
+        "family_size": len(evidence),
         "bootstrap_iterations": args.bootstrap_iterations,
         "bootstrap_seed": args.bootstrap_seed,
         "output": str(args.output),
