@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 
 from forex_trader.domain.enums import Direction
@@ -84,6 +85,12 @@ def assess_technicals(
     lower_closes = [c.close for c in completed_lower]
     higher_closes = [c.close for c in completed_higher]
     current = completed_lower[-1]
+    lower_step = current.time - completed_lower[-2].time
+    if lower_step <= timedelta(0):
+        raise ValueError("lower-timeframe candles must have increasing timestamps")
+    # OANDA candle timestamps mark the bar start. A completed-candle signal becomes
+    # knowable at bar close, so all freshness/session/expiry logic must use that time.
+    signal_time = current.time + lower_step
     current_atr = atr(completed_lower)
     higher_atr = atr(completed_higher)
     current_rsi = rsi(lower_closes)
@@ -102,8 +109,6 @@ def assess_technicals(
     elif direction is Direction.SHORT:
         reasons.append("higher-timeframe confirmed pivots are LH/LL")
     else:
-        # EMA is a secondary fallback when the finite H1 sample has not produced
-        # enough confirmed pivots. It receives materially less score authority.
         if h_fast > h_slow and higher_closes[-1] > h_fast:
             direction = Direction.LONG
             pivot_authority = Decimal("0.07")
@@ -182,9 +187,6 @@ def assess_technicals(
                 held_reclaim = latest.high >= reclaimed - current_atr * Decimal("0.55") and latest.close < reclaimed
                 held_shift = shift_reference is not None and latest.high >= shift_reference - current_atr * Decimal("0.35") and latest.close <= shift_reference
                 retest_confirmed = (held_reclaim or held_shift) and latest.close <= latest.open
-            # A strong close that holds the reclaimed liquidity after a confirmed
-            # break is accepted as continuation confirmation even if the pullback
-            # does not touch the precise pivot by a fraction of ATR.
             if not retest_confirmed and displacement:
                 if direction is Direction.LONG and latest.close > reclaimed and latest.close >= l_fast:
                     retest_confirmed = True
@@ -201,7 +203,7 @@ def assess_technicals(
     setup = derive_setup_state(
         instrument=instrument,
         direction=direction,
-        signal_time=current.time,
+        signal_time=signal_time,
         zone_id=zone.zone_id if zone is not None else None,
         zone_quality=zone.quality if zone is not None else Decimal("0"),
         liquidity_kind=directional_sweep.level.kind.value if directional_sweep is not None else None,
@@ -218,7 +220,7 @@ def assess_technicals(
 
     flow = broker_tick_activity_proxy(completed_lower, window=24)
     reasons.extend(flow.reasons)
-    phase = classify_phase(current.time)
+    phase = classify_phase(signal_time)
     reasons.append(f"session phase={phase.value}")
 
     stop: Decimal | None = None
@@ -241,7 +243,6 @@ def assess_technicals(
         candidates: list[Decimal] = [level.price for level in target_levels(liquidity, direction=direction, entry=current.close)]
         for opposing in opposing_zones(zones, direction=direction, price=current.close):
             candidates.append(opposing.low if direction is Direction.LONG else opposing.high)
-        # Confirmed higher-timeframe swing objectives are valid structural targets.
         if direction is Direction.LONG:
             candidates.extend(
                 point.price for point in (higher_structure.last_high, higher_structure.prior_high) if point is not None and point.price > current.close
@@ -283,7 +284,6 @@ def assess_technicals(
     if phase is SessionPhase.ROLLOVER:
         score = min(score, Decimal("0.30"))
         reasons.append("rollover phase suppresses setup quality")
-    # EMA/RSI are recorded as diagnostics, not independent confirmation votes.
     reasons.append(f"EMA diagnostic H20/H50={h_fast}/{h_slow}; L9/L21={l_fast}/{l_slow}")
     reasons.append(f"RSI diagnostic={current_rsi:.1f}")
 
@@ -297,7 +297,7 @@ def assess_technicals(
         stop_reference=stop,
         take_profit_reference=target,
         reasons=tuple(reasons),
-        signal_time=current.time,
+        signal_time=signal_time,
         liquidity_sweep=directional_sweep is not None,
         displacement=displacement,
         trend_strength=trend_strength,
