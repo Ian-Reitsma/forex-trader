@@ -6,13 +6,22 @@ services:
       FOREX_MODE: ${FOREX_MODE:-shadow}
       FOREX_ENABLE_PAPER_ORDERS: ${FOREX_ENABLE_PAPER_ORDERS:-false}
       FOREX_INSTRUMENTS: ${FOREX_INSTRUMENTS:-EUR_USD}
+      FOREX_AUTO_DISCOVER_CURRENCY_INSTRUMENTS: ${FOREX_AUTO_DISCOVER_CURRENCY_INSTRUMENTS:-false}
+      FOREX_API_TOKEN: ${FOREX_API_TOKEN:?FOREX_API_TOKEN is required for the exposed container API}
+      FOREX_MAXIMUM_SLIPPAGE_PIPS: ${FOREX_MAXIMUM_SLIPPAGE_PIPS:-0.5}
       OANDA_API_TOKEN: ${OANDA_API_TOKEN:-}
       OANDA_ACCOUNT_ID: ${OANDA_ACCOUNT_ID:-}
       OANDA_REST_URL: ${OANDA_REST_URL:-https://api-fxpractice.oanda.com}
+      OANDA_STREAM_URL: ${OANDA_STREAM_URL:-https://stream-fxpractice.oanda.com}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - forex-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   forex-data:

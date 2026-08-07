@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from typing import Callable
 
 from forex_trader.domain.enums import DecisionDisposition, Direction
 from forex_trader.domain.fundamentals import FundamentalBook
@@ -28,6 +29,13 @@ class BacktestTrade:
     status: OutcomeStatus
     r_multiple: Decimal
     bars_held: int
+    exit_reason: str = ""
+    entry_fill: Decimal | None = None
+    exit_fill: Decimal | None = None
+    ambiguous_bar: bool = False
+    maximum_favorable_r: Decimal = Decimal("0")
+    maximum_adverse_r: Decimal = Decimal("0")
+    estimated_cost_r: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +50,14 @@ class BacktestReport:
     max_drawdown_r: Decimal
     total_r: Decimal
     minimum_score: Decimal | None = None
+    ambiguous_trades: int = 0
+    ambiguous_fraction: Decimal = Decimal("0")
+    average_mfe_r: Decimal = Decimal("0")
+    average_mae_r: Decimal = Decimal("0")
+    average_cost_r: Decimal = Decimal("0")
+
+
+SpreadModel = Callable[[Candle, int], Decimal]
 
 
 def evaluate_candidate_outcome(
@@ -50,11 +66,17 @@ def evaluate_candidate_outcome(
     *,
     maximum_bars: int = 24,
     spread_pips: Decimal = Decimal("0"),
+    spread_model: SpreadModel | None = None,
+    entry_slippage_pips: Decimal = Decimal("0"),
+    exit_slippage_pips: Decimal = Decimal("0"),
+    entry_delay_bars: int = 0,
 ) -> BacktestTrade:
-    """Evaluate a candidate using conservative intrabar assumptions.
+    """Evaluate an executable candidate with conservative candle-path assumptions.
 
-    When stop and target are both touched in the same candle, the stop is assumed to
-    have filled first. This avoids the optimistic ordering bias common in candle backtests.
+    Limitations are explicit: candle OHLC cannot reveal exact bid/ask tick ordering. If
+    stop and target are touched in one bar we assume the stop first and flag the trade
+    ambiguous. Gap-through stops fill at the executable opening price, so losses may be
+    worse than -1R. Optional spread/slippage/delay parameters support stress testing.
     """
     if candidate.disposition is not DecisionDisposition.TRADE:
         raise ValueError("candidate must be tradeable")
@@ -62,65 +84,155 @@ def evaluate_candidate_outcome(
         raise ValueError("candidate must have entry, stop, and target")
     if maximum_bars < 1:
         raise ValueError("maximum_bars must be positive")
-    if spread_pips < 0:
-        raise ValueError("spread_pips cannot be negative")
+    if spread_pips < 0 or entry_slippage_pips < 0 or exit_slippage_pips < 0:
+        raise ValueError("execution costs cannot be negative")
+    if entry_delay_bars < 0:
+        raise ValueError("entry_delay_bars cannot be negative")
     candles = [candle for candle in future_candles if candle.complete][:maximum_bars]
-    if not candles:
-        raise ValueError("at least one completed future candle is required")
+    if not candles or entry_delay_bars >= len(candles):
+        raise ValueError("at least one completed executable future candle is required")
 
-    risk = abs(candidate.entry_price - candidate.stop_loss)
+    pip = pip_size(candidate.instrument)
+    delayed = candles[entry_delay_bars:]
+    initial_spread = _spread_for(delayed[0], entry_delay_bars + 1, spread_pips, spread_model)
+    half_initial = pip * initial_spread / Decimal("2")
+    adverse_entry = pip * entry_slippage_pips
+    # With zero delay the strategy quote is the intended fill and slippage adjusts it.
+    # A delayed entry uses the next executable open to model computation/network latency.
+    if entry_delay_bars == 0:
+        entry_fill = candidate.entry_price + adverse_entry if candidate.direction is Direction.LONG else candidate.entry_price - adverse_entry
+    elif candidate.direction is Direction.LONG:
+        entry_fill = delayed[0].open + half_initial + adverse_entry
+    else:
+        entry_fill = delayed[0].open - half_initial - adverse_entry
+
+    if candidate.direction is Direction.LONG and not candidate.stop_loss < entry_fill < candidate.take_profit:
+        return _late_entry(candidate, entry_fill, entry_delay_bars + 1)
+    if candidate.direction is Direction.SHORT and not candidate.take_profit < entry_fill < candidate.stop_loss:
+        return _late_entry(candidate, entry_fill, entry_delay_bars + 1)
+
+    risk = abs(entry_fill - candidate.stop_loss)
+    reward = abs(candidate.take_profit - entry_fill)
     if risk <= 0:
         raise ValueError("candidate stop distance must be positive")
-    reward = abs(candidate.take_profit - candidate.entry_price)
     win_r = reward / risk
+    entry_cost_r = adverse_entry / risk
+    max_favorable = Decimal("0")
+    max_adverse = Decimal("0")
 
-    half_spread = pip_size(candidate.instrument) * spread_pips / Decimal("2")
-    for index, candle in enumerate(candles, start=1):
+    for relative_index, candle in enumerate(delayed, start=1):
+        original_index = relative_index + entry_delay_bars
+        current_spread = _spread_for(candle, original_index, spread_pips, spread_model)
+        half_spread = pip * current_spread / Decimal("2")
+        adverse_exit = pip * exit_slippage_pips
         if candidate.direction is Direction.LONG:
+            executable_open = candle.open - half_spread
             executable_low = candle.low - half_spread
             executable_high = candle.high - half_spread
+            favorable_r = max(Decimal("0"), (executable_high - entry_fill) / risk)
+            adverse_r = max(Decimal("0"), (entry_fill - executable_low) / risk)
             stop_hit = executable_low <= candidate.stop_loss
             target_hit = executable_high >= candidate.take_profit
+            max_favorable = max(max_favorable, favorable_r)
+            max_adverse = max(max_adverse, adverse_r)
+            if stop_hit:
+                gap_fill = min(candidate.stop_loss, executable_open) - adverse_exit
+                realized = (gap_fill - entry_fill) / risk
+                return BacktestTrade(
+                    candidate.instrument,
+                    candidate.direction,
+                    candidate.signal_time,
+                    candidate.score,
+                    OutcomeStatus.LOSS,
+                    realized,
+                    original_index,
+                    exit_reason="gap_stop" if executable_open < candidate.stop_loss else "stop",
+                    entry_fill=entry_fill,
+                    exit_fill=gap_fill,
+                    ambiguous_bar=target_hit,
+                    maximum_favorable_r=max_favorable,
+                    maximum_adverse_r=max_adverse,
+                    estimated_cost_r=entry_cost_r + adverse_exit / risk,
+                )
+            if target_hit:
+                fill = candidate.take_profit - adverse_exit
+                realized = (fill - entry_fill) / risk
+                return BacktestTrade(
+                    candidate.instrument,
+                    candidate.direction,
+                    candidate.signal_time,
+                    candidate.score,
+                    OutcomeStatus.WIN,
+                    realized,
+                    original_index,
+                    exit_reason="target",
+                    entry_fill=entry_fill,
+                    exit_fill=fill,
+                    maximum_favorable_r=max_favorable,
+                    maximum_adverse_r=max_adverse,
+                    estimated_cost_r=entry_cost_r + adverse_exit / risk,
+                )
         elif candidate.direction is Direction.SHORT:
+            executable_open = candle.open + half_spread
             executable_low = candle.low + half_spread
             executable_high = candle.high + half_spread
+            favorable_r = max(Decimal("0"), (entry_fill - executable_low) / risk)
+            adverse_r = max(Decimal("0"), (executable_high - entry_fill) / risk)
             stop_hit = executable_high >= candidate.stop_loss
             target_hit = executable_low <= candidate.take_profit
+            max_favorable = max(max_favorable, favorable_r)
+            max_adverse = max(max_adverse, adverse_r)
+            if stop_hit:
+                gap_fill = max(candidate.stop_loss, executable_open) + adverse_exit
+                realized = (entry_fill - gap_fill) / risk
+                return BacktestTrade(
+                    candidate.instrument,
+                    candidate.direction,
+                    candidate.signal_time,
+                    candidate.score,
+                    OutcomeStatus.LOSS,
+                    realized,
+                    original_index,
+                    exit_reason="gap_stop" if executable_open > candidate.stop_loss else "stop",
+                    entry_fill=entry_fill,
+                    exit_fill=gap_fill,
+                    ambiguous_bar=target_hit,
+                    maximum_favorable_r=max_favorable,
+                    maximum_adverse_r=max_adverse,
+                    estimated_cost_r=entry_cost_r + adverse_exit / risk,
+                )
+            if target_hit:
+                fill = candidate.take_profit + adverse_exit
+                realized = (entry_fill - fill) / risk
+                return BacktestTrade(
+                    candidate.instrument,
+                    candidate.direction,
+                    candidate.signal_time,
+                    candidate.score,
+                    OutcomeStatus.WIN,
+                    realized,
+                    original_index,
+                    exit_reason="target",
+                    entry_fill=entry_fill,
+                    exit_fill=fill,
+                    maximum_favorable_r=max_favorable,
+                    maximum_adverse_r=max_adverse,
+                    estimated_cost_r=entry_cost_r + adverse_exit / risk,
+                )
         else:
             raise ValueError("flat candidate cannot be backtested")
-        if stop_hit:
-            return BacktestTrade(
-                candidate.instrument,
-                candidate.direction,
-                candidate.signal_time,
-                candidate.score,
-                OutcomeStatus.LOSS,
-                Decimal("-1"),
-                index,
-            )
-        if target_hit:
-            return BacktestTrade(
-                candidate.instrument,
-                candidate.direction,
-                candidate.signal_time,
-                candidate.score,
-                OutcomeStatus.WIN,
-                win_r,
-                index,
-            )
 
-    final_mid = candles[-1].close
+    final = delayed[-1]
+    final_spread = _spread_for(final, len(candles), spread_pips, spread_model)
+    half_final = pip * final_spread / Decimal("2")
+    adverse_exit = pip * exit_slippage_pips
     final_executable = (
-        final_mid - half_spread
+        final.close - half_final - adverse_exit
         if candidate.direction is Direction.LONG
-        else final_mid + half_spread
+        else final.close + half_final + adverse_exit
     )
-    directional_move = (
-        final_executable - candidate.entry_price
-        if candidate.direction is Direction.LONG
-        else candidate.entry_price - final_executable
-    )
-    timeout_r = max(Decimal("-1"), min(win_r, directional_move / risk))
+    directional_move = final_executable - entry_fill if candidate.direction is Direction.LONG else entry_fill - final_executable
+    timeout_r = directional_move / risk
     return BacktestTrade(
         candidate.instrument,
         candidate.direction,
@@ -129,6 +241,12 @@ def evaluate_candidate_outcome(
         OutcomeStatus.TIMEOUT,
         timeout_r,
         len(candles),
+        exit_reason="time_stop",
+        entry_fill=entry_fill,
+        exit_fill=final_executable,
+        maximum_favorable_r=max_favorable,
+        maximum_adverse_r=max_adverse,
+        estimated_cost_r=entry_cost_r + adverse_exit / risk,
     )
 
 
@@ -167,6 +285,7 @@ def summarize_trades(
         equity += trade.r_multiple
         peak = max(peak, equity)
         max_drawdown = max(max_drawdown, peak - equity)
+    ambiguous = sum(trade.ambiguous_bar for trade in selected)
 
     return BacktestReport(
         trades=len(selected),
@@ -179,6 +298,11 @@ def summarize_trades(
         max_drawdown_r=max_drawdown,
         total_r=total_r,
         minimum_score=minimum_score,
+        ambiguous_trades=ambiguous,
+        ambiguous_fraction=Decimal(ambiguous) / Decimal(len(selected)),
+        average_mfe_r=sum((trade.maximum_favorable_r for trade in selected), Decimal("0")) / Decimal(len(selected)),
+        average_mae_r=sum((trade.maximum_adverse_r for trade in selected), Decimal("0")) / Decimal(len(selected)),
+        average_cost_r=sum((trade.estimated_cost_r for trade in selected), Decimal("0")) / Decimal(len(selected)),
     )
 
 
@@ -195,26 +319,13 @@ def optimize_score_threshold(
     ),
     minimum_trades: int = 20,
 ) -> BacktestReport:
-    """Select a threshold by expectancy, then win rate and drawdown.
-
-    This helper is intended for a training fold only. The selected threshold must be
-    evaluated on a later untouched validation fold before it is adopted.
-    """
     if minimum_trades < 1:
         raise ValueError("minimum_trades must be positive")
     reports = [summarize_trades(trades, minimum_score=threshold) for threshold in thresholds]
     eligible = [report for report in reports if report.trades >= minimum_trades]
     if not eligible:
         raise ValueError("no threshold has enough trades")
-    return max(
-        eligible,
-        key=lambda report: (
-            report.expectancy_r,
-            report.win_rate,
-            -report.max_drawdown_r,
-            report.trades,
-        ),
-    )
+    return max(eligible, key=lambda report: (report.expectancy_r, report.win_rate, -report.max_drawdown_r, report.trades))
 
 
 def run_walk_forward_backtest(
@@ -225,37 +336,34 @@ def run_walk_forward_backtest(
     fundamentals: FundamentalBook | PointInTimeFundamentalBook,
     fusion_policy: SignalFusionPolicy,
     spread_pips: Decimal = Decimal("1.0"),
+    spread_model: SpreadModel | None = None,
+    entry_slippage_pips: Decimal = Decimal("0"),
+    exit_slippage_pips: Decimal = Decimal("0"),
+    entry_delay_bars: int = 0,
     maximum_holding_bars: int = 24,
     lower_timeframe: timedelta = timedelta(minutes=5),
     higher_timeframe: timedelta = timedelta(hours=1),
 ) -> tuple[list[BacktestTrade], BacktestReport]:
-    """Replay completed candles without using future bars in signal construction.
+    """Replay completed candles with point-in-time features and execution stress hooks.
 
-    The spread is applied to the synthetic executable quote. Pass a
-    PointInTimeFundamentalBook to guarantee that each decision sees only macro/news
-    observations available at that historical timestamp. A plain FundamentalBook is
-    supported for technical-only diagnostics and controlled tests.
+    Midpoint candles remain a data limitation; real historical bid/ask/tick feeds should
+    replace `spread_model` approximations before any profitability claim is made.
     """
     lower = sorted((c for c in lower_candles if c.complete), key=lambda candle: candle.time)
     higher = sorted((c for c in higher_candles if c.complete), key=lambda candle: candle.time)
-    if len(lower) < 62 or len(higher) < 60:
-        raise ValueError("walk-forward backtest requires at least 62 lower and 60 higher candles")
+    if len(lower) < 82 or len(higher) < 60:
+        raise ValueError("walk-forward backtest requires at least 82 lower and 60 higher candles")
     if spread_pips < 0:
         raise ValueError("spread_pips cannot be negative")
     if lower_timeframe <= timedelta(0) or higher_timeframe <= timedelta(0):
         raise ValueError("timeframe durations must be positive")
 
-    half_spread = pip_size(instrument) * spread_pips / Decimal("2")
     results: list[BacktestTrade] = []
-    index = 59
+    index = 79
     while index < len(lower) - 1:
         signal_candle = lower[index]
         decision_time = signal_candle.time + lower_timeframe
-        higher_available = [
-            candle
-            for candle in higher
-            if candle.time + higher_timeframe <= decision_time
-        ]
+        higher_available = [candle for candle in higher if candle.time + higher_timeframe <= decision_time]
         if len(higher_available) < 60:
             index += 1
             continue
@@ -264,6 +372,8 @@ def run_walk_forward_backtest(
             lower[max(0, index - 199) : index + 1],
             higher_available[-200:],
         )
+        decision_spread = _spread_for(signal_candle, index, spread_pips, spread_model)
+        half_spread = pip_size(instrument) * decision_spread / Decimal("2")
         quote = Quote(
             instrument=instrument,
             bid=signal_candle.close - half_spread,
@@ -273,17 +383,44 @@ def run_walk_forward_backtest(
         fundamental = fundamentals.assess_pair(instrument, as_of=quote.time)
         candidate = fusion_policy.evaluate(technical, fundamental, quote)
         if candidate.disposition is DecisionDisposition.TRADE:
-            future = lower[index + 1 : index + 1 + maximum_holding_bars]
+            future = lower[index + 1 : index + 1 + maximum_holding_bars + entry_delay_bars]
             if not future:
                 break
             outcome = evaluate_candidate_outcome(
                 candidate,
                 future,
-                maximum_bars=maximum_holding_bars,
+                maximum_bars=maximum_holding_bars + entry_delay_bars,
                 spread_pips=spread_pips,
+                spread_model=spread_model,
+                entry_slippage_pips=entry_slippage_pips,
+                exit_slippage_pips=exit_slippage_pips,
+                entry_delay_bars=entry_delay_bars,
             )
             results.append(outcome)
             index += max(1, outcome.bars_held)
         else:
             index += 1
     return results, summarize_trades(results)
+
+
+def _spread_for(candle: Candle, index: int, fallback: Decimal, model: SpreadModel | None) -> Decimal:
+    value = fallback if model is None else model(candle, index)
+    value = Decimal(str(value))
+    if value < 0:
+        raise ValueError("spread model cannot return a negative spread")
+    return value
+
+
+def _late_entry(candidate: TradeCandidate, entry_fill: Decimal, bars: int) -> BacktestTrade:
+    return BacktestTrade(
+        candidate.instrument,
+        candidate.direction,
+        candidate.signal_time,
+        candidate.score,
+        OutcomeStatus.TIMEOUT,
+        Decimal("0"),
+        bars,
+        exit_reason="late_entry_invalid_geometry",
+        entry_fill=entry_fill,
+        exit_fill=entry_fill,
+    )

@@ -45,7 +45,12 @@ class FakeEngine:
                 "protected": OrderStatus.PROTECTED,
                 "filled": OrderStatus.FILLED,
                 "rejected": OrderStatus.REJECTED,
+                "cancelled": OrderStatus.CANCELLED,
                 "unknown": OrderStatus.UNKNOWN,
+                "reconciliation": OrderStatus.RECONCILIATION_REQUIRED,
+                "emergency": OrderStatus.EMERGENCY_CLOSE,
+                "acknowledged": OrderStatus.ACKNOWLEDGED,
+                "partial": OrderStatus.PARTIALLY_FILLED,
             }[action]
             order = SimpleNamespace(status=status)
         return SimpleNamespace(
@@ -92,14 +97,27 @@ def test_campaign_keeps_evaluating_in_shadow_after_order_budget_is_spent(tmp_pat
     assert report.abstentions == 1
     assert report.orders_submitted == 1
     assert report.orders_protected == 1
+    assert report.orders_unresolved == 0
+    assert report.order_statuses == {"protected": 1}
     assert report.rejection_codes == {"NO_STRUCTURE_SHIFT": 1}
     payload = json.loads(evidence.read_text().strip())
     assert payload["orders_submitted"] == 1
+    assert payload["orders_unresolved"] == 0
     assert payload["promotion_ready"] is False
 
 
-def test_unknown_broker_state_stops_remaining_cycle_immediately() -> None:
-    engine = FakeEngine({"EUR_USD": "unknown", "GBP_USD": "protected"})
+@pytest.mark.parametrize(
+    ("action", "expected_status"),
+    [
+        ("unknown", "unknown"),
+        ("reconciliation", "reconciliation_required"),
+        ("emergency", "emergency_close"),
+        ("acknowledged", "acknowledged"),
+        ("partial", "partially_filled"),
+    ],
+)
+def test_unresolved_broker_states_stop_remaining_cycle_immediately(action: str, expected_status: str) -> None:
+    engine = FakeEngine({"EUR_USD": action, "GBP_USD": "protected"})
     runner = PracticeCampaignRunner(
         engine,  # type: ignore[arg-type]
         ["EUR_USD", "GBP_USD"],
@@ -108,9 +126,29 @@ def test_unknown_broker_state_stops_remaining_cycle_immediately() -> None:
     )
     report = runner.run_cycle()
     assert engine.calls == [("EUR_USD", True)]
-    assert report.orders_unknown == 1
+    assert report.orders_unresolved == 1
+    assert report.order_statuses == {expected_status: 1}
     assert report.stopped_early is True
-    assert "UNKNOWN" in str(report.stop_reason)
+    assert expected_status in str(report.stop_reason)
+
+
+def test_campaign_distinguishes_cancelled_rejected_and_emergency_states() -> None:
+    cancelled = PracticeCampaignRunner(
+        FakeEngine({"EUR_USD": "cancelled"}),  # type: ignore[arg-type]
+        ["EUR_USD"],
+        execute=True,
+    ).run_cycle()
+    assert cancelled.orders_cancelled == 1
+    assert cancelled.orders_unresolved == 0
+    assert cancelled.order_statuses == {"cancelled": 1}
+
+    emergency = PracticeCampaignRunner(
+        FakeEngine({"EUR_USD": "emergency"}),  # type: ignore[arg-type]
+        ["EUR_USD"],
+        execute=True,
+    ).run_cycle()
+    assert emergency.orders_emergency_close == 1
+    assert emergency.orders_unresolved == 1
 
 
 def test_campaign_records_risk_denials_and_provider_errors_without_lowering_gates() -> None:
@@ -154,12 +192,13 @@ def test_campaign_run_sleeps_between_cycles_and_aggregates() -> None:
     assert report.evaluated == 3
     assert report.submitted == 0
     assert report.unknown == 0
+    assert report.unresolved == 0
     assert sleeps == [2.5, 2.5]
     assert seen == [1, 2, 3]
 
 
-def test_campaign_run_stops_future_cycles_after_unknown() -> None:
-    engine = FakeEngine({"EUR_USD": "unknown"})
+def test_campaign_run_stops_future_cycles_after_unresolved() -> None:
+    engine = FakeEngine({"EUR_USD": "reconciliation"})
     runner = PracticeCampaignRunner(
         engine,  # type: ignore[arg-type]
         ["EUR_USD"],
@@ -167,7 +206,23 @@ def test_campaign_run_stops_future_cycles_after_unknown() -> None:
     )
     report = runner.run(max_cycles=4, interval_seconds=0)
     assert len(report.cycles) == 1
-    assert report.unknown == 1
+    assert report.unresolved == 1
+
+
+def test_campaign_can_continue_unresolved_only_when_explicitly_requested() -> None:
+    engine = FakeEngine({"EUR_USD": "unknown", "GBP_USD": "protected"})
+    runner = PracticeCampaignRunner(
+        engine,  # type: ignore[arg-type]
+        ["EUR_USD", "GBP_USD"],
+        execute=True,
+        max_new_orders_per_cycle=2,
+        stop_on_unresolved=False,
+    )
+    report = runner.run_cycle()
+    assert engine.calls == [("EUR_USD", True), ("GBP_USD", True)]
+    assert report.orders_unresolved == 1
+    assert report.orders_protected == 1
+    assert report.stopped_early is False
 
 
 def test_campaign_validates_operator_limits() -> None:

@@ -31,23 +31,30 @@ def candidate(direction: Direction = Direction.LONG, score: str = "0.75") -> Tra
     )
 
 
-def candle(index: int, low: str, high: str, close: str = "1.1000") -> Candle:
+def candle(index: int, low: str, high: str, close: str = "1.1000", open_price: str = "1.1000") -> Candle:
     return Candle(
         datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=5 * index),
-        Decimal("1.1000"),
+        Decimal(open_price),
         Decimal(high),
         Decimal(low),
         Decimal(close),
     )
 
 
-def test_backtest_uses_conservative_same_bar_ordering() -> None:
-    result = evaluate_candidate_outcome(
-        candidate(),
-        [candle(1, "1.0985", "1.1025")],
-    )
+def test_backtest_uses_conservative_same_bar_ordering_and_flags_ambiguity() -> None:
+    result = evaluate_candidate_outcome(candidate(), [candle(1, "1.0985", "1.1025")])
     assert result.status is OutcomeStatus.LOSS
     assert result.r_multiple == Decimal("-1")
+    assert result.ambiguous_bar is True
+    assert result.maximum_favorable_r >= Decimal("2")
+
+
+def test_gap_through_stop_can_lose_more_than_one_r() -> None:
+    gap = candle(1, "1.0970", "1.0985", close="1.0975", open_price="1.0980")
+    result = evaluate_candidate_outcome(candidate(), [gap])
+    assert result.status is OutcomeStatus.LOSS
+    assert result.exit_reason == "gap_stop"
+    assert result.r_multiple < Decimal("-1")
 
 
 def test_backtest_win_timeout_and_summary() -> None:
@@ -60,6 +67,8 @@ def test_backtest_win_timeout_and_summary() -> None:
     assert report.trades == 2
     assert report.total_r > 0
     assert report.max_drawdown_r == 0
+    assert report.average_mfe_r >= 0
+    assert report.average_mae_r >= 0
 
 
 def test_threshold_optimizer_prefers_expectancy_with_minimum_sample() -> None:
@@ -71,11 +80,7 @@ def test_threshold_optimizer_prefers_expectancy_with_minimum_sample() -> None:
         BacktestTrade("EUR_USD", Direction.LONG, datetime.now(UTC), Decimal("0.80"), OutcomeStatus.WIN, Decimal("2"), 2)
         for _ in range(20)
     )
-    report = optimize_score_threshold(
-        trades,
-        thresholds=(Decimal("0.60"), Decimal("0.75")),
-        minimum_trades=20,
-    )
+    report = optimize_score_threshold(trades, thresholds=(Decimal("0.60"), Decimal("0.75")), minimum_trades=20)
     assert report.minimum_score == Decimal("0.75")
     assert report.win_rate == Decimal("1")
 
@@ -90,7 +95,7 @@ def test_walk_forward_replay_uses_only_available_candles() -> None:
 
     from forex_trader.adapters.synthetic import SyntheticMarketData
     from forex_trader.domain.fundamentals import FundamentalBook
-    from forex_trader.domain.models import CurrencyFundamentals, Quote
+    from forex_trader.domain.models import CurrencyFundamentals
     from forex_trader.domain.strategy import SignalFusionPolicy
     from forex_trader.domain.technicals import assess_technicals
     from forex_trader.research.backtest import run_walk_forward_backtest
@@ -131,11 +136,31 @@ def test_walk_forward_replay_uses_only_available_candles() -> None:
 def test_backtest_applies_spread_to_exit_barriers() -> None:
     barely_hits_mid_target = candle(1, "1.0995", "1.1020", "1.1019")
     no_spread = evaluate_candidate_outcome(candidate(), [barely_hits_mid_target])
-    with_spread = evaluate_candidate_outcome(
-        candidate(),
-        [barely_hits_mid_target],
-        spread_pips=Decimal("1.0"),
-    )
+    with_spread = evaluate_candidate_outcome(candidate(), [barely_hits_mid_target], spread_pips=Decimal("1.0"))
     assert no_spread.status is OutcomeStatus.WIN
     assert with_spread.status is OutcomeStatus.TIMEOUT
     assert with_spread.r_multiple < no_spread.r_multiple
+
+
+def test_backtest_supports_variable_spread_and_execution_slippage_stress() -> None:
+    path = [candle(1, "1.0994", "1.1023", "1.1020")]
+    baseline = evaluate_candidate_outcome(candidate(), path, spread_pips=Decimal("0.2"))
+    stressed = evaluate_candidate_outcome(
+        candidate(),
+        path,
+        spread_model=lambda bar, index: Decimal("1.5"),
+        entry_slippage_pips=Decimal("0.4"),
+        exit_slippage_pips=Decimal("0.4"),
+    )
+    assert stressed.estimated_cost_r > baseline.estimated_cost_r
+    assert stressed.r_multiple <= baseline.r_multiple
+
+
+def test_entry_delay_uses_next_executable_open_and_can_invalidate_geometry() -> None:
+    path = [
+        candle(1, "1.0998", "1.1004", "1.1002"),
+        candle(2, "1.1021", "1.1030", "1.1025", open_price="1.1022"),
+    ]
+    delayed = evaluate_candidate_outcome(candidate(), path, entry_delay_bars=1)
+    assert delayed.status is OutcomeStatus.TIMEOUT
+    assert delayed.exit_reason == "late_entry_invalid_geometry"

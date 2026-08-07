@@ -12,6 +12,17 @@ from forex_trader.application.engine import TradingEngine
 from forex_trader.domain.enums import DecisionDisposition, OrderStatus, RiskDisposition
 
 
+_UNRESOLVED_ORDER_STATUSES = {
+    OrderStatus.CREATED,
+    OrderStatus.ACKNOWLEDGED,
+    OrderStatus.PARTIALLY_FILLED,
+    OrderStatus.UNKNOWN,
+    OrderStatus.RECONCILIATION_REQUIRED,
+    OrderStatus.CLOSING,
+    OrderStatus.EMERGENCY_CLOSE,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class CampaignCycleReport:
     cycle: int
@@ -27,13 +38,18 @@ class CampaignCycleReport:
     orders_filled: int
     orders_protected: int
     orders_rejected: int
+    orders_cancelled: int
     orders_unknown: int
+    orders_reconciliation_required: int
+    orders_emergency_close: int
+    orders_unresolved: int
     errors: int
     stopped_early: bool
     stop_reason: str | None
     rejection_codes: dict[str, int]
     risk_denial_reasons: dict[str, int]
     error_types: dict[str, int]
+    order_statuses: dict[str, int]
     promotion_ready: bool | None
 
     def to_jsonable(self) -> dict[str, object]:
@@ -59,15 +75,19 @@ class CampaignReport:
     def unknown(self) -> int:
         return sum(cycle.orders_unknown for cycle in self.cycles)
 
+    @property
+    def unresolved(self) -> int:
+        return sum(cycle.orders_unresolved for cycle in self.cycles)
+
 
 class PracticeCampaignRunner:
     """Run a conservative, evidence-first Practice campaign.
 
-    This runner does not modify strategy thresholds. It evaluates a configured universe,
-    allows at most `max_new_orders_per_cycle` broker submissions, records why setups abstain
-    or risk is denied, and stops the current cycle immediately if broker state becomes
-    UNKNOWN. The underlying TradingEngine remains the only component allowed to submit an
-    order and retains all execution locks, send-time revalidation and persistent halts.
+    The campaign never modifies strategy/risk thresholds. It caps new submissions per
+    cycle, keeps evaluating the remaining universe in shadow after the submission budget
+    is spent, records all broker order states, and stops immediately when a broker outcome
+    is unresolved. TradingEngine remains the only component allowed to submit orders and
+    retains execution locks, send-time revalidation, reconciliation and persistent halts.
     """
 
     def __init__(
@@ -77,7 +97,7 @@ class PracticeCampaignRunner:
         *,
         execute: bool,
         max_new_orders_per_cycle: int = 1,
-        stop_on_unknown: bool = True,
+        stop_on_unresolved: bool = True,
         evidence_path: str | Path | None = None,
     ) -> None:
         normalized = tuple(dict.fromkeys(item.strip().upper() for item in instruments if item.strip()))
@@ -89,7 +109,7 @@ class PracticeCampaignRunner:
         self.instruments = normalized
         self.execute = execute
         self.max_new_orders_per_cycle = max_new_orders_per_cycle
-        self.stop_on_unknown = stop_on_unknown
+        self.stop_on_unresolved = stop_on_unresolved
         self.evidence_path = Path(evidence_path) if evidence_path is not None else None
 
     def run_cycle(self, cycle: int = 1) -> CampaignCycleReport:
@@ -99,6 +119,7 @@ class PracticeCampaignRunner:
         rejection_codes: Counter[str] = Counter()
         risk_denial_reasons: Counter[str] = Counter()
         error_types: Counter[str] = Counter()
+        order_statuses: Counter[str] = Counter()
         evaluated = 0
         trade_candidates = 0
         abstentions = 0
@@ -108,18 +129,20 @@ class PracticeCampaignRunner:
         filled = 0
         protected = 0
         rejected = 0
+        cancelled = 0
         unknown = 0
+        reconciliation_required = 0
+        emergency_close = 0
+        unresolved = 0
         errors = 0
         stopped_early = False
         stop_reason: str | None = None
 
         for instrument in self.instruments:
-            # Once the cycle has spent its submission budget, keep evaluating in shadow.
-            # This preserves opportunity/rejection evidence without taking additional risk.
             may_submit = self.execute and submitted < self.max_new_orders_per_cycle
             try:
                 trace = self.engine.evaluate(instrument, execute=may_submit)
-            except Exception as exc:  # campaign evidence must survive one bad market-data read
+            except Exception as exc:
                 errors += 1
                 error_types[type(exc).__name__] += 1
                 continue
@@ -142,17 +165,31 @@ class PracticeCampaignRunner:
             if trace.order is None:
                 continue
             submitted += 1
-            if trace.order.status is OrderStatus.FILLED:
+            status = trace.order.status
+            order_statuses[status.value] += 1
+            if status is OrderStatus.FILLED:
                 filled += 1
-            elif trace.order.status is OrderStatus.PROTECTED:
+            elif status is OrderStatus.PROTECTED:
                 protected += 1
-            elif trace.order.status is OrderStatus.REJECTED:
+            elif status is OrderStatus.REJECTED:
                 rejected += 1
-            elif trace.order.status is OrderStatus.UNKNOWN:
+            elif status is OrderStatus.CANCELLED:
+                cancelled += 1
+            elif status is OrderStatus.UNKNOWN:
                 unknown += 1
-                if self.stop_on_unknown:
+            elif status is OrderStatus.RECONCILIATION_REQUIRED:
+                reconciliation_required += 1
+            elif status is OrderStatus.EMERGENCY_CLOSE:
+                emergency_close += 1
+
+            if status in _UNRESOLVED_ORDER_STATUSES:
+                unresolved += 1
+                if self.stop_on_unresolved:
                     stopped_early = True
-                    stop_reason = "broker order state is UNKNOWN; remaining instruments were not evaluated"
+                    stop_reason = (
+                        f"broker order state {status.value} is unresolved; reconcile account "
+                        "before evaluating/submitting remaining instruments"
+                    )
                     break
 
         promotion_ready = _promotion_ready(self.engine)
@@ -170,13 +207,18 @@ class PracticeCampaignRunner:
             orders_filled=filled,
             orders_protected=protected,
             orders_rejected=rejected,
+            orders_cancelled=cancelled,
             orders_unknown=unknown,
+            orders_reconciliation_required=reconciliation_required,
+            orders_emergency_close=emergency_close,
+            orders_unresolved=unresolved,
             errors=errors,
             stopped_early=stopped_early,
             stop_reason=stop_reason,
             rejection_codes=dict(rejection_codes.most_common()),
             risk_denial_reasons=dict(risk_denial_reasons.most_common()),
             error_types=dict(error_types.most_common()),
+            order_statuses=dict(order_statuses.most_common()),
             promotion_ready=promotion_ready,
         )
         self._append_evidence(report)
@@ -200,7 +242,7 @@ class PracticeCampaignRunner:
             cycles.append(report)
             if on_cycle is not None:
                 on_cycle(report)
-            if report.orders_unknown > 0 and self.stop_on_unknown:
+            if report.orders_unresolved > 0 and self.stop_on_unresolved:
                 break
             if cycle_number < max_cycles and interval_seconds:
                 sleeper(interval_seconds)

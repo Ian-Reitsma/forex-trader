@@ -10,7 +10,7 @@ from forex_trader.domain.fundamentals import FundamentalBook
 from forex_trader.domain.models import CurrencyFundamentals
 from forex_trader.domain.risk import RiskPolicy
 from forex_trader.domain.strategy import SignalFusionPolicy
-from forex_trader.infrastructure.repository import SqliteDecisionRepository
+from forex_trader.infrastructure.trading_repository import TradingRepository
 
 
 @pytest.fixture()
@@ -47,7 +47,7 @@ def engine(market: SyntheticMarketData, fundamentals: FundamentalBook) -> Tradin
     return TradingEngine(
         market_data=market,
         broker=SimulatedPaperBroker(market),
-        repository=SqliteDecisionRepository(":memory:"),
+        repository=TradingRepository(":memory:"),
         fundamentals=fundamentals,
         fusion_policy=SignalFusionPolicy(minimum_score=Decimal("0.50")),
         risk_policy=RiskPolicy(),

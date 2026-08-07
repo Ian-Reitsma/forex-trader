@@ -1,4 +1,10 @@
-"""Multi-instrument rolling validation with a final untouched holdout."""
+"""Multi-instrument rolling validation with one deployable global threshold.
+
+Every pair uses broker instrument metadata, the same configured lower/higher timeframe
+policy as runtime, point-in-time fundamentals by default and an untouched final holdout.
+Pair-specific thresholds are not promoted because production uses one global policy unless
+an explicitly versioned pair policy is later implemented.
+"""
 from __future__ import annotations
 
 import argparse
@@ -6,13 +12,14 @@ import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from forex_trader.adapters.oanda import OandaPracticeClient
+from forex_trader.adapters.oanda_safe import SafeOandaPracticeClient
 from forex_trader.config import AppConfig, load_macro_file
 from forex_trader.domain.fundamentals import FundamentalBook
 from forex_trader.domain.macro_history import PointInTimeFundamentalBook
 from forex_trader.domain.models import CurrencyFundamentals, jsonable
 from forex_trader.domain.strategy import SignalFusionPolicy
-from forex_trader.infrastructure.repository import SqliteDecisionRepository
+from forex_trader.domain.timeframes import granularity_duration
+from forex_trader.infrastructure.trading_repository import TradingRepository
 from forex_trader.research.backtest import run_walk_forward_backtest
 from forex_trader.research.validation import validate_multiple_instruments
 
@@ -34,15 +41,21 @@ instruments = tuple(
     for item in (args.instruments.split(",") if args.instruments else config.instruments)
     if item.strip()
 )
-repo = SqliteDecisionRepository(config.database_path)
+lower_tf = config.lower_timeframe
+higher_tf = config.higher_timeframe
+lower_duration = granularity_duration(lower_tf)
+higher_duration = granularity_duration(higher_tf)
+repo = TradingRepository(config.database_path)
 observations = repo.macro_observations()
 if not args.technical_only and not observations:
     raise SystemExit("point-in-time macro history is empty; import history or use --technical-only")
 seeds = load_macro_file(None, use_demo_defaults=False).snapshots()
 end = datetime.now(UTC)
 start = end - timedelta(days=args.days)
+higher_warmup_start = start - max(timedelta(days=10), higher_duration * 100)
 trades_by_instrument = {}
-with OandaPracticeClient(
+pip_sizes: dict[str, str] = {}
+with SafeOandaPracticeClient(
     token=config.oanda_token,
     account_id=config.oanda_account_id,
     rest_url=config.oanda_rest_url,
@@ -50,16 +63,18 @@ with OandaPracticeClient(
     timeout_seconds=config.oanda_timeout_seconds,
 ) as client:
     for instrument in instruments:
+        spec = client.instrument_spec(instrument)
+        pip_sizes[instrument] = str(spec.pip_size)
         base, quote = instrument.split("_", maxsplit=1)
         if args.technical_only:
             fundamentals: FundamentalBook | PointInTimeFundamentalBook = FundamentalBook([
-                CurrencyFundamentals(base, confidence=Decimal("0")),
-                CurrencyFundamentals(quote, confidence=Decimal("0")),
+                CurrencyFundamentals(base, confidence=Decimal("0"), as_of=datetime(2000, 1, 1, tzinfo=UTC)),
+                CurrencyFundamentals(quote, confidence=Decimal("0"), as_of=datetime(2000, 1, 1, tzinfo=UTC)),
             ])
         else:
             fundamentals = PointInTimeFundamentalBook(observations, seeds=seeds)
-        lower = client.candles_between(instrument, "M5", start, end)
-        higher = client.candles_between(instrument, "H1", start - timedelta(days=10), end)
+        lower = client.candles_between(instrument, lower_tf, start, end)
+        higher = client.candles_between(instrument, higher_tf, higher_warmup_start, end)
         trades, _ = run_walk_forward_backtest(
             instrument=instrument,
             lower_candles=lower,
@@ -71,6 +86,8 @@ with OandaPracticeClient(
                 require_fundamentals=not args.technical_only,
             ),
             spread_pips=args.spread_pips,
+            lower_timeframe=lower_duration,
+            higher_timeframe=higher_duration,
         )
         trades_by_instrument[instrument] = trades
 
@@ -87,6 +104,9 @@ print(json.dumps({
     "scope": "technical-only" if args.technical_only else "point-in-time combined",
     "start": start.isoformat(),
     "end": end.isoformat(),
+    "timeframe_policy": {"lower": lower_tf, "higher": higher_tf},
+    "pip_sizes": pip_sizes,
     "report": jsonable(report),
+    "deployment_policy": "One global threshold is selected on pooled development folds and applied unchanged to every untouched pair holdout.",
     "promotion_note": "Holdout performance is research evidence, not a live-money promotion decision.",
 }, indent=2, sort_keys=True))

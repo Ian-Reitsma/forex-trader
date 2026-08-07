@@ -8,12 +8,6 @@ from forex_trader.domain.enums import OperatingMode, ProviderKind
 
 
 def test_real_engine_campaign_executes_one_simulated_order_and_keeps_scanning(tmp_path) -> None:
-    """Permanent end-to-end rehearsal for the post-credential Practice workflow.
-
-    This uses the actual TradingEngine, structure/fundamental/risk/execution path and
-    SimulatedPaperBroker. The campaign may submit exactly one paper order, then must keep
-    evaluating the rest of the pair list in shadow without creating additional risk.
-    """
     evidence = tmp_path / "campaign.jsonl"
     config = AppConfig(
         provider=ProviderKind.SIMULATION,
@@ -49,8 +43,6 @@ def test_real_engine_campaign_executes_one_simulated_order_and_keeps_scanning(tm
     assert persisted["orders_submitted"] == 1
     assert persisted["orders_unknown"] == 0
 
-    # The simulated broker itself confirms only one position/order was created even
-    # though the remaining instruments were still evaluated after the order budget.
     orders = getattr(engine.broker, "orders")
     assert len(orders) == 1
     assert len(engine.broker.positions()) == 1

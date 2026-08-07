@@ -41,7 +41,7 @@ def test_rolling_validation_keeps_final_holdout_out_of_training() -> None:
     assert report.holdout.expectancy_r > 0
 
 
-def test_multi_instrument_validation_aggregates_holdouts() -> None:
+def test_multi_instrument_validation_uses_one_deployable_global_threshold() -> None:
     eur = make_trades()
     gbp = [trade.__class__("GBP_USD", trade.direction, trade.signal_time, trade.score, trade.status, trade.r_multiple, trade.bars_held) for trade in eur]
     report = validate_multiple_instruments(
@@ -53,3 +53,5 @@ def test_multi_instrument_validation_aggregates_holdouts() -> None:
     )
     assert report.holdout_trades > 0
     assert report.profitable_instruments == 2
+    assert report.selected_threshold in {Decimal("0.55"), Decimal("0.60"), Decimal("0.65"), Decimal("0.70"), Decimal("0.75"), Decimal("0.80")}
+    assert {pair.selected_threshold for pair in report.by_instrument.values()} == {report.selected_threshold}

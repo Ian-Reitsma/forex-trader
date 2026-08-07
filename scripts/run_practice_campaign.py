@@ -83,7 +83,7 @@ runner = PracticeCampaignRunner(
     instruments,
     execute=args.execute,
     max_new_orders_per_cycle=args.max_orders_per_cycle,
-    stop_on_unknown=True,
+    stop_on_unresolved=True,
     evidence_path=args.evidence_path,
 )
 
@@ -112,10 +112,11 @@ print(
             "evaluations": result.evaluated,
             "orders_submitted": result.submitted,
             "unknown_orders": result.unknown,
+            "unresolved_orders": result.unresolved,
             "evidence_path": str(args.evidence_path),
             "note": (
                 "Trade frequency is an observed outcome. The campaign does not lower strategy/risk gates "
-                "to manufacture fills."
+                "to manufacture fills. Any unresolved broker state stops further campaign risk."
             ),
         },
         indent=2,

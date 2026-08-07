@@ -81,27 +81,51 @@ def test_repository_persists_macro_costs_transactions_and_cursors() -> None:
 
 
 def test_repository_promotion_metrics_reconstruct_owned_trade() -> None:
-    from datetime import UTC, datetime
-    from forex_trader.domain.costs import CostSample, TradingSession
+    """Promotion accounting must be deterministic and independent of strategy selection."""
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
 
-    market = SyntheticMarketData(direction="long")
+    from forex_trader.domain.costs import CostSample, TradingSession
+    from forex_trader.domain.enums import DecisionDisposition, Direction, OrderStatus
+    from forex_trader.domain.models import DecisionTrace, OrderResult, Quote, TradeCandidate
+
     repository = SqliteDecisionRepository(":memory:")
-    engine = TradingEngine(
-        market_data=market,
-        broker=SimulatedPaperBroker(market),
-        repository=repository,
-        fundamentals=FundamentalBook(
-            [
-                CurrencyFundamentals("EUR", policy=Decimal("0.5"), confidence=Decimal("0.9")),
-                CurrencyFundamentals("USD", policy=Decimal("-0.5"), confidence=Decimal("0.9")),
-            ]
-        ),
-        fusion_policy=SignalFusionPolicy(minimum_score=Decimal("0.5")),
-        risk_policy=RiskPolicy(),
-        mode=OperatingMode.PAPER,
-        enable_paper_orders=True,
+    signal_time = datetime(2026, 1, 7, 13, tzinfo=UTC)
+    candidate = TradeCandidate(
+        candidate_id=uuid4(),
+        instrument="EUR_USD",
+        direction=Direction.LONG,
+        disposition=DecisionDisposition.TRADE,
+        score=Decimal("0.8"),
+        entry_price=Decimal("1.1000"),
+        stop_loss=Decimal("1.0980"),
+        take_profit=Decimal("1.1040"),
+        technical_score=Decimal("0.8"),
+        fundamental_score=Decimal("0.6"),
+        reasons=("explicit repository accounting fixture",),
+        signal_time=signal_time,
+        execution_key="ft-explicit-accounting",
+        setup_family="test",
+        setup_state="entry_confirmed",
+        expires_at=signal_time + timedelta(minutes=10),
     )
-    engine.evaluate("EUR_USD", execute=True)
+    quote = Quote(
+        "EUR_USD",
+        Decimal("1.0999"),
+        Decimal("1.1001"),
+        signal_time + timedelta(seconds=1),
+    )
+    order = OrderResult(
+        client_order_id="ft-owned",
+        provider_order_id="100",
+        status=OrderStatus.FILLED,
+        instrument="EUR_USD",
+        units=1000,
+        fill_price=Decimal("1.1001"),
+        provider_trade_id="200",
+        protection_confirmed=True,
+    )
+    repository.save_trace(DecisionTrace.create("EUR_USD", candidate, quote, order=order))
     repository.save_broker_transaction(
         {
             "id": "100",
@@ -138,8 +162,9 @@ def test_repository_promotion_metrics_reconstruct_owned_trade() -> None:
     )
     metrics = repository.promotion_metrics()
     assert metrics.decisions == 1
+    assert metrics.trade_candidates == 1
     assert metrics.submitted_orders == 1
     assert metrics.closed_trades == 1
     assert metrics.wins == 1
     assert metrics.total_pl == Decimal("12.0")
-    assert metrics.median_slippage_pips == Decimal("0.15")
+    assert metrics.median_slippage_pips == Decimal("0.3")
