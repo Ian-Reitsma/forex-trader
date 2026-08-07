@@ -30,7 +30,7 @@ class FxTradingEngine(TradingEngine):
         # sentinel. Metadata enrichment is a DecisionTrace concern and must not change the
         # scope wrapper's behavior for non-trace return values.
         if not isinstance(trace, DecisionTrace):
-            return trace  # type: ignore[return-value]
+            return trace
         metadata = dict(trace.metadata)
         selected_policy = trace.candidate.evidence.get("selected_policy")
         if selected_policy:
