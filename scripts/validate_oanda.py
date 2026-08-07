@@ -1,8 +1,9 @@
 """Multi-instrument rolling validation with one deployable global threshold.
 
-Every pair uses broker instrument metadata, point-in-time fundamentals by default and an
-untouched final holdout. Pair-specific thresholds are not promoted because production
-uses one global policy unless an explicitly versioned pair policy is later implemented.
+Every pair uses broker instrument metadata, the same configured lower/higher timeframe
+policy as runtime, point-in-time fundamentals by default and an untouched final holdout.
+Pair-specific thresholds are not promoted because production uses one global policy unless
+an explicitly versioned pair policy is later implemented.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from forex_trader.domain.fundamentals import FundamentalBook
 from forex_trader.domain.macro_history import PointInTimeFundamentalBook
 from forex_trader.domain.models import CurrencyFundamentals, jsonable
 from forex_trader.domain.strategy import SignalFusionPolicy
+from forex_trader.domain.timeframes import granularity_duration
 from forex_trader.infrastructure.trading_repository import TradingRepository
 from forex_trader.research.backtest import run_walk_forward_backtest
 from forex_trader.research.validation import validate_multiple_instruments
@@ -39,6 +41,10 @@ instruments = tuple(
     for item in (args.instruments.split(",") if args.instruments else config.instruments)
     if item.strip()
 )
+lower_tf = config.lower_timeframe
+higher_tf = config.higher_timeframe
+lower_duration = granularity_duration(lower_tf)
+higher_duration = granularity_duration(higher_tf)
 repo = TradingRepository(config.database_path)
 observations = repo.macro_observations()
 if not args.technical_only and not observations:
@@ -46,6 +52,7 @@ if not args.technical_only and not observations:
 seeds = load_macro_file(None, use_demo_defaults=False).snapshots()
 end = datetime.now(UTC)
 start = end - timedelta(days=args.days)
+higher_warmup_start = start - max(timedelta(days=10), higher_duration * 100)
 trades_by_instrument = {}
 pip_sizes: dict[str, str] = {}
 with SafeOandaPracticeClient(
@@ -66,8 +73,8 @@ with SafeOandaPracticeClient(
             ])
         else:
             fundamentals = PointInTimeFundamentalBook(observations, seeds=seeds)
-        lower = client.candles_between(instrument, "M5", start, end)
-        higher = client.candles_between(instrument, "H1", start - timedelta(days=10), end)
+        lower = client.candles_between(instrument, lower_tf, start, end)
+        higher = client.candles_between(instrument, higher_tf, higher_warmup_start, end)
         trades, _ = run_walk_forward_backtest(
             instrument=instrument,
             lower_candles=lower,
@@ -79,6 +86,8 @@ with SafeOandaPracticeClient(
                 require_fundamentals=not args.technical_only,
             ),
             spread_pips=args.spread_pips,
+            lower_timeframe=lower_duration,
+            higher_timeframe=higher_duration,
         )
         trades_by_instrument[instrument] = trades
 
@@ -95,6 +104,7 @@ print(json.dumps({
     "scope": "technical-only" if args.technical_only else "point-in-time combined",
     "start": start.isoformat(),
     "end": end.isoformat(),
+    "timeframe_policy": {"lower": lower_tf, "higher": higher_tf},
     "pip_sizes": pip_sizes,
     "report": jsonable(report),
     "deployment_policy": "One global threshold is selected on pooled development folds and applied unchanged to every untouched pair holdout.",
