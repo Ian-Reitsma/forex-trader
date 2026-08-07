@@ -94,6 +94,8 @@ class ProductionSignalAblationEvaluator:
             stop_loss=candidate.stop_loss,
             take_profit=candidate.take_profit,
             rejection_code=candidate.rejection_code,
+            quote_bid=quote.bid,
+            quote_ask=quote.ask,
         )
 
 
