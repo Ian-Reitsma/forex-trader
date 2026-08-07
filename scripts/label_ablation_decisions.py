@@ -16,8 +16,10 @@ from pathlib import Path
 from forex_trader.adapters.oanda_safe import SafeOandaPracticeClient
 from forex_trader.config import AppConfig
 from forex_trader.domain.enums import ProviderKind
+from forex_trader.domain.models import Candle
 from forex_trader.research.ablation_maturity import completed_snapshot_ids, mature_ablation_outcomes
 from forex_trader.research.ablations import (
+    ProspectiveAblationDecision,
     append_matured_ablation_outcomes,
     load_ablation_decisions,
     load_matured_ablation_outcomes,
@@ -82,12 +84,12 @@ client = SafeOandaPracticeClient(
     timeout_seconds=config.oanda_timeout_seconds,
 )
 now = datetime.now(UTC)
-tradeable_by_instrument: dict[str, list[object]] = defaultdict(list)
+tradeable_by_instrument: dict[str, list[ProspectiveAblationDecision]] = defaultdict(list)
 for row in pending:
     if row.tradeable:
         tradeable_by_instrument[row.instrument].append(row)
 
-candles_by_instrument = {}
+candles_by_instrument: dict[str, list[Candle]] = {}
 for instrument, instrument_records in sorted(tradeable_by_instrument.items()):
     signal_times = [row.signal_time for row in instrument_records]
     if not signal_times:
