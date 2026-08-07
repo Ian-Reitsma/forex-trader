@@ -24,9 +24,17 @@ class RiskDisposition(StrEnum):
 
 class OrderStatus(StrEnum):
     CREATED = "created"
+    ACKNOWLEDGED = "acknowledged"
+    PARTIALLY_FILLED = "partially_filled"
     FILLED = "filled"
+    PROTECTED = "protected"
+    CLOSING = "closing"
+    CLOSED = "closed"
+    CANCELLED = "cancelled"
     REJECTED = "rejected"
     UNKNOWN = "unknown"
+    RECONCILIATION_REQUIRED = "reconciliation_required"
+    EMERGENCY_CLOSE = "emergency_close"
 
 
 class ProviderKind(StrEnum):
