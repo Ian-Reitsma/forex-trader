@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from math import ceil
 
 
 # These are the timeframe combinations already represented by the repository's
@@ -18,6 +19,12 @@ _GRANULARITY_SECONDS = {
     "H4": 4 * 60 * 60,
 }
 
+# The lower-timeframe liquidity engine may need the entire current 5-p.m.-NY FX day
+# plus the entire preceding day. Forty-eight clock hours is therefore the minimum raw
+# window before weekend/market closures are considered. OANDA's count is a bar count,
+# so this deliberately errs on the side of retaining more completed trading history.
+MINIMUM_LOWER_HISTORY = timedelta(hours=48)
+
 
 def granularity_duration(granularity: str) -> timedelta:
     key = granularity.upper()
@@ -25,6 +32,17 @@ def granularity_duration(granularity: str) -> timedelta:
         return timedelta(seconds=_GRANULARITY_SECONDS[key])
     except KeyError as exc:
         raise ValueError(f"unsupported strategy granularity: {granularity}") from exc
+
+
+def bars_for_duration(granularity: str, duration: timedelta) -> int:
+    if duration <= timedelta(0):
+        raise ValueError("history duration must be positive")
+    step = granularity_duration(granularity)
+    return max(1, ceil(duration.total_seconds() / step.total_seconds()))
+
+
+def minimum_lower_history_count(granularity: str) -> int:
+    return bars_for_duration(granularity, MINIMUM_LOWER_HISTORY)
 
 
 def validate_timeframe_pair(lower: str, higher: str) -> tuple[str, str]:
