@@ -67,8 +67,8 @@ def paired_ablation_uncertainty_evidence(
     snapshot. The ordinary paired evidence function remains the integrity/mean authority;
     this layer adds deterministic uncertainty without changing its denominator semantics.
     """
-    base = paired_ablation_evidence(outcomes, primary_dataset_id=primary_dataset_id)
     rows = tuple(outcomes)
+    base = paired_ablation_evidence(rows, primary_dataset_id=primary_dataset_id)
     grouped: dict[str, dict[AblationVariant, MaturedAblationOutcome]] = {}
     for row in rows:
         grouped.setdefault(row.snapshot_id, {})[row.variant] = row
@@ -144,11 +144,7 @@ def write_paired_ablation_uncertainty_evidence(
         "ablations": [
             {
                 **{
-                    key: (
-                        str(value)
-                        if isinstance(value, Decimal)
-                        else value
-                    )
+                    key: str(value) if isinstance(value, Decimal) else value
                     for key, value in asdict(item).items()
                 },
                 "component_increment_r": str(item.component_increment_r),
