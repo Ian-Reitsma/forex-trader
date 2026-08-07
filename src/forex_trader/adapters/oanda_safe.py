@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time as monotonic_time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -10,6 +11,7 @@ from forex_trader.adapters.oanda import OandaApiError, OandaPracticeClient
 from forex_trader.domain.enums import OrderStatus
 from forex_trader.domain.instruments import register_spec
 from forex_trader.domain.models import InstrumentSpec, OrderRequest, OrderResult, Quote
+from forex_trader.domain.risk_day import fx_risk_day_bounds, fx_risk_day_key
 
 
 class SafeOandaPracticeClient(OandaPracticeClient):
@@ -103,6 +105,29 @@ class SafeOandaPracticeClient(OandaPracticeClient):
             specs.append(spec)
         return sorted(specs, key=lambda item: item.name)
 
+    def realized_pl_today(self) -> Decimal:
+        """Realized account P/L since the current 5 p.m. New York FX-day open."""
+        now = datetime.now(UTC)
+        start, _ = fx_risk_day_bounds(now)
+        risk_day = fx_risk_day_key(now)
+        cache = getattr(self, "_risk_day_pl_cache", None)
+        if cache is not None:
+            cached_day, cached_at, cached_value = cache
+            if cached_day == risk_day and monotonic_time.monotonic() - cached_at < 30:
+                return cached_value
+        total = Decimal("0")
+        for transaction in self.transactions_between(start, now):
+            for field in (
+                "pl",
+                "financing",
+                "commission",
+                "guaranteedExecutionFee",
+                "dividendAdjustment",
+            ):
+                total += Decimal(str(transaction.get(field, "0")))
+        self._risk_day_pl_cache = (risk_day, monotonic_time.monotonic(), total)
+        return total
+
     def place_market_order(self, request: OrderRequest) -> OrderResult:
         if not self.account_id:
             raise OandaApiError("OANDA_ACCOUNT_ID is required for broker writes")
@@ -159,8 +184,6 @@ class SafeOandaPracticeClient(OandaPracticeClient):
                 broker_time=_broker_time(reject),
             )
         if status_code >= 400:
-            # A deterministic 4xx without a reject transaction means the broker did
-            # not accept this order object. It is safe to classify as rejected.
             return OrderResult(
                 client_order_id=request.client_order_id,
                 provider_order_id=None,
