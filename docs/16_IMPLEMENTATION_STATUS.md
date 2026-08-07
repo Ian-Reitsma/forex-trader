@@ -2,7 +2,7 @@
 
 ## Current release
 
-Version 0.6.4 is the hardened offline-simulation and OANDA fxTrade Practice platform. It contains the reconciled structure-first runtime, cohort-safe Practice evidence, fundamental-eligibility preflight, implementation-bound evidence identity, a fail-closed broker-minimum round-trip helper, and an operator-driven staged Practice-validation workflow. It remains intentionally Practice/paper-only and contains no live-money endpoint.
+Version 0.6.4 is the hardened offline-simulation and OANDA fxTrade Practice platform. It contains the reconciled structure-first runtime, cohort-safe Practice evidence, fundamental-eligibility preflight, implementation-bound evidence identity, evaluation-local completed-candle reuse, a fail-closed broker-minimum round-trip helper, and an operator-driven staged Practice-validation workflow. It remains intentionally Practice/paper-only and contains no live-money endpoint.
 
 ```text
 completed configured lower/higher candles + depth-aware quote
@@ -33,6 +33,7 @@ completed configured lower/higher candles + depth-aware quote
 - Source-time rules and expanded lower-history depth prevent self-created sweeps and truncated-session reconstruction.
 - Pivot-derived structure plus explicit sweep -> shift -> retest/hold setup lifecycle, structural invalidation and structural/liquidity targets.
 - Deployable lower M5/M10/M15/M30 and higher H1/H4 timeframe policy with bar-close signal timestamps.
+- Evaluation-local completed-candle reuse can satisfy smaller same-instrument/same-granularity requests from a larger already-fetched snapshot inside one `FxTradingEngine.evaluate()` call. Quotes are never cached and snapshots do not survive the evaluation.
 - FVG/imbalance measurement remains research/confluence evidence only.
 - DST-aware sessions, London fix/rollover handling and country/ECB-TARGET2 holiday blackouts.
 - Spot tick count remains explicitly labeled a low-confidence activity proxy, not centralized footprint/delta.
@@ -43,7 +44,7 @@ completed configured lower/higher candles + depth-aware quote
 - Broker metadata drives pip/display/unit/margin handling; size-aware pricing and worst-price `priceBound` are used before submission.
 - Deterministic reject vs ambiguous-write classification, broker reconciliation, protection verification/repair, emergency-close handling and persistent uncertainty halts.
 - Broker-minimum Practice round-trip validation is refactored into a testable helper that always attempts to close a known filled probe trade even when protection verification fails or raises; failed/unverifiable closes are critical stop conditions.
-- Risk from lower(balance,NAV), currency conversion, 5-p.m.-New-York marked-loss latch, position/unit limits, gross/concentrated currency exposure, margin reserve and signed correlation veto.
+- Risk from lower(balance,NAV), broker-priced currency conversion, 5-p.m.-New-York marked-loss latch, position/unit limits, gross/concentrated currency exposure, margin reserve and signed correlation veto.
 - Learned session costs/slippage can tighten but never widen hard execution ceilings.
 - Practice promotion gates require sustained multi-day/multi-instrument evidence and zero unresolved execution/risk halts.
 - Backtest/replay supports gap stops, execution stress, MAE/MFE, ambiguity reporting, chronological holdouts and one globally deployable multi-pair threshold.
@@ -87,17 +88,17 @@ The manual OANDA Practice workflow sets `FOREX_BUILD_REVISION` to the exact GitH
 
 ## Current automated validation
 
-The v0.6.4 Practice-readiness branch passed the complete CI matrix on Python 3.11 and Python 3.13 before documentation-only follow-up commits:
+The exact v0.6.4 code/test head passed the complete CI matrix on Python 3.11 and Python 3.13:
 
-- **260 tests passed** on each Python version;
-- **87.37% branch-aware coverage** on Python 3.11;
+- **264 tests passed** on each Python version;
+- **87.37% branch-aware coverage**;
 - repository minimum coverage gate: **85%**;
 - fresh dynamic package installation as `forex-trader==0.6.4` passed;
 - bytecode compilation and `pip check` dependency integrity passed;
 - secret-assignment scan passed;
 - executed offline paper-order smoke passed on both Python versions.
 
-The final documentation/workflow head must pass the same CI matrix before merge. These checks establish software/invariant quality. They do not establish a profitable trading edge or authenticated broker success.
+These checks establish software/invariant quality. They do not establish a profitable trading edge or authenticated broker success.
 
 ## Research/operator commands
 

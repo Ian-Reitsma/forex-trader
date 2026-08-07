@@ -64,7 +64,7 @@ Authenticated validation runs are serialized with workflow concurrency so two Pr
 
 ## Explicit broker write-path test
 
-The safest broker-order verification is a broker-minimum round trip. It opens one minimum-size Practice trade with protection and immediately closes that exact trade.
+The broker-order verification probe opens one broker-minimum Practice trade with protection and immediately closes that exact trade.
 
 ```bash
 FOREX_PROVIDER=oanda \
@@ -112,12 +112,12 @@ The engine also requires a tradeable candidate, granted risk authorization, no o
 - The client uses persistent HTTP connections and bounded retries for read-only requests.
 - Market-order and trade-close writes are not blindly retried when the provider outcome may be unknown.
 - A definite rejection releases the local execution claim; an unknown outcome retains it to prevent duplicate submission.
-- Daily realized P/L is reconstructed from UTC-day transaction pages and included in risk authorization.
+- Realized P/L used by the hardened risk path is reconstructed for the current **5-p.m. New York FX risk day**, not the UTC calendar day.
 - Known fills require dependent protection verification/repair; unresolved protection or close state fails closed.
 - Errors do not include the token.
 
 ## Current scope
 
-USD-denominated accounts support pairs where USD is the base or quote currency. Crosses such as EUR/GBP remain denied at the risk layer until conversion-rate sizing is implemented.
+Risk sizing supports account-currency conversion through broker pricing. Direct and inverse conversion pairs are used when available, and non-USD crosses can be triangulated through USD when both legs are priceable. If a required conversion cannot be priced safely, authorization fails closed rather than guessing a conversion rate.
 
 No authenticated Practice result should be claimed merely because software CI is green. Authentication, broker metadata, pricing, reconciliation, protected round-trip behavior and campaign evidence must be observed through the Practice endpoint itself before promotion decisions are made.
