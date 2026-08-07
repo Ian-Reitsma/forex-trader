@@ -4,7 +4,7 @@ A Practice-only FX research and execution platform built around explicit market 
 
 The codebase is **not** a promise of profitability and is **not** approved for live-money trading. OANDA integration is locked to fxTrade Practice endpoints.
 
-## Current release: v0.7.6
+## Current release: v0.7.7
 
 The deployable decision path remains structure-first:
 
@@ -31,41 +31,42 @@ reconciliation + protection verification + persistent uncertainty halt
 Research is intentionally separated from execution authority:
 
 ```text
-point-in-time decision evidence
+normal shadow production signal
         ↓
-mature outcome labels
+exact frozen decision-time inputs
         ↓
-chronological calibration + conservative after-cost EV
+full + five one-component production reruns
         ↓
-paired Phase-D entry/management counterfactuals
+mature paired outcomes on one denominator
         ↓
-prospective paired component ablations on frozen snapshots
+component incremental expectancy evidence
         ↓
-setup-isolated research-promotion bundle
+chronological calibration / promotion evidence
         ↓
 shadow candidate only
 ```
 
 EMA, RSI and ATR are secondary diagnostics rather than substitutes for location, liquidity, and market structure. Spot broker tick activity is explicitly treated as a low-confidence activity proxy, not centralized footprint/delta order flow.
 
-## v0.7.6 integration repair
+## v0.7.7 production-faithful paired ablations
 
-v0.7.6 repairs merge drift introduced while the v0.7.2-v0.7.5 research-ablation work was landing concurrently:
+v0.7.7 moves component attribution from scaffolding into the actual production signal path while preserving the existing Practice authority boundary:
 
-- authoritative package/distribution/OpenAPI/campaign identity is again synchronized at `0.7.6`;
-- paired-ablation matured-outcome loading, primary-dataset binding, paired-artifact hashing, and evidence writing are restored as one coherent API;
-- frozen ablation snapshots retain canonical immutable payload JSON as well as its SHA-256 identity so full and masked evaluators can consume the exact same point-in-time market snapshot;
-- pytest can import operator/research script helpers without runtime `sys.path` mutation;
-- repeated replay evidence is accepted only when setup family, policy fingerprint, and immutable dataset identity match the primary research report before canonical hashes are compared;
-- all ablation/runtime surfaces remain shadow/research-only and cannot enable broker writes.
+- `fundamentals`, `flow`, `session`, `zone_quality`, and `retest` have explicit default-on production decision seams. Ordinary runtime calls remain all-on; only research requests can disable one component at a time.
+- The full and masked variants rerun the real `assess_technicals` and `RegimeAwareSignalFusionPolicy` logic. Disabling a component removes its real score, gate, regime, and independent-confirmation effects rather than changing a synthetic research wrapper.
+- Shadow campaign capture freezes the exact lower/higher completed candles, the actual returned quote, point-in-time fundamental assessment, adaptive spread ceiling, scheduled-event blackout state, rollover state, policy fingerprint, instrument, and signal time.
+- An outer evaluation snapshot reuses the same completed-candle provider responses after the normal production decision. The paired capture path does not request another executable quote or additional underlying candle history.
+- The frozen `full` replay must exactly match the actual production candidate on tradeability, setup/direction, score, entry/stop/target geometry, and rejection code before any paired rows are written.
+- Scheduled-event blackout is replayed for every variant. Rollover blackout is replayed whenever the session component remains enabled; `no_session` intentionally removes session-derived suppression as part of that single-component counterfactual.
+- Paired capture is hard-disabled when campaign execution is enabled. It has no broker submission authority and records research instrumentation errors separately from provider, strategy, risk, and execution errors.
 
-The production-ablation adapter added in v0.7.5 is deliberately a **contract**, not yet proof of real component attribution. It requires explicit hooks for `no_fundamentals`, `no_flow`, `no_session`, `no_zone_quality`, and `no_retest`, but synthetic hooks do not establish that those masks traverse the real production decision path. The next research tranche wires those masks into concrete production seams and verifies same-snapshot differences prospectively.
+The next ablation milestone is outcome maturity: tradeable variants must be labeled against later point-in-time price paths with conservative execution semantics, while abstentions/errors remain in the shared paired denominator. Only then can component incremental expectancy be treated as empirical evidence.
 
 ## Runtime and evidence integrity
 
 Supported deployable timeframe policy is lower `M5/M10/M15/M30` with higher `H1/H4`. OANDA bar-start timestamps are converted to completed-bar signal times for no-lookahead freshness logic.
 
-Completed candles may be reused only inside one evaluation for a later smaller same-instrument/same-granularity request. Executable quotes are never cached and candle snapshots do not cross the evaluation boundary.
+Completed candles may be reused only inside one evaluation for a later smaller same-instrument/same-granularity request. Executable quotes are never cached and candle snapshots do not cross the evaluation boundary. The v0.7.7 research capture path extends the lifetime of that same completed-candle snapshot only until the exact decision inputs are frozen; it does not make a second provider market-data pass.
 
 Fundamentals are immutable point-in-time evidence with component-specific decay, horizon-specific currency context, central-bank comparison, scheduled-event blackouts, and holiday context. They operate as independent admissibility/conflict gates rather than an arbitrary percentage blended into the technical score.
 
@@ -110,17 +111,20 @@ See `docs/17_OANDA_PAPER_SETUP.md` and `docs/25_PRACTICE_CAMPAIGN.md`.
 
 ## Research evidence workflow
 
-Capture detailed shadow decisions:
+Capture detailed shadow decisions and the prospective paired component stream in one campaign:
 
 ```bash
 python scripts/run_practice_campaign.py \
   --all-currency-pairs \
   --max-cycles 1 \
   --evidence-path campaign-evidence.jsonl \
-  --decision-evidence-path decision-evidence.jsonl
+  --decision-evidence-path decision-evidence.jsonl \
+  --ablation-evidence-path ablation-decisions.jsonl
 ```
 
-After the outcome horizon matures, label them using read-only OANDA market data:
+`--ablation-evidence-path` is shadow-only. Combining it with `--execute` is rejected before the campaign starts. Each successful instrument capture writes exactly six rows: `full`, `no_fundamentals`, `no_flow`, `no_session`, `no_zone_quality`, and `no_retest`, all sharing one immutable snapshot payload hash and policy fingerprint.
+
+After the ordinary decision outcome horizon matures, label normal decision evidence using read-only OANDA market data:
 
 ```bash
 python scripts/label_decision_evidence.py \
@@ -145,7 +149,7 @@ python scripts/analyze_phase_d_paths.py \
   candle-archive.jsonl
 ```
 
-For matured paired component-ablation evidence:
+Once prospective component-ablation decisions have matured into paired outcomes:
 
 ```bash
 python scripts/assemble_paired_ablations.py \
@@ -160,20 +164,21 @@ See `docs/27_RESEARCH_EVIDENCE_AND_EV.md`, `docs/28_PHASE_D_PAIRED_COUNTERFACTUA
 
 ## Current validation
 
-The v0.7.6 repair implementation head passed both Python 3.11 and Python 3.13 through install, bytecode compilation, dependency integrity, secret scanning, critical Ruff checks, strict deterministic-research typing, full pytest/coverage, and the executed protected simulation smoke.
+The initial v0.7.7 automatic-capture implementation head passed both Python 3.11 and Python 3.13 through install, bytecode compilation, dependency integrity, secret scanning, critical Ruff checks, strict deterministic-research typing, full pytest/coverage, and the executed protected simulation smoke.
 
-On Python 3.11 the full suite reported:
+On Python 3.11 that implementation head reported:
 
-- **366 tests passed**;
-- **86.07% branch-aware coverage**;
-- repository coverage floor: **85%**.
+- **375 tests passed**;
+- **86.19% branch-aware coverage**;
+- repository coverage floor: **85%**;
+- regression proof that enabling paired capture does not increase underlying provider candle/quote calls for the same shadow decision.
 
-The exact documentation-aligned v0.7.6 head is revalidated before merge.
+The final v0.7.7 release head additionally widens explicit Ruff and strict-mypy coverage across the production decision seams and automatic capture modules and is revalidated before merge.
 
 Software CI does **not** prove authenticated broker behavior or trading profitability. No OANDA Practice success is claimed until the externally configured staged validation is run and its evidence is reviewed.
 
 ## Deliberate boundaries
 
-The repository does not expose a live-money execution endpoint, fabricate centralized order flow from spot tick counts, substitute unlicensed scraping for production news/economic-calendar feeds, claim midpoint candle backtests equal executable quote history, grant runtime authority to unvalidated scale-out/runner logic, or treat an offline research nomination as Practice authority.
+The repository does not expose a live-money execution endpoint, fabricate centralized order flow from spot tick counts, substitute unlicensed scraping for production news/economic-calendar feeds, claim midpoint candle backtests equal executable quote history, grant runtime authority to unvalidated scale-out/runner logic, treat an offline research nomination as Practice authority, or let paired research ablations submit broker orders.
 
-The next evidence milestone is twofold: restore a fully green authoritative `main`, then wire the prospective ablation masks into real production decision seams on one frozen snapshot. Authenticated OANDA Practice evidence and a meaningful immutable decision/outcome/path corpus should determine whether the actual bottleneck is data coverage, setup formation, market/execution conditions, portfolio constraints, component value, entry/management policy, or strategy expectancy before production thresholds are changed.
+The next evidence milestone is to mature the automatically captured component variants on one shared future-price denominator and measure whether each component contributes positive after-cost expectancy. Authenticated OANDA Practice evidence and a meaningful immutable decision/outcome/path corpus should still determine whether the actual bottleneck is data coverage, setup formation, market/execution conditions, portfolio constraints, component value, entry/management policy, or strategy expectancy before production thresholds are changed.
