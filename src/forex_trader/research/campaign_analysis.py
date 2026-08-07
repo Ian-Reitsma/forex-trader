@@ -22,6 +22,17 @@ class CampaignBottleneck(StrEnum):
     CLEAN_SELECTIVE = "clean_selective"
 
 
+_UNRESOLVED_STATUS_NAMES = {
+    "created",
+    "acknowledged",
+    "partially_filled",
+    "unknown",
+    "reconciliation_required",
+    "closing",
+    "emergency_close",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class CampaignAggregate:
     cycles: int
@@ -35,7 +46,11 @@ class CampaignAggregate:
     orders_filled: int
     orders_protected: int
     orders_rejected: int
+    orders_cancelled: int
     orders_unknown: int
+    orders_reconciliation_required: int
+    orders_emergency_close: int
+    orders_unresolved: int
     errors: int
     promotion_ready_true: int
     promotion_ready_false: int
@@ -43,6 +58,7 @@ class CampaignAggregate:
     rejection_codes: dict[str, int]
     risk_denial_reasons: dict[str, int]
     error_types: dict[str, int]
+    order_statuses: dict[str, int]
 
     @property
     def candidate_rate(self) -> Decimal:
@@ -58,11 +74,15 @@ class CampaignAggregate:
 
     @property
     def broker_reject_rate(self) -> Decimal:
-        return _rate(self.orders_rejected, self.orders_submitted)
+        return _rate(self.orders_rejected + self.orders_cancelled, self.orders_submitted)
 
     @property
     def unknown_rate(self) -> Decimal:
         return _rate(self.orders_unknown, self.orders_submitted)
+
+    @property
+    def unresolved_rate(self) -> Decimal:
+        return _rate(self.orders_unresolved, self.orders_submitted)
 
     @property
     def error_rate(self) -> Decimal:
@@ -83,6 +103,7 @@ class CampaignDiagnosis:
     top_rejection_codes: tuple[tuple[str, int], ...]
     top_risk_denials: tuple[tuple[str, int], ...]
     top_error_types: tuple[tuple[str, int], ...]
+    top_order_statuses: tuple[tuple[str, int], ...]
     recommendations: tuple[str, ...]
 
     def to_jsonable(self) -> dict[str, object]:
@@ -99,7 +120,11 @@ class CampaignDiagnosis:
                 "orders_filled": self.aggregate.orders_filled,
                 "orders_protected": self.aggregate.orders_protected,
                 "orders_rejected": self.aggregate.orders_rejected,
+                "orders_cancelled": self.aggregate.orders_cancelled,
                 "orders_unknown": self.aggregate.orders_unknown,
+                "orders_reconciliation_required": self.aggregate.orders_reconciliation_required,
+                "orders_emergency_close": self.aggregate.orders_emergency_close,
+                "orders_unresolved": self.aggregate.orders_unresolved,
                 "errors": self.aggregate.errors,
                 "promotion_ready_true": self.aggregate.promotion_ready_true,
                 "promotion_ready_false": self.aggregate.promotion_ready_false,
@@ -109,6 +134,7 @@ class CampaignDiagnosis:
                 "risk_denial_rate": str(self.aggregate.risk_denial_rate),
                 "broker_reject_rate": str(self.aggregate.broker_reject_rate),
                 "unknown_rate": str(self.aggregate.unknown_rate),
+                "unresolved_rate": str(self.aggregate.unresolved_rate),
                 "error_rate": str(self.aggregate.error_rate),
                 "promotion_ready_rate": str(self.aggregate.promotion_ready_rate),
             },
@@ -118,6 +144,7 @@ class CampaignDiagnosis:
             "top_rejection_codes": [list(item) for item in self.top_rejection_codes],
             "top_risk_denials": [list(item) for item in self.top_risk_denials],
             "top_error_types": [list(item) for item in self.top_error_types],
+            "top_order_statuses": [list(item) for item in self.top_order_statuses],
             "recommendations": list(self.recommendations),
         }
 
@@ -158,7 +185,11 @@ _NUMERIC_FIELDS = (
     "orders_filled",
     "orders_protected",
     "orders_rejected",
+    "orders_cancelled",
     "orders_unknown",
+    "orders_reconciliation_required",
+    "orders_emergency_close",
+    "orders_unresolved",
     "errors",
 )
 
@@ -190,6 +221,7 @@ def aggregate_campaign(records: Iterable[Mapping[str, object]]) -> CampaignAggre
     rejection_codes: Counter[str] = Counter()
     risk_denials: Counter[str] = Counter()
     error_types: Counter[str] = Counter()
+    order_statuses: Counter[str] = Counter()
     totals = Counter[str]()
     promotion = Counter[str]()
 
@@ -203,6 +235,7 @@ def aggregate_campaign(records: Iterable[Mapping[str, object]]) -> CampaignAggre
         rejection_codes.update(_counter_mapping(record.get("rejection_codes"), "rejection_codes", index))
         risk_denials.update(_counter_mapping(record.get("risk_denial_reasons"), "risk_denial_reasons", index))
         error_types.update(_counter_mapping(record.get("error_types"), "error_types", index))
+        order_statuses.update(_counter_mapping(record.get("order_statuses"), "order_statuses", index))
         readiness = record.get("promotion_ready")
         if readiness is True:
             promotion["true"] += 1
@@ -232,7 +265,11 @@ def aggregate_campaign(records: Iterable[Mapping[str, object]]) -> CampaignAggre
         orders_filled=totals["orders_filled"],
         orders_protected=totals["orders_protected"],
         orders_rejected=totals["orders_rejected"],
+        orders_cancelled=totals["orders_cancelled"],
         orders_unknown=totals["orders_unknown"],
+        orders_reconciliation_required=totals["orders_reconciliation_required"],
+        orders_emergency_close=totals["orders_emergency_close"],
+        orders_unresolved=totals["orders_unresolved"],
         errors=totals["errors"],
         promotion_ready_true=promotion["true"],
         promotion_ready_false=promotion["false"],
@@ -240,6 +277,7 @@ def aggregate_campaign(records: Iterable[Mapping[str, object]]) -> CampaignAggre
         rejection_codes=dict(rejection_codes),
         risk_denial_reasons=dict(risk_denials),
         error_types=dict(error_types),
+        order_statuses=dict(order_statuses),
     )
 
 
@@ -266,8 +304,8 @@ def diagnose_campaign(
         else:
             categories[CampaignBottleneck.UNCLASSIFIED_ABSTENTION.value] += count
     categories[CampaignBottleneck.PORTFOLIO_RISK.value] += aggregate.risk_denials
-    categories[CampaignBottleneck.BROKER_REJECTIONS.value] += aggregate.orders_rejected
-    categories[CampaignBottleneck.EXECUTION_UNCERTAINTY.value] += aggregate.orders_unknown
+    categories[CampaignBottleneck.BROKER_REJECTIONS.value] += aggregate.orders_rejected + aggregate.orders_cancelled
+    categories[CampaignBottleneck.EXECUTION_UNCERTAINTY.value] += aggregate.orders_unresolved
     categories[CampaignBottleneck.PROVIDER_ERRORS.value] += aggregate.errors
 
     primary = _primary_bottleneck(aggregate, categories, evidence_sufficient)
@@ -280,6 +318,7 @@ def diagnose_campaign(
         top_rejection_codes=tuple(Counter(aggregate.rejection_codes).most_common(8)),
         top_risk_denials=tuple(Counter(aggregate.risk_denial_reasons).most_common(8)),
         top_error_types=tuple(Counter(aggregate.error_types).most_common(8)),
+        top_order_statuses=tuple(Counter(aggregate.order_statuses).most_common(8)),
         recommendations=tuple(recommendations),
     )
 
@@ -302,11 +341,14 @@ def _primary_bottleneck(
     categories: Counter[str],
     evidence_sufficient: bool,
 ) -> CampaignBottleneck:
-    if aggregate.orders_unknown > 0:
+    if aggregate.orders_unresolved > 0:
         return CampaignBottleneck.EXECUTION_UNCERTAINTY
     if aggregate.errors > 0 and aggregate.error_rate >= Decimal("0.05"):
         return CampaignBottleneck.PROVIDER_ERRORS
-    if aggregate.orders_rejected > 0 and aggregate.broker_reject_rate >= Decimal("0.05"):
+    if (
+        aggregate.orders_rejected + aggregate.orders_cancelled > 0
+        and aggregate.broker_reject_rate >= Decimal("0.05")
+    ):
         return CampaignBottleneck.BROKER_REJECTIONS
     if not evidence_sufficient:
         return CampaignBottleneck.INSUFFICIENT_EVIDENCE
@@ -332,7 +374,11 @@ def _recommendations(
     recommendations: list[str] = []
     if primary is CampaignBottleneck.EXECUTION_UNCERTAINTY:
         recommendations.append(
-            "Stop new Practice risk and reconcile broker orders/trades before any further submissions. Do not retry ambiguous writes blindly."
+            "Stop new Practice risk and reconcile broker orders/trades before any further submissions. Protection/reconciliation/partial/ambiguous states outrank strategy tuning."
+        )
+    if aggregate.orders_emergency_close > 0:
+        recommendations.append(
+            "Emergency-close evidence means dependent protection could not be verified. Resolve broker protection behavior before any additional Practice risk."
         )
     if primary is CampaignBottleneck.PROVIDER_ERRORS:
         recommendations.append(
@@ -340,7 +386,7 @@ def _recommendations(
         )
     if primary is CampaignBottleneck.BROKER_REJECTIONS:
         recommendations.append(
-            "Inspect OANDA reject payloads, instrument metadata, protection distances and unit/price precision before changing strategy thresholds."
+            "Inspect OANDA reject/cancel payloads, instrument metadata, protection distances and unit/price precision before changing strategy thresholds."
         )
     if primary is CampaignBottleneck.UNCLASSIFIED_ABSTENTION:
         recommendations.append(
@@ -389,11 +435,14 @@ def _validate_cycle(values: Mapping[str, int], record: Mapping[str, object], cyc
     grants = values["risk_grants"]
     denials = values["risk_denials"]
     submitted = values["orders_submitted"]
-    terminal_orders = (
+    known_outcomes = (
         values["orders_filled"]
         + values["orders_protected"]
         + values["orders_rejected"]
+        + values["orders_cancelled"]
         + values["orders_unknown"]
+        + values["orders_reconciliation_required"]
+        + values["orders_emergency_close"]
     )
     if evaluated > requested:
         raise ValueError(f"campaign cycle {cycle} evaluated more instruments than requested")
@@ -403,18 +452,48 @@ def _validate_cycle(values: Mapping[str, int], record: Mapping[str, object], cyc
         raise ValueError(f"campaign cycle {cycle} risk decisions exceed trade candidates")
     if submitted > grants:
         raise ValueError(f"campaign cycle {cycle} submitted orders exceed risk grants")
-    if terminal_orders > submitted:
-        raise ValueError(f"campaign cycle {cycle} terminal order outcomes exceed submissions")
+    if known_outcomes > submitted:
+        raise ValueError(f"campaign cycle {cycle} known order outcomes exceed submissions")
+    if values["orders_unresolved"] > submitted:
+        raise ValueError(f"campaign cycle {cycle} unresolved orders exceed submissions")
+    for field in ("orders_unknown", "orders_reconciliation_required", "orders_emergency_close"):
+        if values[field] > values["orders_unresolved"]:
+            raise ValueError(f"campaign cycle {cycle} {field} exceeds unresolved orders")
 
     rejections = _counter_mapping(record.get("rejection_codes"), "rejection_codes", cycle)
     risk_reasons = _counter_mapping(record.get("risk_denial_reasons"), "risk_denial_reasons", cycle)
     errors = _counter_mapping(record.get("error_types"), "error_types", cycle)
+    statuses = _counter_mapping(record.get("order_statuses"), "order_statuses", cycle)
     if sum(rejections.values()) != abstentions:
         raise ValueError(f"campaign cycle {cycle} rejection-code counts must equal abstentions")
     if sum(risk_reasons.values()) != denials:
         raise ValueError(f"campaign cycle {cycle} risk-denial counts must equal risk denials")
     if sum(errors.values()) != values["errors"]:
         raise ValueError(f"campaign cycle {cycle} error-type counts must equal errors")
+    if statuses:
+        if sum(statuses.values()) != submitted:
+            raise ValueError(f"campaign cycle {cycle} order-status counts must equal submissions")
+        expected = {
+            "filled": values["orders_filled"],
+            "protected": values["orders_protected"],
+            "rejected": values["orders_rejected"],
+            "cancelled": values["orders_cancelled"],
+            "unknown": values["orders_unknown"],
+            "reconciliation_required": values["orders_reconciliation_required"],
+            "emergency_close": values["orders_emergency_close"],
+        }
+        for status_name, count in expected.items():
+            if statuses.get(status_name, 0) != count:
+                raise ValueError(
+                    f"campaign cycle {cycle} order-status {status_name} does not match its explicit counter"
+                )
+        unresolved_from_status = sum(
+            count for status_name, count in statuses.items() if status_name in _UNRESOLVED_STATUS_NAMES
+        )
+        if unresolved_from_status != values["orders_unresolved"]:
+            raise ValueError(
+                f"campaign cycle {cycle} unresolved order-status counts do not match orders_unresolved"
+            )
 
 
 def _rate(numerator: int, denominator: int) -> Decimal:
