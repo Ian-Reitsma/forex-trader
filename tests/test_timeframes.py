@@ -5,6 +5,7 @@ import pytest
 from forex_trader.adapters.synthetic import SyntheticMarketData
 from forex_trader.adapters.timeframe import TimeframeMappedMarketData
 from forex_trader.config import AppConfig, build_engine
+from forex_trader.domain.technicals import assess_technicals
 from forex_trader.domain.timeframes import granularity_duration, validate_timeframe_pair
 from forex_trader.research.timeframes import TimeframePolicy, timeframe_ablation_grid
 
@@ -44,7 +45,18 @@ def test_timeframe_adapter_maps_semantic_engine_requests() -> None:
     higher = mapped.candles("EUR_USD", "H1", 20)
     assert lower[-1].time - lower[-2].time == timedelta(minutes=15)
     assert higher[-1].time - higher[-2].time == timedelta(hours=4)
+    assert lower[-1].time + timedelta(minutes=15) == provider.anchor
+    assert mapped.quote("EUR_USD").time == provider.anchor + timedelta(seconds=1)
     assert mapped.quote("EUR_USD") == provider.quote("EUR_USD")
+
+
+def test_technical_signal_time_is_completed_lower_bar_close() -> None:
+    provider = SyntheticMarketData(seed=11, quote_granularity="M15")
+    lower = provider.candles("EUR_USD", "M15", 200)
+    higher = provider.candles("EUR_USD", "H4", 200)
+    assessment = assess_technicals("EUR_USD", lower, higher)
+    assert assessment.signal_time == provider.anchor
+    assert provider.quote("EUR_USD").time > assessment.signal_time
 
 
 def test_config_reads_and_builds_nondefault_timeframe_policy(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
