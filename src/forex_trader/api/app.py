@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hmac
 from datetime import datetime
 from decimal import Decimal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from forex_trader.application.engine import TradingEngine
@@ -40,54 +41,100 @@ class CentralBankInput(BaseModel):
     source: str = "official-central-bank"
 
 
-def create_app(engine: TradingEngine) -> FastAPI:
-    app = FastAPI(title="Forex Trader Control API", version="0.3.0")
+class ScheduledEventInput(BaseModel):
+    currency: str = Field(min_length=3, max_length=3)
+    scheduled_at: datetime
+    name: str = Field(min_length=1)
+    importance: str = "high"
+    source: str = "manual"
+    pre_blackout_minutes: int = Field(default=15, ge=0, le=240)
+    post_blackout_minutes: int = Field(default=5, ge=0, le=240)
+
+
+def create_app(
+    engine: TradingEngine,
+    *,
+    api_token: str | None = None,
+    allow_unsafe_local_mutations: bool = False,
+) -> FastAPI:
+    """Create the operator API.
+
+    Production/exposed deployments must provide a bearer token. The explicit
+    `allow_unsafe_local_mutations` escape hatch exists only for local tests and
+    loopback development; the CLI never enables it for a non-loopback bind.
+    """
+    app = FastAPI(title="Forex Trader Control API", version="0.5.0")
+
+    def require_auth(authorization: str | None = Header(default=None)) -> None:
+        if api_token is None:
+            if allow_unsafe_local_mutations:
+                return
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="control API is disabled until FOREX_API_TOKEN is configured",
+            )
+        expected = f"Bearer {api_token}"
+        if authorization is None or not hmac.compare_digest(authorization, expected):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="valid bearer authorization is required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    protected = [Depends(require_auth)]
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/v1/status")
-    def status() -> dict[str, object]:
+    @app.get("/v1/status", dependencies=protected)
+    def system_status() -> dict[str, object]:
         return engine.status()
 
-    @app.get("/v1/promotion")
+    @app.get("/v1/promotion", dependencies=protected)
     def promotion() -> dict[str, object]:
         return engine.promotion_status()
 
-    @app.get("/v1/decisions")
+    @app.get("/v1/decisions", dependencies=protected)
     def decisions(limit: int = 20) -> list[dict[str, object]]:
         return engine.repository.recent_traces(limit)
 
-    @app.get("/v1/fundamentals/history")
+    @app.get("/v1/fundamentals/history", dependencies=protected)
     def fundamental_history() -> list[dict[str, object]]:
         if not hasattr(engine.repository, "macro_observations"):
             return []
-        return [
-            jsonable(item)
-            for item in engine.repository.macro_observations()  # type: ignore[attr-defined]
-        ]
+        return [jsonable(item) for item in engine.repository.macro_observations()]  # type: ignore[attr-defined]
 
-    @app.post("/v1/fundamentals/releases")
+    @app.post("/v1/fundamentals/releases", dependencies=protected)
     def ingest_release(payload: ReleaseInput) -> dict[str, object]:
         state = engine.ingest_release(**payload.model_dump())
         return jsonable(state)
 
-    @app.post("/v1/fundamentals/news")
+    @app.post("/v1/fundamentals/news", dependencies=protected)
     def ingest_news(payload: NewsInput) -> dict[str, object]:
         state = engine.ingest_news(**payload.model_dump())
         return jsonable(state)
 
-    @app.post("/v1/fundamentals/central-bank")
+    @app.post("/v1/fundamentals/central-bank", dependencies=protected)
     def ingest_central_bank(payload: CentralBankInput) -> dict[str, object]:
         state = engine.ingest_central_bank(**payload.model_dump())
         return jsonable(state)
 
-    @app.post("/v1/evaluate/{instrument}")
+    @app.post("/v1/events/scheduled", dependencies=protected)
+    def ingest_scheduled_event(payload: ScheduledEventInput) -> dict[str, object]:
+        event = engine.ingest_scheduled_event(**payload.model_dump())
+        return jsonable(event)
+
+    @app.post("/v1/evaluate/{instrument}", dependencies=protected)
     def evaluate(instrument: str, execute: bool = False) -> dict[str, object]:
         try:
             return jsonable(engine.evaluate(instrument, execute=execute))
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/v1/halts/{name}/clear", dependencies=protected)
+    def clear_halt(name: str) -> dict[str, str]:
+        engine.clear_halt(name)
+        return {"status": "cleared", "name": name}
 
     return app
