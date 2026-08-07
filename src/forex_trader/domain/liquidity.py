@@ -51,10 +51,8 @@ def build_liquidity_map(
     swings = find_swings(completed, left=2, right=2)
     highs = [point for point in swings if point.kind is SwingKind.HIGH]
     lows = [point for point in swings if point.kind is SwingKind.LOW]
-    if highs:
-        levels.append(LiquidityLevel(LiquidityKind.EXTERNAL_SWING_HIGH, highs[-1].price, Decimal("0.70"), highs[-1].time))
-    if lows:
-        levels.append(LiquidityLevel(LiquidityKind.EXTERNAL_SWING_LOW, lows[-1].price, Decimal("0.70"), lows[-1].time))
+    levels.extend(_recent_external_swings(highs, LiquidityKind.EXTERNAL_SWING_HIGH))
+    levels.extend(_recent_external_swings(lows, LiquidityKind.EXTERNAL_SWING_LOW))
     levels.extend(_equal_levels(highs, LiquidityKind.EQUAL_HIGHS, tolerance=pip_size * Decimal("2.5")))
     levels.extend(_equal_levels(lows, LiquidityKind.EQUAL_LOWS, tolerance=pip_size * Decimal("2.5")))
     levels.extend(_round_levels(completed[-1].close, pip_size))
@@ -77,12 +75,29 @@ def find_recent_sweep(
     for index in range(start, len(completed)):
         candle = completed[index]
         for level in levels:
-            if level.kind in {LiquidityKind.PRIOR_DAY_LOW, LiquidityKind.EQUAL_LOWS, LiquidityKind.EXTERNAL_SWING_LOW, LiquidityKind.ROUND_NUMBER}:
+            # A swing cannot be swept by the same candle that created/confirmed it.
+            if level.source_time is not None and getattr(level.source_time, "__gt__", None) is not None:
+                try:
+                    if level.source_time >= candle.time:
+                        continue
+                except TypeError:
+                    pass
+            if level.kind in {
+                LiquidityKind.PRIOR_DAY_LOW,
+                LiquidityKind.EQUAL_LOWS,
+                LiquidityKind.EXTERNAL_SWING_LOW,
+                LiquidityKind.ROUND_NUMBER,
+            }:
                 excursion = level.price - candle.low
                 if excursion >= pip_size * minimum_excursion_pips and candle.close > level.price:
                     event = SweepEvent(Direction.LONG, level, index, candle.low, candle.close, excursion)
                     best = _prefer(best, event)
-            if level.kind in {LiquidityKind.PRIOR_DAY_HIGH, LiquidityKind.EQUAL_HIGHS, LiquidityKind.EXTERNAL_SWING_HIGH, LiquidityKind.ROUND_NUMBER}:
+            if level.kind in {
+                LiquidityKind.PRIOR_DAY_HIGH,
+                LiquidityKind.EQUAL_HIGHS,
+                LiquidityKind.EXTERNAL_SWING_HIGH,
+                LiquidityKind.ROUND_NUMBER,
+            }:
                 excursion = candle.high - level.price
                 if excursion >= pip_size * minimum_excursion_pips and candle.close < level.price:
                     event = SweepEvent(Direction.SHORT, level, index, candle.high, candle.close, excursion)
@@ -118,6 +133,22 @@ def _prior_day_levels(candles: list[Candle]) -> list[LiquidityLevel]:
     ]
 
 
+def _recent_external_swings(points: list[object], kind: LiquidityKind, *, count: int = 5) -> list[LiquidityLevel]:
+    results: list[LiquidityLevel] = []
+    selected = points[-count:]
+    for age, point in enumerate(reversed(selected)):
+        strength = max(Decimal("0.50"), Decimal("0.75") - Decimal(age) * Decimal("0.05"))
+        results.append(
+            LiquidityLevel(
+                kind,
+                Decimal(str(getattr(point, "price"))),
+                strength,
+                getattr(point, "time", None),
+            )
+        )
+    return results
+
+
 def _equal_levels(points: list[object], kind: LiquidityKind, *, tolerance: Decimal) -> list[LiquidityLevel]:
     results: list[LiquidityLevel] = []
     for first, second in zip(points[-8:-1], points[-7:], strict=False):
@@ -136,8 +167,6 @@ def _equal_levels(points: list[object], kind: LiquidityKind, *, tolerance: Decim
 
 
 def _round_levels(price: Decimal, pip_size: Decimal) -> list[LiquidityLevel]:
-    # Major/half handles: for a standard 0.0001 pip pair this produces 50-pip
-    # spacing; for 0.01 JPY-style pips it produces 50-pip spacing as well.
     spacing = pip_size * Decimal("50")
     if spacing <= 0:
         return []
@@ -161,5 +190,4 @@ def _deduplicate(levels: list[LiquidityLevel], pip_size: Decimal) -> list[Liquid
 def _prefer(current: SweepEvent | None, candidate: SweepEvent) -> SweepEvent:
     if current is None:
         return candidate
-    # Most recent sweep wins; stronger declared liquidity breaks same-bar ties.
     return candidate if (candidate.candle_index, candidate.level.strength) > (current.candle_index, current.level.strength) else current
