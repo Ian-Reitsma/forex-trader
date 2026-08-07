@@ -9,7 +9,12 @@ from enum import StrEnum
 from forex_trader.domain.enums import Direction
 from forex_trader.domain.market_structure import SwingKind, find_swings
 from forex_trader.domain.models import Candle
-from forex_trader.domain.risk_day import NEW_YORK as RISK_NEW_YORK, fx_risk_day_key
+from forex_trader.domain.risk_day import (
+    fx_bar_risk_day_key,
+    fx_bar_week_key,
+    fx_risk_day_key,
+    fx_week_key,
+)
 from forex_trader.domain.sessions import LONDON, NEW_YORK, TOKYO, SessionDefinition
 
 
@@ -79,11 +84,11 @@ def build_liquidity_map(
 ) -> list[LiquidityLevel]:
     """Build declared liquidity from completed price/session structure.
 
-    Lower-timeframe history supplies the active FX day, finalized session ranges, swings,
-    equal highs/lows and handles. Optional higher-timeframe context supplies the previous
-    completed New York trading week. Session/opening-range levels are not emitted until
-    their defining window is complete, preventing a moving partial range from masquerading
-    as settled liquidity.
+    Lower-timeframe history supplies the active 5-p.m.-New-York FX day, finalized session
+    ranges, swings, equal highs/lows and handles. Optional higher-timeframe context supplies
+    the previous completed Sunday-5-p.m. FX week. Session/opening-range levels are not
+    emitted until their defining window is complete, preventing a moving partial range from
+    masquerading as settled liquidity.
     """
     completed = [candle for candle in candles if candle.complete]
     if len(completed) < 12:
@@ -202,8 +207,7 @@ def _prior_day_levels(
     current_key = fx_risk_day_key(signal_time)
     groups: dict[str, list[Candle]] = defaultdict(list)
     for candle in candles:
-        key = fx_risk_day_key(candle.time + step)
-        groups[key].append(candle)
+        groups[fx_bar_risk_day_key(candle.time, step)].append(candle)
     prior_keys = sorted(key for key in groups if key < current_key)
     if not prior_keys:
         return []
@@ -216,16 +220,13 @@ def _prior_day_levels(
 
 def _prior_week_levels(candles: list[Candle], *, signal_time: datetime) -> list[LiquidityLevel]:
     completed = [candle for candle in candles if candle.complete]
-    if not completed:
+    if len(completed) < 2:
         return []
-    local_signal = signal_time.astimezone(RISK_NEW_YORK)
-    current_iso = local_signal.isocalendar()
-    current_key = (current_iso.year, current_iso.week)
-    groups: dict[tuple[int, int], list[Candle]] = defaultdict(list)
+    step = _bar_step(completed)
+    current_key = fx_week_key(signal_time)
+    groups: dict[str, list[Candle]] = defaultdict(list)
     for candle in completed:
-        local = candle.time.astimezone(RISK_NEW_YORK)
-        iso = local.isocalendar()
-        groups[(iso.year, iso.week)].append(candle)
+        groups[fx_bar_week_key(candle.time, step)].append(candle)
     prior_keys = sorted(key for key in groups if key < current_key)
     if not prior_keys:
         return []
