@@ -1,15 +1,19 @@
 name: OANDA Practice Validation
 
 on:
-  push:
-    branches: [v0.5-audit-remediation]
+  workflow_dispatch:
+    inputs:
+      practice_write:
+        description: "Run the broker-minimum protected Practice open/verify/close round trip"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
   practice-smoke:
-    if: contains(github.event.head_commit.message, '[practice-smoke]') || contains(github.event.head_commit.message, '[practice-write]')
     runs-on: ubuntu-latest
     env:
       OANDA_API_TOKEN: ${{ secrets.OANDA_API_TOKEN }}
@@ -20,6 +24,7 @@ jobs:
       FOREX_INSTRUMENTS: EUR_USD,GBP_USD,USD_JPY
       FOREX_REQUIRE_FUNDAMENTALS: "true"
       FOREX_DATABASE_PATH: /tmp/forex-practice.db
+      FOREX_BUILD_REVISION: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,37 +33,46 @@ jobs:
           cache: pip
       - name: Install
         run: python -m pip install --upgrade pip && pip install -e ".[dev]"
-      - name: Verify Practice secrets are configured
+      - name: Verify Practice token is configured
         shell: bash
         run: |
-          if [[ -z "$OANDA_API_TOKEN" || -z "$OANDA_ACCOUNT_ID" ]]; then
-            echo "OANDA Practice credentials are not configured as repository Actions secrets." | tee /tmp/practice-smoke.txt
+          if [[ -z "$OANDA_API_TOKEN" ]]; then
+            echo "OANDA_API_TOKEN is not configured as a repository Actions secret." | tee /tmp/practice-smoke.txt
             exit 2
           fi
-          echo "OANDA Practice credentials are configured (values intentionally not printed)." | tee /tmp/practice-smoke.txt
+          echo "OANDA Practice token is configured (value intentionally not printed)." | tee /tmp/practice-smoke.txt
+          if [[ -n "$OANDA_ACCOUNT_ID" ]]; then
+            echo "Explicit Practice account ID is configured (value intentionally not printed)." | tee -a /tmp/practice-smoke.txt
+          else
+            echo "No explicit account ID configured; read-only adapter discovery will be used." | tee -a /tmp/practice-smoke.txt
+          fi
       - name: Read-only authenticated probe
         shell: bash
         run: python scripts/smoke_oanda.py 2>&1 | tee -a /tmp/practice-smoke.txt
-      - name: Discover currency universe
+      - name: Reconcile broker state read-only
+        shell: bash
+        run: forex-trader sync 2>&1 | tee -a /tmp/practice-smoke.txt
+      - name: One-cycle all-currency-pair shadow campaign
         shell: bash
         run: |
-          python - <<'PY' 2>&1 | tee -a /tmp/practice-smoke.txt
-          from forex_trader.config import AppConfig, build_engine
-          engine = build_engine(AppConfig.from_env())
-          instruments = engine.instrument_universe()
-          print({"currency_instruments": len(instruments), "sample": list(instruments[:12])})
-          PY
-      - name: Upload smoke evidence
+          python scripts/run_practice_campaign.py \
+            --all-currency-pairs \
+            --max-cycles 1 \
+            --evidence-path /tmp/campaign-evidence.jsonl \
+            2>&1 | tee -a /tmp/practice-smoke.txt
+      - name: Upload smoke and shadow evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: oanda-practice-smoke
-          path: /tmp/practice-smoke.txt
+          name: oanda-practice-smoke-${{ github.sha }}
+          path: |
+            /tmp/practice-smoke.txt
+            /tmp/campaign-evidence.jsonl
           if-no-files-found: warn
           retention-days: 7
 
   practice-write:
-    if: contains(github.event.head_commit.message, '[practice-write]')
+    if: ${{ inputs.practice_write }}
     needs: practice-smoke
     runs-on: ubuntu-latest
     env:
@@ -70,6 +84,7 @@ jobs:
       FOREX_INSTRUMENTS: EUR_USD,GBP_USD,USD_JPY
       FOREX_REQUIRE_FUNDAMENTALS: "true"
       FOREX_DATABASE_PATH: /tmp/forex-practice-write.db
+      FOREX_BUILD_REVISION: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -78,11 +93,22 @@ jobs:
           cache: pip
       - name: Install
         run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: Verify explicit write credentials
+        shell: bash
+        run: |
+          if [[ -z "$OANDA_API_TOKEN" || -z "$OANDA_ACCOUNT_ID" ]]; then
+            echo "Practice writes require both OANDA_API_TOKEN and OANDA_ACCOUNT_ID Actions secrets." | tee /tmp/practice-write.txt
+            exit 2
+          fi
+          echo "Explicit OANDA Practice write credentials are configured (values intentionally not printed)." | tee /tmp/practice-write.txt
       - name: Re-run tests immediately before broker write
         run: pytest --cov=forex_trader --cov-report=term-missing
+      - name: Reconcile immediately before broker write
+        shell: bash
+        run: forex-trader sync 2>&1 | tee -a /tmp/practice-write.txt
       - name: Protected broker-minimum Practice round trip
         shell: bash
-        run: python scripts/oanda_round_trip.py 2>&1 | tee /tmp/practice-write.txt
+        run: python scripts/oanda_round_trip.py 2>&1 | tee -a /tmp/practice-write.txt
       - name: Current-market structure scan without further writes
         env:
           FOREX_MODE: shadow
@@ -94,7 +120,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: oanda-practice-write
+          name: oanda-practice-write-${{ github.sha }}
           path: /tmp/practice-write.txt
           if-no-files-found: warn
           retention-days: 7
