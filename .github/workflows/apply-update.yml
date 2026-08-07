@@ -21,7 +21,7 @@ jobs:
       - name: Reconstruct verified archive
         shell: bash
         run: |
-          cat .forex-update.part1 .forex-update.part2 .forex-update.part3 .forex-update.part4 .forex-update.part5 | base64 -d > /tmp/forex-update.tar.bz2
+          { head -c 10000 .forex-update.part1; cat .forex-update.part2 .forex-update.part3 .forex-update.part4 .forex-update.part5; } | base64 -d > /tmp/forex-update.tar.bz2
           echo "8861de8ee17c1f4bbf908e8a406d23b0c7c8955eede6b6df56b5f4f6e131b9e9  /tmp/forex-update.tar.bz2" | sha256sum -c -
           tar -xjf /tmp/forex-update.tar.bz2
           git add -A
