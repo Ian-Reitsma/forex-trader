@@ -88,8 +88,6 @@ def assess_technicals(
     lower_step = current.time - completed_lower[-2].time
     if lower_step <= timedelta(0):
         raise ValueError("lower-timeframe candles must have increasing timestamps")
-    # OANDA candle timestamps mark the bar start. A completed-candle signal becomes
-    # knowable at bar close, so all freshness/session/expiry logic must use that time.
     signal_time = current.time + lower_step
     current_atr = atr(completed_lower)
     higher_atr = atr(completed_higher)
@@ -120,7 +118,11 @@ def assess_technicals(
         else:
             reasons.append("higher-timeframe context is not directional")
 
-    liquidity = build_liquidity_map(completed_lower, pip_size=pip)
+    liquidity = build_liquidity_map(
+        completed_lower,
+        pip_size=pip,
+        context_candles=completed_higher,
+    )
     sweep = find_recent_sweep(completed_lower, liquidity, pip_size=pip, max_bars=10)
     if sweep is not None:
         reasons.append(
