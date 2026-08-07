@@ -7,6 +7,10 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Iterable, Mapping
 
+from forex_trader.research.ablation_uncertainty import (
+    SIMULTANEOUS_BOOTSTRAP_METHOD,
+    SIMULTANEOUS_INTERVAL_SCOPE,
+)
 from forex_trader.research.evidence import DecisionEvidence
 
 
@@ -31,6 +35,10 @@ class AblationEvidence:
     confidence: Decimal | None = None
     bootstrap_iterations: int | None = None
     bootstrap_seed: int | None = None
+    interval_scope: str | None = None
+    multiple_testing_method: str | None = None
+    familywise_confidence: Decimal | None = None
+    family_size: int | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip() or not self.dataset_id.strip():
@@ -69,6 +77,29 @@ class AblationEvidence:
             if self.bootstrap_iterations < 100:
                 raise ValueError("ablation bootstrap_iterations must be at least 100")
 
+        family = (
+            self.interval_scope,
+            self.multiple_testing_method,
+            self.familywise_confidence,
+            self.family_size,
+        )
+        family_present = tuple(value is not None for value in family)
+        if any(family_present) and not all(family_present):
+            raise ValueError("ablation family-wise fields must be supplied together")
+        if all(family_present):
+            assert self.interval_scope is not None
+            assert self.multiple_testing_method is not None
+            assert self.familywise_confidence is not None
+            assert self.family_size is not None
+            if not self.uncertainty_complete:
+                raise ValueError("family-wise ablation evidence also requires uncertainty fields")
+            if not Decimal("0") < self.familywise_confidence < Decimal("1"):
+                raise ValueError("familywise_confidence must be in (0,1)")
+            if self.family_size < 2:
+                raise ValueError("family_size must be at least 2")
+            if self.confidence != self.familywise_confidence:
+                raise ValueError("ablation confidence must equal familywise_confidence for simultaneous bands")
+
     @property
     def component_increment_r(self) -> Decimal:
         return self.full_expectancy_r - self.ablated_expectancy_r
@@ -76,6 +107,10 @@ class AblationEvidence:
     @property
     def uncertainty_complete(self) -> bool:
         return self.lower_confidence_component_increment_r is not None
+
+    @property
+    def familywise_complete(self) -> bool:
+        return self.interval_scope is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +237,12 @@ class ResearchPromotionEvidence:
                     "confidence": str(item.confidence) if item.confidence is not None else None,
                     "bootstrap_iterations": item.bootstrap_iterations,
                     "bootstrap_seed": item.bootstrap_seed,
+                    "interval_scope": item.interval_scope,
+                    "multiple_testing_method": item.multiple_testing_method,
+                    "familywise_confidence": (
+                        str(item.familywise_confidence) if item.familywise_confidence is not None else None
+                    ),
+                    "family_size": item.family_size,
                 }
                 for item in sorted(self.ablations, key=lambda item: item.name)
             ],
@@ -246,9 +287,11 @@ class ResearchPromotionPolicy:
         "no_retest",
     )
     minimum_ablation_samples: int = 20
-    minimum_ablation_confidence: Decimal = Decimal("0.90")
-    minimum_ablation_bootstrap_iterations: int = 1000
+    minimum_ablation_familywise_confidence: Decimal = Decimal("0.90")
+    minimum_ablation_bootstrap_iterations: int = 5000
     maximum_ablation_outperformance_r: Decimal = Decimal("0.05")
+    required_ablation_interval_scope: str = SIMULTANEOUS_INTERVAL_SCOPE
+    required_ablation_multiple_testing_method: str = SIMULTANEOUS_BOOTSTRAP_METHOD
     minimum_replay_repetitions: int = 2
     minimum_phase_d_holdout_scenarios: int = 30
 
@@ -274,12 +317,14 @@ class ResearchPromotionPolicy:
         ):
             if not Decimal("0") <= value <= Decimal("1"):
                 raise ValueError(f"{name} must be in [0,1]")
-        if not Decimal("0") < self.minimum_ablation_confidence < Decimal("1"):
-            raise ValueError("minimum_ablation_confidence must be in (0,1)")
+        if not Decimal("0") < self.minimum_ablation_familywise_confidence < Decimal("1"):
+            raise ValueError("minimum_ablation_familywise_confidence must be in (0,1)")
         if self.maximum_untouched_drawdown_r < 0 or self.maximum_ablation_outperformance_r < 0:
             raise ValueError("drawdown and ablation tolerances cannot be negative")
         if len(set(self.required_ablations)) != len(self.required_ablations):
             raise ValueError("required_ablations must be unique")
+        if not self.required_ablation_interval_scope.strip() or not self.required_ablation_multiple_testing_method.strip():
+            raise ValueError("required ablation family-wise method/scope cannot be empty")
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,6 +420,23 @@ def assess_research_promotion(
         passed.append("decision_error_rate")
 
     ablation_by_name = {item.name: item for item in evidence.ablations}
+    required_items = [ablation_by_name.get(name) for name in rules.required_ablations]
+    complete_family_items = [item for item in required_items if item is not None and item.familywise_complete]
+    if len(complete_family_items) == len(rules.required_ablations):
+        family_configs = {
+            (
+                item.interval_scope,
+                item.multiple_testing_method,
+                item.familywise_confidence,
+                item.family_size,
+                item.bootstrap_iterations,
+                item.bootstrap_seed,
+            )
+            for item in complete_family_items
+        }
+        if len(family_configs) != 1:
+            hard.append("ablation family-wise configuration mismatch across required components")
+
     for name in rules.required_ablations:
         item = ablation_by_name.get(name)
         if item is None:
@@ -396,20 +458,41 @@ def assess_research_promotion(
             )
             continue
         if item.sample_size < rules.minimum_ablation_samples:
-            missing.append(
-                f"ablation_sample:{name}:{item.sample_size}/{rules.minimum_ablation_samples}"
-            )
+            missing.append(f"ablation_sample:{name}:{item.sample_size}/{rules.minimum_ablation_samples}")
             continue
         if not item.uncertainty_complete:
             missing.append(f"ablation_uncertainty:{name}")
             continue
+        if not item.familywise_complete:
+            missing.append(f"ablation_multiple_testing_control:{name}")
+            continue
         assert item.lower_confidence_component_increment_r is not None
         assert item.upper_confidence_component_increment_r is not None
-        assert item.confidence is not None
         assert item.bootstrap_iterations is not None
-        if item.confidence < rules.minimum_ablation_confidence:
+        assert item.interval_scope is not None
+        assert item.multiple_testing_method is not None
+        assert item.familywise_confidence is not None
+        assert item.family_size is not None
+        if item.interval_scope != rules.required_ablation_interval_scope:
+            hard.append(
+                f"ablation:{name} interval_scope {item.interval_scope} != {rules.required_ablation_interval_scope}"
+            )
+            continue
+        if item.multiple_testing_method != rules.required_ablation_multiple_testing_method:
+            hard.append(
+                f"ablation:{name} multiple_testing_method {item.multiple_testing_method} != "
+                f"{rules.required_ablation_multiple_testing_method}"
+            )
+            continue
+        if item.family_size != len(rules.required_ablations):
+            hard.append(
+                f"ablation:{name} family_size {item.family_size} != required family size {len(rules.required_ablations)}"
+            )
+            continue
+        if item.familywise_confidence < rules.minimum_ablation_familywise_confidence:
             missing.append(
-                f"ablation_confidence:{name}:{item.confidence}/{rules.minimum_ablation_confidence}"
+                f"ablation_familywise_confidence:{name}:"
+                f"{item.familywise_confidence}/{rules.minimum_ablation_familywise_confidence}"
             )
             continue
         if item.bootstrap_iterations < rules.minimum_ablation_bootstrap_iterations:
@@ -421,14 +504,14 @@ def assess_research_promotion(
         harmful_threshold = -rules.maximum_ablation_outperformance_r
         if item.upper_confidence_component_increment_r < harmful_threshold:
             hard.append(
-                f"ablation:{name} confidently harmful: upper component increment "
+                f"ablation:{name} confidently harmful under family-wise interval: upper component increment "
                 f"{item.upper_confidence_component_increment_r}R < {harmful_threshold}R"
             )
         elif item.lower_confidence_component_increment_r < harmful_threshold:
             missing.append(
-                f"ablation_uncertainty:{name}: lower component increment "
+                f"ablation_uncertainty:{name}: family-wise lower component increment "
                 f"{item.lower_confidence_component_increment_r}R < {harmful_threshold}R "
-                "while interval still overlaps the non-harm region"
+                "while simultaneous interval still overlaps the non-harm region"
             )
         else:
             passed.append(f"ablation:{name}")
@@ -451,9 +534,7 @@ def assess_research_promotion(
         if evidence.phase_d is None:
             missing.append(f"phase_d_holdout:{requested}")
         elif evidence.phase_d.policy_name != requested:
-            hard.append(
-                f"phase_d policy mismatch: evidence={evidence.phase_d.policy_name} proposed={requested}"
-            )
+            hard.append(f"phase_d policy mismatch: evidence={evidence.phase_d.policy_name} proposed={requested}")
         elif not evidence.phase_d.confirmed:
             hard.append(f"phase_d policy {requested} was not confirmed on untouched holdout")
         elif evidence.phase_d.holdout_scenarios < rules.minimum_phase_d_holdout_scenarios:
@@ -462,9 +543,7 @@ def assess_research_promotion(
                 f"{rules.minimum_phase_d_holdout_scenarios}"
             )
         elif evidence.phase_d.lower_confidence_delta_r <= 0:
-            hard.append(
-                f"phase_d lower_confidence_delta_r {evidence.phase_d.lower_confidence_delta_r} <= 0"
-            )
+            hard.append(f"phase_d lower_confidence_delta_r {evidence.phase_d.lower_confidence_delta_r} <= 0")
         else:
             passed.append(f"phase_d_holdout:{requested}")
 
