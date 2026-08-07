@@ -2,6 +2,26 @@
 
 All notable changes to this repository are documented here.
 
+## 0.6.4 — 2026-08-07
+
+### CI and Practice readiness
+
+- Repaired the v0.6.3 correlation snapshot regression test: `OpenPosition` is imported from the portfolio module, pair-level observation evidence is asserted on the correct object, and the expected provider call matches the configured 80-candle lookback.
+- Advanced the authoritative runtime/distribution/API identity to `0.6.4`; campaign evidence continues to bind implementation version and exact build revision into the policy fingerprint.
+- Replaced the obsolete branch/commit-message OANDA Practice workflow with a manual `workflow_dispatch` flow restricted to `main` and serialized by workflow concurrency.
+- Added staged `read-only`, `round-trip` and `campaign` validation. Read-only requires only `OANDA_API_TOKEN` and may discover the authorized Practice account; broker-write stages additionally require explicit `OANDA_ACCOUNT_ID` and `confirm_practice_write=true`.
+- The staged workflow now performs the authenticated probe, broker transaction synchronization, one-cycle all-pair shadow campaign and analysis before any write stage. Campaign execution additionally requires a successful broker-minimum round trip, post-round-trip reconciliation, bounded campaign inputs and fresh cohort analysis/promotion output.
+- Refactored the broker-minimum open/verify/close probe into a testable fail-closed helper. Once a known fill exists, the helper attempts to close that exact trade even when protection verification fails or raises, and treats failed/unverifiable closes as critical reconciliation conditions.
+- Added Practice round-trip tests covering success, unprotected fills, protection exceptions, close failures, unknown-order reconciliation, unresolved unknowns, pre-existing-position refusal and blank-instrument rejection.
+- Updated OANDA setup, Practice campaign and implementation-status documentation to match the staged operator path and credential boundary. No API token/account ID is written to source, evidence fingerprints or workflow artifacts.
+
+### Validation
+
+- Pre-documentation v0.6.4 Practice-readiness head passed the complete Python 3.11 and Python 3.13 CI matrix.
+- **260 tests passed** with **87.37% branch-aware coverage** on Python 3.11; repository fail-under remains **85%**.
+- Fresh `forex-trader==0.6.4` installation, bytecode compilation, `pip check`, secret-assignment scan and executed offline paper-order smoke passed on both Python versions.
+- Authenticated OANDA Practice success is intentionally not inferred from software CI; broker evidence remains externally credential/runtime-gated.
+
 ## 0.6.2 — 2026-08-07
 
 ### Implementation identity
