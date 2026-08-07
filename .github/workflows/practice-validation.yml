@@ -146,6 +146,7 @@ jobs:
             --all-currency-pairs \
             --max-cycles 1 \
             --evidence-path /tmp/oanda-practice/shadow-campaign.jsonl \
+            --decision-evidence-path /tmp/oanda-practice/shadow-decisions.jsonl \
             2>&1 | tee /tmp/oanda-practice/shadow-campaign.txt
 
       - name: Analyze shadow campaign
@@ -180,6 +181,7 @@ jobs:
             --max-orders-per-cycle "$MAX_ORDERS_PER_CYCLE" \
             --max-cycles "$CAMPAIGN_CYCLES" \
             --evidence-path /tmp/oanda-practice/practice-campaign.jsonl \
+            --decision-evidence-path /tmp/oanda-practice/practice-decisions.jsonl \
             2>&1 | tee /tmp/oanda-practice/practice-campaign.txt
 
       - name: Analyze Practice campaign
