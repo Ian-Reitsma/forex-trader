@@ -56,6 +56,9 @@ jobs:
           src/forex_trader/research/evidence.py
           src/forex_trader/research/optimization.py
           src/forex_trader/research/order_types.py
+          src/forex_trader/research/path_dataset.py
+          src/forex_trader/research/phase_d.py
+          scripts/analyze_phase_d_paths.py
           scripts/analyze_research_dataset.py
           scripts/label_decision_evidence.py
           scripts/run_practice_campaign.py
@@ -69,6 +72,8 @@ jobs:
           tests/test_phase_abcd_runtime_integration.py
           tests/test_phase_abcd_synthetic_stability.py
           tests/test_phase_d_entry_profit_optimization.py
+          tests/test_phase_d_paired_counterfactuals.py
+          tests/test_phase_d_path_dataset.py
           tests/test_research_dataset.py
           tests/test_research_evidence_cohorts.py
       - name: Strict Phase A-D typing
@@ -83,6 +88,8 @@ jobs:
           src/forex_trader/research/evidence.py
           src/forex_trader/research/optimization.py
           src/forex_trader/research/order_types.py
+          src/forex_trader/research/path_dataset.py
+          src/forex_trader/research/phase_d.py
       - name: Test and coverage
         id: pytest
         continue-on-error: true
