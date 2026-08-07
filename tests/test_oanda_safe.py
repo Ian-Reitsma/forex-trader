@@ -397,8 +397,9 @@ def test_safe_oanda_transactions_between_validates_and_follows_pages() -> None:
     def handler(http_request: httpx.Request) -> httpx.Response:
         if http_request.url.path == "/v3/accounts/A/transactions":
             marker = http_request.url.params.get("from", "")
-            return httpx.Response(200, json={"pages": [f"https://example.test/page?from={marker}"]})
-        if http_request.url.host == "example.test":
+            page = f"https://api-fxpractice.oanda.com/v3/accounts/A/transactions/page?from={marker}"
+            return httpx.Response(200, json={"pages": [page]})
+        if http_request.url.path == "/v3/accounts/A/transactions/page":
             page_calls.append(str(http_request.url))
             return httpx.Response(200, json={"transactions": [{"id": str(len(page_calls))}, "ignore-me"]})
         raise AssertionError(http_request.url)
