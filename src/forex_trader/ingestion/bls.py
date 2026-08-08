@@ -116,8 +116,7 @@ class BlsPublicDataAdapter:
         if missing:
             raise ValueError(f"BLS response omitted requested series IDs: {sorted(missing)}")
 
-        response_time = payload.get("responseTime")
-        response_time_ms = int(response_time) if response_time is not None and str(response_time).strip() else None
+        response_time_ms = _optional_response_time(payload.get("responseTime"))
         return BlsQueryResult(
             query=query,
             response=response,
@@ -156,6 +155,15 @@ def _parse_observation(series_id: str, raw_row: object, row_index: int) -> BlsOb
             )
         footnotes.append(BlsFootnote(str(item.get("code") or ""), str(item.get("text") or "")))
     return BlsObservation(series_id, year, period, period_name, value, latest, tuple(footnotes))
+
+
+def _optional_response_time(value: object) -> int | None:
+    if value is None or not str(value).strip():
+        return None
+    try:
+        return int(str(value))
+    except ValueError as exc:
+        raise ValueError("BLS responseTime must be an integer") from exc
 
 
 def _messages(value: object) -> tuple[str, ...]:
