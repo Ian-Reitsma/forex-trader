@@ -356,9 +356,6 @@ def generate_tick_opportunities(
         if len(higher_available) < 60:
             continue
 
-        # The first usable decision quote must arrive at or after the completed bar.
-        # Reaching backward would create a negative signal/quote gap and is not a
-        # faithful simulation of a decision that can only exist once the bar closes.
         decision_quote_item = _first_tick_at_or_after(ordered_ticks, times, decision_time)
         if decision_quote_item is None:
             continue
@@ -582,7 +579,17 @@ def simulate_daily_returns(
         peak = max(peak, equity)
         max_drawdown = max(max_drawdown, (peak - equity) / peak)
     if not ends:
-        return DailyReturnReport(risk_fraction_per_trade, *(Decimal("0") for _ in range(6)), 0, Decimal("0"))
+        return DailyReturnReport(
+            risk_fraction_per_trade=risk_fraction_per_trade,
+            total_return=Decimal("0"),
+            average_daily_return=Decimal("0"),
+            median_daily_return=Decimal("0"),
+            best_daily_return=Decimal("0"),
+            worst_daily_return=Decimal("0"),
+            profitable_day_fraction=Decimal("0"),
+            trading_days=0,
+            maximum_equity_drawdown=Decimal("0"),
+        )
     returns = sorted(ends[day] / starts[day] - Decimal("1") for day in ends)
     midpoint = len(returns) // 2
     median = returns[midpoint] if len(returns) % 2 else (returns[midpoint - 1] + returns[midpoint]) / Decimal("2")
