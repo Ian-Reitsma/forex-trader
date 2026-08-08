@@ -38,8 +38,9 @@ class ResilientDukascopyHistoryClient(DukascopyHistoryClient):
     connections. Preserve fail-closed source completeness, but reuse the HTTP
     connection pool, allow bounded parallel acquisition, retry transport failures,
     and fall back to Dukascopy's own alternate archive host before declaring an
-    hourly file unavailable. Cached bytes must still decode as the expected BI5
-    hour before the campaign can continue.
+    hourly file unavailable. A 204/404 from either first-party archive host is
+    treated the same way as the base Dukascopy client: that market hour has no BI5
+    archive. Cached bytes must still decode as the requested BI5 hour.
     """
 
     def __init__(
@@ -90,7 +91,10 @@ class ResilientDukascopyHistoryClient(DukascopyHistoryClient):
                     async with semaphore:
                         response = await client.get(url)
                     if response.status_code in {204, 404}:
-                        break
+                        # One authoritative first-party archive host confirming that
+                        # the hour is absent is sufficient. Do not let an earlier
+                        # transient 5xx from the sibling host survive as stale state.
+                        return ()
                     response.raise_for_status()
                     last_error = None
                     break
@@ -99,8 +103,6 @@ class ResilientDukascopyHistoryClient(DukascopyHistoryClient):
                     last_error = exc
                     if attempt + 1 < attempts_per_host:
                         await asyncio.sleep(min(0.5 * (2**attempt), 8.0))
-            if response is not None and response.status_code in {204, 404}:
-                continue
             if response is not None and response.is_success:
                 break
 
