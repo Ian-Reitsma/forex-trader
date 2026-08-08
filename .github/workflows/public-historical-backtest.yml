@@ -4,8 +4,10 @@ on:
   pull_request:
     paths:
       - "src/forex_trader/research/public_history.py"
+      - "src/forex_trader/research/gdelt_history.py"
       - "src/forex_trader/research/tick_backtest.py"
       - "scripts/run_public_historical_backtest.py"
+      - "scripts/run_public_historical_backtest_resilient.py"
       - ".github/workflows/public-historical-backtest.yml"
   workflow_dispatch:
 
@@ -28,10 +30,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .cache/forex-trader/public-history
-          key: public-fx-history-${{ runner.os }}-v1
+          key: public-fx-history-${{ runner.os }}-v2
       - name: Run public bid-ask/news walk-forward campaign
         run: >-
-          python scripts/run_public_historical_backtest.py
+          python scripts/run_public_historical_backtest_resilient.py
           --instruments EUR_USD,GBP_USD,USD_JPY
           --days 35
           --lag-days 7
