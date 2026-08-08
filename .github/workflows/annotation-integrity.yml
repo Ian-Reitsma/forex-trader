@@ -36,6 +36,7 @@ jobs:
           tests/test_central_bank_annotation_workflow_cli.py
           tests/test_central_bank_semantic_holdout.py
           tests/test_central_bank_semantic_holdout_cli.py
+          tests/test_central_bank_semantic_holdout_validation.py
       - name: Strict typing
         run: >-
           python -m mypy --strict --follow-imports=silent
@@ -52,3 +53,4 @@ jobs:
           tests/test_central_bank_annotation_workflow_cli.py
           tests/test_central_bank_semantic_holdout.py
           tests/test_central_bank_semantic_holdout_cli.py
+          tests/test_central_bank_semantic_holdout_validation.py
