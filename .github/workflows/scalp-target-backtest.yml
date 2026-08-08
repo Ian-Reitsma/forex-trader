@@ -9,6 +9,7 @@ on:
       - "src/forex_trader/research/official_news_history.py"
       - "scripts/run_official_scalp_target_backtest.py"
       - "tests/test_scalp_target.py"
+      - "tests/test_resilient_tick_history.py"
       - ".github/workflows/scalp-target-backtest.yml"
   workflow_dispatch:
 
@@ -35,6 +36,7 @@ jobs:
           path: .cache/forex-trader/public-history
           key: scalp-fx-history-${{ runner.os }}-v1-${{ github.sha }}
           restore-keys: |
+            scalp-fx-history-${{ runner.os }}-v1-
             public-fx-history-${{ runner.os }}-v4-
       - name: Install
         run: python -m pip install --upgrade pip && pip install -e ".[dev]"
@@ -42,15 +44,23 @@ jobs:
         run: >-
           ruff check --select E4,E7,E9,F
           src/forex_trader/research/scalp_target.py
+          src/forex_trader/research/resilient_tick_history.py
           scripts/run_official_scalp_target_backtest.py
           tests/test_scalp_target.py
+          tests/test_resilient_tick_history.py
       - name: Scalp target strict typing
         run: >-
           python -m mypy --strict --follow-imports=silent
           src/forex_trader/research/scalp_target.py
+          src/forex_trader/research/resilient_tick_history.py
           scripts/run_official_scalp_target_backtest.py
       - name: Scalp target unit tests
-        run: pytest -q tests/test_scalp_target.py tests/test_tick_backtest.py tests/test_tick_backtest_edges.py
+        run: >-
+          pytest -q
+          tests/test_scalp_target.py
+          tests/test_resilient_tick_history.py
+          tests/test_tick_backtest.py
+          tests/test_tick_backtest_edges.py
       - name: Run later sealed holdout
         run: >-
           python scripts/run_official_scalp_target_backtest.py
