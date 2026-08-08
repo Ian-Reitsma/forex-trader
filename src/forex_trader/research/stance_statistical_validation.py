@@ -29,6 +29,7 @@ MIN_DIRECTIONAL_EVENTS = 24
 MIN_CALIBRATION_EVENTS = 16
 MIN_HOLDOUT_EVENTS = 8
 MIN_OBSERVED_EVENT_FRACTION = Decimal("0.80")
+FIXED_MAX_BASELINE_DELAY_SECONDS = Decimal("300")
 SIMULTANEOUS_METHOD = "joint_event_bootstrap_max_deviation_simultaneous"
 SPLIT_POLICY = "chronological_first_two_thirds_calibration_final_one_third_holdout"
 
@@ -96,6 +97,8 @@ class StanceStatisticalValidationReport:
     execution_authority: bool
     implementation_version: str
     source_dataset_id: str
+    source_as_of: str
+    source_max_baseline_delay_seconds: Decimal
     family_id: str
     policy_currency: str
     instrument: str
@@ -131,8 +134,10 @@ class StanceStatisticalValidationReport:
             raise ValueError("unsupported stance statistical policy version")
         if self.research_only is not True or self.execution_authority is not False:
             raise ValueError("stance statistical validation must remain research-only")
-        if not self.implementation_version.strip() or not self.source_dataset_id.strip():
-            raise ValueError("stance statistical report implementation/dataset identity is required")
+        if not self.implementation_version.strip() or not self.source_dataset_id.strip() or not self.source_as_of.strip():
+            raise ValueError("stance statistical report implementation/dataset/cutoff identity is required")
+        if self.source_max_baseline_delay_seconds != FIXED_MAX_BASELINE_DELAY_SECONDS:
+            raise ValueError("stance statistical report baseline-delay policy is fixed")
         if self.horizon_minutes != DEFAULT_STANCE_HORIZONS_MINUTES:
             raise ValueError("stance statistical report must use the predeclared horizon family")
         if self.primary_horizon_minutes != PRIMARY_HORIZON_MINUTES:
@@ -184,11 +189,14 @@ class _DirectionalPanel:
 def validate_stance_outcome_statistics(dataset: StanceOutcomeDataset) -> StanceStatisticalValidationReport:
     """Validate the fixed central-bank stance outcome family without selecting a best horizon.
 
-    The only inferential promotion-like state is an informational research candidate at the
+    The only inferential candidate state is an informational research candidate at the
     predeclared 60-minute horizon. Every confidence band is simultaneous across the complete
     5/15/60/240-minute family, and every bootstrap iteration jointly resamples event panels.
     """
     _validate_source_dataset(dataset)
+    source_as_of = dataset.as_of
+    if source_as_of is None:
+        raise ValueError("stance statistical validation requires a frozen as_of cutoff")
     directional, nondirectional_count = _directional_panels(dataset.outcomes)
     observed_fraction = _observed_fraction(dataset.events_observed, dataset.events_considered)
     calibration_count, holdout_count = _split_counts(len(directional))
@@ -253,13 +261,42 @@ def validate_stance_outcome_statistics(dataset: StanceOutcomeDataset) -> StanceS
                 + ",".join(str(item) for item in negative_secondary)
             )
 
-    report_kwargs = dict(
+    source_as_of_text = source_as_of.isoformat()
+    reasons_tuple = tuple(reasons)
+    report_id = _statistical_report_id(
+        implementation_version=__version__,
+        source_dataset_id=dataset.dataset_id,
+        source_as_of=source_as_of_text,
+        source_max_baseline_delay_seconds=dataset.max_baseline_delay_seconds,
+        family_id=dataset.family_id,
+        policy_currency=dataset.policy_currency,
+        instrument=dataset.instrument,
+        stance_ruleset_version=dataset.ruleset_version,
+        price_semantics=dataset.price_semantics,
+        horizon_minutes=dataset.horizon_minutes,
+        events_considered=dataset.events_considered,
+        events_observed=dataset.events_observed,
+        events_excluded=dataset.events_excluded,
+        observed_event_fraction=observed_fraction,
+        directional_event_count=len(directional),
+        nondirectional_event_count=nondirectional_count,
+        calibration_event_count=calibration_count,
+        holdout_event_count=holdout_count,
+        calibration=calibration,
+        holdout=holdout,
+        disposition=disposition,
+        reasons=reasons_tuple,
+    )
+    return StanceStatisticalValidationReport(
+        report_id=report_id,
         schema_version=STANCE_STATISTICAL_SCHEMA_VERSION,
         policy_version=STANCE_STATISTICAL_POLICY_VERSION,
         research_only=True,
         execution_authority=False,
         implementation_version=__version__,
         source_dataset_id=dataset.dataset_id,
+        source_as_of=source_as_of_text,
+        source_max_baseline_delay_seconds=dataset.max_baseline_delay_seconds,
         family_id=dataset.family_id,
         policy_currency=dataset.policy_currency,
         instrument=dataset.instrument,
@@ -286,10 +323,8 @@ def validate_stance_outcome_statistics(dataset: StanceOutcomeDataset) -> StanceS
         calibration=calibration,
         holdout=holdout,
         disposition=disposition,
-        reasons=tuple(reasons),
+        reasons=reasons_tuple,
     )
-    report_id = _report_id_from_kwargs(report_kwargs)
-    return StanceStatisticalValidationReport(report_id=report_id, **report_kwargs)
 
 
 def _validate_source_dataset(dataset: StanceOutcomeDataset) -> None:
@@ -301,6 +336,12 @@ def _validate_source_dataset(dataset: StanceOutcomeDataset) -> None:
         )
     if dataset.price_semantics != STANCE_OUTCOME_PRICE_SEMANTICS:
         raise ValueError("stance statistical validation requires midpoint informational price semantics")
+    if dataset.as_of is None:
+        raise ValueError("stance statistical validation requires a frozen as_of cutoff")
+    if dataset.max_baseline_delay_seconds != FIXED_MAX_BASELINE_DELAY_SECONDS:
+        raise ValueError(
+            "stance statistical validation requires the fixed 300-second baseline-delay policy"
+        )
     if dataset.events_considered < 1:
         raise ValueError("stance statistical validation requires at least one considered event")
 
@@ -420,33 +461,120 @@ def _quantile(values: tuple[Decimal, ...], probability: Decimal) -> Decimal:
 
 
 def _report_id(report: StanceStatisticalValidationReport) -> str:
-    kwargs = {
-        key: getattr(report, key)
-        for key in report.__dataclass_fields__
-        if key != "report_id"
+    return _statistical_report_id(
+        implementation_version=report.implementation_version,
+        source_dataset_id=report.source_dataset_id,
+        source_as_of=report.source_as_of,
+        source_max_baseline_delay_seconds=report.source_max_baseline_delay_seconds,
+        family_id=report.family_id,
+        policy_currency=report.policy_currency,
+        instrument=report.instrument,
+        stance_ruleset_version=report.stance_ruleset_version,
+        price_semantics=report.price_semantics,
+        horizon_minutes=report.horizon_minutes,
+        events_considered=report.events_considered,
+        events_observed=report.events_observed,
+        events_excluded=report.events_excluded,
+        observed_event_fraction=report.observed_event_fraction,
+        directional_event_count=report.directional_event_count,
+        nondirectional_event_count=report.nondirectional_event_count,
+        calibration_event_count=report.calibration_event_count,
+        holdout_event_count=report.holdout_event_count,
+        calibration=report.calibration,
+        holdout=report.holdout,
+        disposition=report.disposition,
+        reasons=report.reasons,
+    )
+
+
+def _statistical_report_id(
+    *,
+    implementation_version: str,
+    source_dataset_id: str,
+    source_as_of: str,
+    source_max_baseline_delay_seconds: Decimal,
+    family_id: str,
+    policy_currency: str,
+    instrument: str,
+    stance_ruleset_version: str,
+    price_semantics: str,
+    horizon_minutes: tuple[int, ...],
+    events_considered: int,
+    events_observed: int,
+    events_excluded: int,
+    observed_event_fraction: Decimal,
+    directional_event_count: int,
+    nondirectional_event_count: int,
+    calibration_event_count: int,
+    holdout_event_count: int,
+    calibration: ChronologicalStatisticalSplit | None,
+    holdout: ChronologicalStatisticalSplit | None,
+    disposition: StanceStatisticalDisposition,
+    reasons: tuple[str, ...],
+) -> str:
+    payload = {
+        "schema_version": STANCE_STATISTICAL_SCHEMA_VERSION,
+        "policy_version": STANCE_STATISTICAL_POLICY_VERSION,
+        "research_only": True,
+        "execution_authority": False,
+        "implementation_version": implementation_version,
+        "source_dataset_id": source_dataset_id,
+        "source_as_of": source_as_of,
+        "source_max_baseline_delay_seconds": str(source_max_baseline_delay_seconds),
+        "family_id": family_id,
+        "policy_currency": policy_currency,
+        "instrument": instrument,
+        "stance_ruleset_version": stance_ruleset_version,
+        "price_semantics": price_semantics,
+        "horizon_minutes": list(horizon_minutes),
+        "primary_horizon_minutes": PRIMARY_HORIZON_MINUTES,
+        "split_policy": SPLIT_POLICY,
+        "familywise_confidence": str(FAMILYWISE_CONFIDENCE),
+        "bootstrap_iterations": BOOTSTRAP_ITERATIONS,
+        "simultaneous_method": SIMULTANEOUS_METHOD,
+        "minimum_directional_events": MIN_DIRECTIONAL_EVENTS,
+        "minimum_calibration_events": MIN_CALIBRATION_EVENTS,
+        "minimum_holdout_events": MIN_HOLDOUT_EVENTS,
+        "minimum_observed_event_fraction": str(MIN_OBSERVED_EVENT_FRACTION),
+        "events_considered": events_considered,
+        "events_observed": events_observed,
+        "events_excluded": events_excluded,
+        "observed_event_fraction": str(observed_event_fraction),
+        "directional_event_count": directional_event_count,
+        "nondirectional_event_count": nondirectional_event_count,
+        "calibration_event_count": calibration_event_count,
+        "holdout_event_count": holdout_event_count,
+        "calibration": _split_payload(calibration),
+        "holdout": _split_payload(holdout),
+        "disposition": disposition.value,
+        "reasons": list(reasons),
     }
-    return _report_id_from_kwargs(kwargs)
+    return hashlib.sha256(_canonical_json(payload)).hexdigest()
 
 
-def _report_id_from_kwargs(values: dict[str, object]) -> str:
-    return hashlib.sha256(_canonical_json(_json_value(values))).hexdigest()
-
-
-def _json_value(value: object) -> object:
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, Enum):
-        return value.value
-    if hasattr(value, "__dataclass_fields__"):
-        return {
-            key: _json_value(getattr(value, key))
-            for key in value.__dataclass_fields__
-        }
-    if isinstance(value, dict):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [_json_value(item) for item in value]
-    return value
+def _split_payload(split: ChronologicalStatisticalSplit | None) -> object:
+    if split is None:
+        return None
+    return {
+        "name": split.name,
+        "event_count": split.event_count,
+        "first_document_available_at": split.first_document_available_at,
+        "last_document_available_at": split.last_document_available_at,
+        "event_ids": list(split.event_ids),
+        "bootstrap_seed": split.bootstrap_seed,
+        "simultaneous_critical_width_bps": str(split.simultaneous_critical_width_bps),
+        "bands": [
+            {
+                "horizon_minutes": band.horizon_minutes,
+                "sample_size": band.sample_size,
+                "mean_stance_aligned_return_bps": str(band.mean_stance_aligned_return_bps),
+                "lower_simultaneous_mean_bps": str(band.lower_simultaneous_mean_bps),
+                "upper_simultaneous_mean_bps": str(band.upper_simultaneous_mean_bps),
+                "stance_aligned_hit_rate": str(band.stance_aligned_hit_rate),
+            }
+            for band in split.bands
+        ],
+    }
 
 
 def _canonical_json(value: object) -> bytes:
