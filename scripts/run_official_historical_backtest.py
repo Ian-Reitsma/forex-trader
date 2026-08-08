@@ -43,7 +43,7 @@ def main() -> int:
     parser.add_argument("--lag-days", type=int, default=7)
     parser.add_argument("--cache-dir", default=".cache/forex-trader/public-history")
     parser.add_argument("--output", default="artifacts/public-historical-backtest.json")
-    parser.add_argument("--concurrency-per-pair", type=int, default=4)
+    parser.add_argument("--concurrency-per-pair", type=int, default=12)
     parser.add_argument("--maximum-holding-minutes", type=int, default=120)
     parser.add_argument("--entry-latency-ms", type=int, default=500)
     parser.add_argument("--slippage-pips", default="0.10")
@@ -67,9 +67,14 @@ def main() -> int:
     report["news_source_mode"] = "official_central_bank_first_party"
     report["price_source_resilience"] = {
         "timeout_seconds": 45,
-        "maximum_parallel_hour_requests": 4,
-        "minimum_retries_per_hour": 8,
-        "missing_hour_policy": "fail_closed",
+        "maximum_parallel_hour_requests": 16,
+        "minimum_retries_per_hour": 12,
+        "bulk_recovery_sweeps": 4,
+        "archive_hosts": [
+            "datafeed.dukascopy.com",
+            "www.dukascopy.com",
+        ],
+        "missing_hour_policy": "first_party_204_or_404_only; otherwise fail_closed",
     }
     rendered = json.dumps(_jsonable(report), indent=2, sort_keys=True)
     output = Path(args.output)
