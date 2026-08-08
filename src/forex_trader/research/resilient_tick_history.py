@@ -18,10 +18,11 @@ from forex_trader.research.public_history import (
 class ResilientDukascopyHistoryClient(DukascopyHistoryClient):
     """Dukascopy history client tuned for multi-week research campaigns.
 
-    Historical hourly files occasionally return transient 5xx responses or close
-    an HTTP/1.1 connection before sending response headers. Keep source completeness
-    fail-closed, but retry the entire transport-error family with bounded exponential
-    backoff before declaring the historical archive unavailable.
+    Historical hourly files occasionally return transient 5xx responses or drop
+    connections. Preserve fail-closed source completeness, but reuse the HTTP
+    connection pool, allow bounded parallel acquisition, and retry the entire
+    transport-error family with capped exponential backoff before declaring the
+    historical archive unavailable.
     """
 
     def __init__(
@@ -29,14 +30,14 @@ class ResilientDukascopyHistoryClient(DukascopyHistoryClient):
         *,
         cache_dir: str | Path = ".cache/forex-trader/dukascopy",
         timeout_seconds: float = 45.0,
-        max_concurrency: int = 4,
-        retries: int = 8,
+        max_concurrency: int = 12,
+        retries: int = 12,
     ) -> None:
         super().__init__(
             cache_dir=cache_dir,
             timeout_seconds=max(timeout_seconds, 45.0),
-            max_concurrency=min(max_concurrency, 4),
-            retries=max(retries, 8),
+            max_concurrency=min(max_concurrency, 16),
+            retries=max(retries, 12),
         )
 
     async def _load_hour(
@@ -67,7 +68,7 @@ class ResilientDukascopyHistoryClient(DukascopyHistoryClient):
         for attempt in range(self.retries):
             try:
                 async with semaphore:
-                    response = await client.get(url, headers={"Connection": "close"})
+                    response = await client.get(url)
                 if response.status_code in {204, 404}:
                     return ()
                 response.raise_for_status()
@@ -76,7 +77,7 @@ class ResilientDukascopyHistoryClient(DukascopyHistoryClient):
                 response = None
                 if attempt + 1 >= self.retries:
                     raise
-                await asyncio.sleep(min(0.75 * (2**attempt), 30.0))
+                await asyncio.sleep(min(0.5 * (2**attempt), 8.0))
 
         if response is None or not response.content:
             return ()
