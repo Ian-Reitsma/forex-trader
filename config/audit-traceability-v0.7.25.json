@@ -1,0 +1,132 @@
+{
+  "schema_version": "1.0",
+  "release": "0.7.25",
+  "base_release": "0.7.24",
+  "principle": "Trading authority, durable observability, connected external services, and validated edge remain separate states.",
+  "requirements": [
+    {
+      "requirement": "economic_calendar_point_in_time_consensus",
+      "status": "runtime_adapter_complete_vendor_data_external",
+      "remaining": "Supply and monitor a licensed multi-country point-in-time calendar/consensus feed."
+    },
+    {
+      "requirement": "real_time_news",
+      "status": "runtime_adapter_complete_vendor_data_external",
+      "remaining": "Supply licensed operational news and validate event classification/novelty prospectively."
+    },
+    {
+      "requirement": "cross_asset_repricing",
+      "status": "runtime_adapter_complete_vendor_data_external",
+      "remaining": "Supply and validate rates, rate-futures, volatility, commodity, broad-dollar and carry inputs."
+    },
+    {
+      "requirement": "institutional_order_flow",
+      "status": "runtime_adapter_complete_vendor_data_external",
+      "remaining": "Supply CME/equivalent centralized flow, contract-roll/orientation mapping and validate features."
+    },
+    {
+      "requirement": "event_concentration_and_macro_factor_risk",
+      "status": "implemented_initial_policy",
+      "authority_effect": "independent_risk_veto",
+      "implementation": [
+        "src/forex_trader/domain/macro_factor_risk.py",
+        "src/forex_trader/domain/risk_advanced.py",
+        "config/macro-factor-clusters-v1.json"
+      ],
+      "remaining": "Empirically validate factor taxonomy and capital-relative ceilings."
+    },
+    {
+      "requirement": "technical_human_ground_truth",
+      "status": "blinded_workflow_complete_labels_external",
+      "implementation": [
+        "src/forex_trader/research/technical_annotation.py",
+        "scripts/create_technical_annotation_batch.py",
+        "scripts/finalize_technical_annotations.py"
+      ],
+      "remaining": "Collect independent expert labels, adjudicate disagreement, freeze calibration criteria and evaluate holdout once."
+    },
+    {
+      "requirement": "flow_divergence_strategy",
+      "status": "research_state_machine_complete_data_and_validation_external",
+      "authority": "research_only",
+      "remaining": "Acquire centralized flow, replay historically, collect prospective shadow evidence and pass promotion gates."
+    },
+    {
+      "requirement": "vwap_repositioning_strategy",
+      "status": "research_state_machine_complete_data_and_validation_external",
+      "authority": "research_only",
+      "remaining": "Acquire centralized VWAP/flow, replay historically, collect prospective shadow evidence and pass promotion gates."
+    },
+    {
+      "requirement": "durable_operational_event_backbone",
+      "status": "implemented_local_authoritative_repository",
+      "authority": "observational_only",
+      "implementation": [
+        "src/forex_trader/domain/operations.py",
+        "src/forex_trader/application/operations.py",
+        "src/forex_trader/infrastructure/advanced_repository.py"
+      ],
+      "records": [
+        "decision",
+        "risk",
+        "execution",
+        "provider_health",
+        "provider_error",
+        "halt",
+        "execution_readiness"
+      ],
+      "remaining": "Scale storage/event transport only if deployment volume or multi-host topology requires it."
+    },
+    {
+      "requirement": "provider_strategy_execution_risk_observability",
+      "status": "implemented_initial_control_plane",
+      "authority": "observational_only",
+      "implementation": [
+        "src/forex_trader/application/operations.py",
+        "src/forex_trader/api/app.py"
+      ],
+      "surfaces": [
+        "protected_json_summary",
+        "protected_json_event_query",
+        "protected_prometheus_metrics"
+      ],
+      "remaining": "Deploy external dashboards, retention policy, alert routing, SLOs and incident procedures."
+    },
+    {
+      "requirement": "critical_operational_alerting",
+      "status": "implemented_local_deterministic_alert_policy",
+      "authority": "observational_only",
+      "alerts": [
+        "active_system_halt",
+        "execution_not_ready",
+        "execution_uncertainty",
+        "provider_unavailable",
+        "provider_runtime_error",
+        "evaluation_errors",
+        "provider_degraded",
+        "provider_rate_limited"
+      ],
+      "remaining": "Connect alert projection to external notification/escalation infrastructure."
+    },
+    {
+      "requirement": "historical_executable_data",
+      "status": "external_data_gap",
+      "remaining": "Acquire historical bid/ask/tick plus point-in-time macro/news/cross-asset/flow archives."
+    },
+    {
+      "requirement": "central_bank_human_validation",
+      "status": "methodology_implemented_labels_external",
+      "remaining": "Collect independent calibration labels, freeze acceptance criteria and evaluate sealed holdout once."
+    },
+    {
+      "requirement": "authenticated_oanda_practice_campaign",
+      "status": "evidence_gate",
+      "remaining": "Run read-only, reconciliation, all-pair shadow, protected round trip and sustained capped Practice campaign during open markets with network access."
+    },
+    {
+      "requirement": "scaled_production_operations",
+      "status": "partial_pending",
+      "remaining": "External dashboards/alert routing, retention/downsampling, distributed event transport if required, deployment SLOs, backup/restore and failover drills."
+    }
+  ]
+}
