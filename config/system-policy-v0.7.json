@@ -112,5 +112,47 @@
       "independent_from_return_correlation": true
     },
     "stop_widening_without_new_authorization": false
+  },
+  "operations_policy": {
+    "version": "operations-v1",
+    "authority": "observational_only",
+    "durable_event_source": "authoritative_trading_repository",
+    "trace_events_are_idempotent": true,
+    "records": [
+      "decision_disposition",
+      "strategy_policy",
+      "regime",
+      "risk_disposition",
+      "risk_veto_reason",
+      "execution_status",
+      "provider_health",
+      "provider_rate_limit",
+      "provider_runtime_error",
+      "persistent_halt",
+      "execution_readiness"
+    ],
+    "critical_alerts": [
+      "active_system_halt",
+      "execution_not_ready",
+      "execution_uncertainty",
+      "provider_unavailable"
+    ],
+    "error_alerts": [
+      "provider_runtime_error",
+      "evaluation_errors"
+    ],
+    "warning_alerts": [
+      "provider_degraded",
+      "provider_rate_limited"
+    ],
+    "api_authentication_required": true,
+    "api_surfaces": [
+      "json_summary",
+      "json_events",
+      "prometheus_metrics"
+    ],
+    "can_authorize_risk": false,
+    "can_submit_orders": false,
+    "can_change_strategy_authority": false
   }
 }

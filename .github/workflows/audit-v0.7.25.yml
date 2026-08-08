@@ -1,0 +1,54 @@
+name: v0.7.25 operations gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  operations-gates:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: Operations lint
+        run: >-
+          ruff check --select E4,E7,E9,F
+          src/forex_trader/domain/operations.py
+          src/forex_trader/application/operations.py
+          src/forex_trader/infrastructure/advanced_repository.py
+          src/forex_trader/api/app.py
+          tests/test_operational_telemetry.py
+          tests/test_operational_api.py
+      - name: Operations strict typing
+        shell: bash
+        run: |
+          set +e
+          python -m mypy --strict --follow-imports=silent \
+            src/forex_trader/domain/operations.py \
+            src/forex_trader/application/operations.py \
+            2>&1 | tee /tmp/operations-mypy.txt
+          code=${PIPESTATUS[0]}
+          exit "$code"
+      - name: Upload operations typing diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operations-mypy-${{ matrix.python-version }}
+          path: /tmp/operations-mypy.txt
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Focused operations tests
+        run: pytest -q tests/test_operational_telemetry.py tests/test_operational_api.py
