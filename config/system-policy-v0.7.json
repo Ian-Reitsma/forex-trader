@@ -51,6 +51,18 @@
       "version": "v1",
       "authority": "research",
       "flow_requirement": "required"
+    },
+    {
+      "name": "flow_divergence",
+      "version": "v1",
+      "authority": "research",
+      "flow_requirement": "required"
+    },
+    {
+      "name": "vwap_repositioning",
+      "version": "v1",
+      "authority": "research",
+      "flow_requirement": "required"
     }
   ],
   "fundamental_policy": {
