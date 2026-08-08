@@ -1,0 +1,104 @@
+name: Sealed scalp target backtest
+
+on:
+  pull_request:
+    paths:
+      - "src/forex_trader/research/scalp_target.py"
+      - "src/forex_trader/research/tick_backtest.py"
+      - "src/forex_trader/research/resilient_tick_history.py"
+      - "src/forex_trader/research/official_news_history.py"
+      - "scripts/run_official_scalp_target_backtest.py"
+      - "tests/test_scalp_target.py"
+      - ".github/workflows/scalp-target-backtest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scalp-target-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sealed-holdout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Restore public history cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/forex-trader/public-history
+          key: scalp-fx-history-${{ runner.os }}-v1-${{ github.sha }}
+          restore-keys: |
+            public-fx-history-${{ runner.os }}-v4-
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: Scalp target lint
+        run: >-
+          ruff check --select E4,E7,E9,F
+          src/forex_trader/research/scalp_target.py
+          scripts/run_official_scalp_target_backtest.py
+          tests/test_scalp_target.py
+      - name: Scalp target strict typing
+        run: >-
+          python -m mypy --strict --follow-imports=silent
+          src/forex_trader/research/scalp_target.py
+          scripts/run_official_scalp_target_backtest.py
+      - name: Scalp target unit tests
+        run: pytest -q tests/test_scalp_target.py tests/test_tick_backtest.py tests/test_tick_backtest_edges.py
+      - name: Run later sealed holdout
+        run: >-
+          python scripts/run_official_scalp_target_backtest.py
+          --instruments EUR_USD,GBP_USD,USD_JPY
+          --development-start 2026-06-27
+          --development-end 2026-08-01
+          --holdout-end 2026-08-07
+          --minimum-development-trades 30
+          --concurrency-per-pair 12
+          --maximum-holding-minutes 120
+          --entry-latency-ms 500
+          --slippage-pips 0.10
+          --output artifacts/official-scalp-target-backtest.json
+      - name: Save incremental public history cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/forex-trader/public-history
+          key: scalp-fx-history-${{ runner.os }}-v1-${{ github.sha }}
+      - name: Summarize sealed holdout
+        if: success()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          report = json.loads(Path("artifacts/official-scalp-target-backtest.json").read_text())
+          print("## Later sealed scalp-target holdout")
+          print()
+          print(f"Development: {report['period']['development_start']} -> {report['period']['development_end']}")
+          print(f"Holdout: {report['period']['sealed_holdout_start']} -> {report['period']['sealed_holdout_end']}")
+          for name, block in report["selection"].items():
+              holdout = block["frozen"]["holdout"]
+              print()
+              print(f"### {name}")
+              print(f"Trades: {holdout['report']['trades']}")
+              print(f"Economic win rate: {holdout['economic_win_rate']}")
+              print(f"Target hit rate: {holdout['report']['win_rate']}")
+              print(f"Expectancy R: {holdout['report']['expectancy_r']}")
+              print(f"Profit factor: {holdout['report']['profit_factor']}")
+              for risk, metrics in block['holdout_risk_scenarios'].items():
+                  print(f"Avg daily @ {risk}: {metrics['average_daily_return']}")
+          PY
+      - name: Upload scalp target evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-scalp-target-backtest
+          path: artifacts/official-scalp-target-backtest.json
+          if-no-files-found: warn
+          retention-days: 14
