@@ -32,8 +32,10 @@ jobs:
           scripts/run_public_historical_backtest.py
           scripts/run_public_historical_backtest_resilient.py
           tests/test_public_history.py
+          tests/test_public_history_edges.py
           tests/test_gdelt_history.py
           tests/test_tick_backtest.py
+          tests/test_tick_backtest_edges.py
       - name: Backtest strict typing
         run: >-
           python -m mypy --strict --follow-imports=silent
@@ -46,7 +48,9 @@ jobs:
         run: >-
           pytest -q
           tests/test_public_history.py
+          tests/test_public_history_edges.py
           tests/test_gdelt_history.py
           tests/test_tick_backtest.py
+          tests/test_tick_backtest_edges.py
           tests/test_backtest.py
           tests/test_phase_d_entry_profit_optimization.py
