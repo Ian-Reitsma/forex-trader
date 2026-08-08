@@ -2,150 +2,168 @@
 
 ## Current release
 
-Version 0.7.23 is the current Practice-only FX research/execution platform. It preserves the structure-first strategy, independent risk authorization, broker-safe OANDA fxTrade Practice execution, point-in-time evidence, reconciliation controls, and research-validation framework from the v0.7 line while adding the first concrete external-data runtime layer from the post-v0.7.22 audit.
+Version 0.7.24 is the current Practice-only FX research/execution platform. It preserves the v0.7.23 point-in-time external-data runtime while closing three additional audit gaps: explicit macro-factor concentration risk, blinded technical human-ground-truth infrastructure, and concrete research-only flow-divergence/VWAP state machines.
 
-The system remains intentionally paper/Practice-only. No live-money endpoint is enabled, no new strategy received Practice authority in v0.7.23, and the presence of an adapter is not evidence that a licensed feed is connected or that a trading edge has been established.
+The system remains intentionally paper/Practice-only. OANDA is still restricted to fxTrade Practice endpoints. `sweep_reclaim:v1` remains the only Practice-authorized strategy family. No research strategy, annotation output, model output, or LLM output can directly submit an order.
 
 ```text
-completed configured lower/higher candles + fresh broker quote
+completed lower/higher candles + fresh broker quote
                               +
- point-in-time macro/news/calendar/cross-asset/flow inputs when configured
+ point-in-time macro/news/calendar/cross-asset/centralized-flow inputs when configured
                               ↓
- supply/demand location + declared liquidity + sweep/reclaim
+ location + liquidity + sweep/reclaim + structure shift + retest
                               ↓
- pivot structure shift + retest/hold
+ regime/policy selection + independent evidence categories/sources
                               ↓
- regime/policy selection + independent confirmation categories/sources
+ stop/target + fundamental/cost/event admissibility
                               ↓
- structural stop/target + fundamental/cost/event admissibility
+ currency exposure + return correlation + explicit macro-factor concentration
+                              +
+ drawdown/loss-streak/reserved-risk/gap-stress authorization
                               ↓
- independent portfolio risk authorization
+ account lock + size-aware quote + send-time revalidation
                               ↓
- account lock + fresh size-aware quote + send-time revalidation
-                              ↓
- priceBound + protected OANDA fxTrade Practice order
+ protected OANDA fxTrade Practice order
                               ↓
  reconciliation + protection verification + persistent uncertainty halt
-                              ↓
- point-in-time decision evidence + campaign/outcome research
 ```
 
 ## Authority boundary
 
-`config/system-policy-v0.7.json` is the machine-readable strategy authority manifest.
+`config/system-policy-v0.7.json` is the machine-readable authority manifest.
 
 - Real-money execution is disabled.
-- OANDA is restricted to `api-fxpractice.oanda.com` and `stream-fxpractice.oanda.com`.
-- Broker writes require explicit paper mode, explicit write enablement, and reconciliation readiness.
-- Unknown or ambiguous broker writes halt additional risk until reconciled.
-- `sweep_reclaim:v1` remains the only Practice-authorized setup family.
+- OANDA hosts are restricted to `api-fxpractice.oanda.com` and `stream-fxpractice.oanda.com`.
+- Broker writes require paper mode, explicit paper-write enablement, and reconciliation readiness.
+- Unknown/ambiguous broker writes halt new risk until reconciled.
+- `sweep_reclaim:v1` remains the only Practice-authorized family.
 - `zone_continuation:v1` and `breakout_retest:v1` remain shadow-only.
-- `post_news_continuation:v1` remains shadow-only and requires independent institutional flow.
-- `post_news_failure:v1` remains research-only and requires independent institutional flow.
-- `flow_divergence:v1` and `vwap_repositioning:v1` are newly registered research-only families; registration does not grant signal-generation or broker authority.
-- Broker tick activity is a local activity proxy and cannot count as institutional flow confirmation.
-- Candidate quality score is not a calibrated win probability.
-- LLM output cannot directly submit orders.
+- Post-news families remain shadow/research gated and require genuine external institutional flow where declared.
+- `flow_divergence:v1` and `vwap_repositioning:v1` now have concrete research state evaluators but remain research-only. Their signal objects expose `executable=False` by construction.
+- Broker tick activity remains a local activity proxy and cannot satisfy institutional FLOW confirmation.
+- Blinded technical annotations are research truth data only and have no broker-authority path.
 
-## Implemented technical/runtime foundation
+## v0.7.24 macro-factor concentration risk
 
-The existing runtime continues to provide multi-timeframe structure, supply/demand zones, declared liquidity maps, sweep/reclaim detection, pivot-derived structure shifts, retest/hold lifecycle, structural stops/targets, DST-aware sessions, rollover handling, market-holiday blackouts, cost-aware admissibility, signed-correlation vetoes, gross and per-currency exposure controls, margin reserve, trailing drawdown/loss-streak/reserved-risk controls, protected Practice orders, price bounds, broker reconciliation, protection verification, emergency-close behavior, durable halts, point-in-time macro observations, historical replay/research datasets, ablations, calibration research, and campaign evidence.
+The risk layer now includes `MacroFactorClusterGuard`, which is independent from return correlation and ordinary currency-leg exposure. Its purpose is to stop a portfolio from accumulating multiple pairs that are all expressions of the same scheduled-macro/rates thesis simply because recent pairwise correlations are temporarily low.
 
-OANDA integration remains Practice-only and includes account discovery/read-only operations, candles/history, pricing, metadata, positions, conversion, protected orders, reconciliation, and trade closing. Credentials remain environment-only and are never part of policy fingerprints or source control.
+The initial policy taxonomy covers the ten audited FX pairs and assigns deterministic factors such as `usd_macro`, `usd_rates`, `eur_rates`, `jpy_rates`, and `commodity_cycle`. These tags are policy classifications, not estimated statistical betas.
 
-## v0.7.23 external-data runtime
+For every proposed position the guard:
 
-The audit identified economic consensus, real news, cross-asset repricing, and centralized institutional flow as the largest operational information gaps. v0.7.23 adds concrete vendor-neutral runtime adapters for normalized JSON or tagged JSONL exports from those data planes.
+- prices the candidate and all existing positions in account-currency gross notional;
+- accumulates each instrument's notional into every declared macro-factor bucket;
+- compares each factor against an independent capital-relative ceiling;
+- fails closed when an instrument is unclassified under strict mode;
+- fails closed when an existing position cannot be safely priced;
+- records the maximum factor and exposure in the signed risk authorization evidence.
 
-### Economic calendar / consensus
+The default ceiling is `2.5 ×` account capital per factor. This is a conservative software default, not an empirically optimized trading parameter. It must be evaluated from real Practice/replay evidence before any claim that it is economically optimal.
 
-`JsonEconomicCalendarProvider` supports:
-
-- indicator metadata and directionality;
-- pre-release point-in-time consensus and previously known values;
-- release actuals and revisions with independent availability timestamps;
-- scheduled events with `scheduled_at` separated from the timestamp at which the schedule became known;
-- provider freshness/health.
-
-Scheduled high-impact events from a configured calendar are merged into the existing `ScheduledMacroEvent` execution blackout path. Future schedule revisions are excluded. If the configured calendar cannot answer the scheduled-event query, evaluation fails closed rather than treating provider failure as proof that no event risk exists.
-
-### News
-
-`JsonNewsProvider` keeps `published_at` and `received_at` separate and uses provider receipt time as the point-in-time availability boundary. External decision evidence stores document identity, source, and timestamps without copying full licensed document bodies into the trace.
-
-The adapter makes a licensed/operational news feed usable by the engine; it does not itself provide or license one, and v0.7.23 does not claim the complete event-classification/novelty/contradiction research stack has been validated on a live vendor stream.
-
-### Cross-asset repricing
-
-`JsonCrossAssetProvider` accepts timestamped, confidence-weighted signals normalized to the FX pair orientation. The resulting alignment can become an independent cross-asset confirmation with the true source IDs preserved in decision evidence.
-
-Actual rates, rate-futures, equity/risk, volatility, commodity, broad-dollar, carry, and related feeds remain external runtime inputs that must be supplied and validated.
-
-### Institutional order flow
-
-`JsonOrderFlowProvider` accepts centralized/venue snapshots carrying raw delta, cumulative delta, VWAP, point of control, volume expansion, absorption, depth imbalance, normalized directional pressure, confidence, source, and observation time. Future observations are excluded and snapshots older than the configured ceiling fail closed.
-
-Only a non-local external flow source with sufficient confidence and directionally aligned normalized pressure can add the independent FLOW confirmation category. `broker_tick_proxy` can no longer satisfy that category.
-
-The repository still does not bundle CME or another licensed centralized feed, contract-roll mapping, or venue-specific aggregation. Those remain external data/validation work.
-
-### Lineage and health
-
-`ExternalContextAggregator` captures the exact external inputs available at the quote timestamp. `ExternalContextFusionPolicy` passes eligible cross-asset and institutional-flow evidence into the existing production fusion contract and stores source/time/health/error lineage in the candidate evidence.
-
-The optional runtime paths are:
+Configuration:
 
 ```text
-FOREX_ECONOMIC_CALENDAR_PATH=
-FOREX_NEWS_PATH=
-FOREX_CROSS_ASSET_PATH=
-FOREX_ORDER_FLOW_PATH=
-FOREX_ORDER_FLOW_MAX_AGE_SECONDS=60
+FOREX_ENABLE_MACRO_FACTOR_RISK=true
+FOREX_MACRO_FACTOR_POLICY_PATH=
+FOREX_MAX_MACRO_FACTOR_EXPOSURE_FRACTION=2.5
+FOREX_REQUIRE_MACRO_FACTOR_CLASSIFICATION=true
 ```
 
-Licensed/vendor payloads should remain outside Git and be mounted/provisioned at runtime.
+With no external policy path, the embedded taxonomy is equivalent to `config/macro-factor-clusters-v1.json`. A custom policy file can replace the taxonomy without modifying code.
+
+Campaign policy identity now includes the complete macro-factor taxonomy, its exposure ceiling, strict-classification setting, and the previously omitted advanced drawdown/loss-streak/reserved-risk/gap-stress controls. Changing these values therefore changes the campaign fingerprint rather than silently mixing different risk behavior in one research cohort.
+
+## v0.7.24 blinded technical human-ground-truth workflow
+
+`src/forex_trader/research/technical_annotation.py` creates deterministic raw-candle annotation packets for validating zone, liquidity-sweep, structure-shift, retest, and direction semantics against independent humans.
+
+Reviewer-visible packets contain only:
+
+- instrument and timeframe;
+- completed OHLCV candles;
+- window start/end timestamps;
+- immutable candle and packet hashes.
+
+They deliberately exclude model zones, scores, detected sweeps, candidate direction, stops, targets, trade decisions, P/L, and future outcomes. The CLI also rejects unexpected input fields so outcome/model metadata cannot be casually included in a reviewer packet.
+
+Ground-truth finalization requires at least two independent reviewer identities per packet. Unanimous labels finalize directly. Reviewer disagreement requires a third independent adjudicator; an adjudicator cannot be one of the packet reviewers.
+
+A frozen batch is split chronologically using a fixed, non-tunable rule: the first `floor(2N/3)` packets are calibration and the final one-third are holdout. The manifest cryptographically binds the batch identity, frozen cutoff, and exact packet IDs in each partition.
+
+Operator tools:
+
+```bash
+python scripts/create_technical_annotation_batch.py raw-chart-windows.json \
+  --as-of 2026-08-07T20:00:00Z \
+  --batch-output technical-annotation-batch.json \
+  --manifest-output technical-holdout-manifest.json
+
+python scripts/finalize_technical_annotations.py \
+  technical-annotation-batch.json \
+  technical-holdout-manifest.json \
+  reviewer-submissions.jsonl \
+  --adjudications adjudications.jsonl \
+  --partition calibration \
+  --output calibration-ground-truth.jsonl
+```
+
+The software workflow is now implemented. The audit requirement for **actual independent human ground truth is not complete until real expert labels are collected**. Code tests cannot substitute for that evidence.
+
+## v0.7.24 research-only flow strategies
+
+`src/forex_trader/research/flow_strategies.py` implements explicit research state machines for the two previously registry-only audit families.
+
+`FlowDivergenceResearchPolicy` requires a non-local centralized flow source, minimum source confidence, normalized directional pressure, an opposing price move, a key location, and finally a structure shift to reach `CONFIRMED`.
+
+`VwapRepositioningResearchPolicy` requires a non-local centralized source, actual centralized VWAP, a decisive cross/repositioning beyond a pip-distance threshold, aligned normalized flow pressure, and structure shift to reach `CONFIRMED`.
+
+Both policies expose states `INELIGIBLE`, `WATCHING`, `ARMED`, and `CONFIRMED`. Neither produces a `TradeCandidate`, risk authorization, or broker order. `ResearchFlowSignal.executable` is always false.
+
+This closes the missing software state-machine portion of the audit. It does **not** close the data/evidence gate: CME/equivalent centralized data, contract mapping, feature validation, historical replay, prospective shadow evidence, and promotion analysis remain external requirements.
+
+## v0.7.23 external-data runtime retained
+
+The vendor-neutral point-in-time adapters from v0.7.23 remain in place for economic consensus/actuals/schedules, news receipt time, cross-asset repricing, and centralized flow. External context is captured at the decision timestamp with source/health/error lineage. Scheduled calendar events enter the existing hard event blackout. Future schedule/news/flow observations are excluded.
+
+A configured vendor adapter is not equivalent to an acquired licensed feed. The repository still does not bundle commercial economic-calendar/news feeds, rates/futures data, or CME/equivalent centralized flow.
 
 ## Research/evidence integrity
 
-The pre-existing research boundaries remain unchanged:
+The following boundaries remain mandatory:
 
-- quality scores are not win probabilities;
+- candidate quality is not a calibrated probability;
 - future observations are excluded from point-in-time decisions;
-- decision evidence is separated from later outcome labeling;
-- mixed implementation/policy cohorts cannot silently merge;
-- chronological train/validation/test or calibration/holdout boundaries remain mandatory where defined;
-- after-cost expectancy, drawdown, calibration, ablation, replay reproducibility, and sustained Practice evidence—not code complexity—determine promotion.
+- decision evidence and later outcome labels remain separate;
+- campaign fingerprints change when outcome-affecting risk policy changes;
+- chronological calibration/holdout or train/validation/test separation is preserved;
+- human validation cannot be replaced by model self-labeling;
+- after-cost expectancy, drawdown, calibration, ablation, replay reproducibility, and sustained Practice evidence determine promotion.
 
-The central-bank semantic workflow is methodologically advanced but still needs independent human calibration labels and a frozen acceptance threshold before the sealed holdout can be evaluated once. The repository must not infer those labels or claim semantic validity from code tests.
+The central-bank semantic workflow remains methodologically implemented but still requires independent human calibration labels, frozen acceptance criteria, and one sealed holdout evaluation. No semantic-validity claim is inferred from CI.
 
-## Still evidence-gated or external after v0.7.23
-
-The following are not represented as complete merely because the software can now ingest normalized inputs:
+## Still external/evidence-gated after v0.7.24
 
 - licensed multi-country economic-calendar and true point-in-time consensus acquisition;
-- licensed operational real-time news acquisition and live event-classification evidence;
+- licensed real-time news acquisition and prospective event-classification evidence;
 - rates/rate-futures/equity/volatility/commodity/USD/carry cross-asset acquisition;
-- CME/equivalent centralized FX futures flow, contract-roll/orientation mapping, and empirical validation of delta/CVD/absorption/profile/VWAP features;
-- full signal state machines and prospective validation for research-only flow-divergence and VWAP-repositioning families;
-- explicit macro-factor/event-cluster portfolio exposure limits beyond the current event blackout, currency concentration, correlation, margin, and stressed-risk controls;
-- blinded human chart labeling for zone/sweep/structure validation;
-- independent central-bank semantic calibration labels and one-time sealed-holdout evaluation;
+- CME/equivalent centralized FX futures flow plus contract-roll/orientation mapping;
+- real expert technical labels for the new blinded chart corpus;
+- independent central-bank calibration labels and one-time sealed holdout evaluation;
 - historical executable bid/ask/tick plus PIT macro/news/cross-asset/flow archives;
-- sustained multi-session authenticated OANDA Practice evidence and hundreds of mature outcomes;
-- evidence-backed promotion of shadow/research strategy or position-management policies;
+- empirical calibration of macro-factor taxonomy and exposure limits;
+- sustained multi-session authenticated OANDA Practice evidence and mature outcomes;
+- evidence-backed promotion of shadow/research strategies or position-management policies;
 - full production observability, provider/strategy/execution/risk dashboards, alerting, durable event backbone, and scaled deployment controls.
-
-`config/audit-traceability-v0.7.23.json` is the machine-readable audit-to-code status matrix. `docs/49_V0_7_23_EXTERNAL_DATA_PLANE.md` documents the release boundary in detail.
 
 ## Validation boundary
 
-CI compiles the project, checks dependency integrity and secret assignment, runs targeted Ruff and strict typing gates, executes the full pytest suite with branch-aware coverage, and performs an offline protected paper-order smoke on Python 3.11 and 3.13. The exact v0.7.23 head must pass those gates before merge.
+The standard CI still runs compilation, dependency integrity, secret scanning, critical Ruff, strict typing, full pytest with branch-aware coverage, and an offline protected paper-order smoke on Python 3.11 and 3.13. v0.7.24 adds a dedicated audit-gate workflow that separately lints, strictly type-checks, and tests the new macro-factor, technical-annotation, campaign-identity, and research-flow surfaces.
 
-Passing CI establishes software/invariant quality. It does not establish a profitable trading edge, a live licensed-data connection, or authenticated broker success.
+Passing software CI proves invariants and implementation integrity. It does not prove a profitable edge, a live licensed-data connection, or authenticated broker success.
 
 ## OANDA Practice sequence
 
-When markets and deployment credentials permit, the correct evidence sequence remains:
+Because the current development date is a closed-market weekend, representative broker execution evidence remains deferred rather than manufactured from stale conditions. When markets and deployment network access permit, the evidence sequence remains:
 
 ```text
 authenticated read-only account/pricing/candle/metadata check
@@ -156,4 +174,4 @@ authenticated read-only account/pricing/candle/metadata check
 -> mature outcome labeling / ablation / after-cost analysis
 ```
 
-No result from a closed-market weekend should be treated as representative execution evidence for a scalping system.
+See `docs/50_V0_7_24_RISK_AND_TECHNICAL_VALIDATION.md` and `config/audit-traceability-v0.7.24.json` for the release-specific audit mapping.
