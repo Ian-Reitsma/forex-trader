@@ -230,7 +230,7 @@ def test_release_join_rejects_source_schedule_indicator_and_currency_mismatches(
         validate_and_calculate_release(wrong_source_mapping, c, o)
 
     with pytest.raises(ValueError, match="scheduled timestamps"):
-        validate_and_calculate_release(mapping(), c, official(scheduled=SCHEDULED + timedelta(minutes=1)))
+        validate_and_calculate_release(mapping(), c, official(scheduled=SCHEDULED - timedelta(minutes=1)))
     with pytest.raises(ValueError, match="indicator"):
         validate_and_calculate_release(mapping(), c, official(indicator="labor"))
     with pytest.raises(ValueError, match="currency"):
