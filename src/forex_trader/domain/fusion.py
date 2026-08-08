@@ -15,6 +15,7 @@ from forex_trader.domain.decision_components import DecisionComponentPolicy, PRO
 from forex_trader.domain.enums import DecisionDisposition
 from forex_trader.domain.instruments import pip_size_for
 from forex_trader.domain.models import FundamentalAssessment, Quote, TechnicalAssessment, TradeCandidate
+from forex_trader.domain.policy_registry import CompleteStrategyPolicyRegistry
 from forex_trader.domain.sessions import SessionPhase, classify_phase
 from forex_trader.domain.strategy import SignalFusionPolicy
 
@@ -67,7 +68,7 @@ class RegimeAwareSignalFusionPolicy(SignalFusionPolicy):
             raise ValueError("minimum_independent_sources must be positive")
         self.minimum_independent_confirmations = minimum_independent_confirmations
         self.minimum_independent_sources = minimum_independent_sources
-        self.registry = registry or StrategyPolicyRegistry()
+        self.registry = registry or CompleteStrategyPolicyRegistry()
 
     def evaluate(
         self,
