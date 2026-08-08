@@ -4,7 +4,7 @@ A Practice-only FX research and execution platform built around market location,
 
 The project is **not** a promise of profitability and is **not** approved for live-money trading. OANDA integration is locked to fxTrade Practice endpoints.
 
-## Current release: v0.7.13
+## Current release: v0.7.14
 
 The deployable decision path remains structure-first:
 
@@ -30,44 +30,48 @@ reconciliation + protection verification + persistent uncertainty halt
 
 EMA, RSI and ATR remain secondary diagnostics rather than substitutes for location, liquidity, and structure. Spot broker tick activity is explicitly treated as a low-confidence activity proxy, not centralized institutional footprint/delta data.
 
+## v0.7.14: source-backed official document body evidence
+
+v0.7.14 turns accepted v0.7.13 central-bank discoveries into durable text evidence without yet assigning a stance.
+
+`OfficialDocumentFamily` makes same-document-family identity explicit configuration rather than a title or NLP heuristic. The body is fetched only through the canonical official-source client and provider-health recorder. Raw body bytes must persist and read back before extraction proceeds.
+
+Document-body `available_at` is conservatively the actual retrieval time. The earlier feed publication timestamp is retained separately and is not treated as proof that the page body was already obtainable at that moment.
+
+`extract_official_document_text` supports UTF-8 HTML/XHTML and plain text. It excludes navigation, footer, scripts, styles, forms, head content and similar chrome, normalizes deterministic paragraph text, and hashes the exact extracted representation. Standard HTML doctypes are accepted; entity declarations and unsupported formats fail closed.
+
+`OfficialDocumentRepository` maintains append-only SQLite lineage. The first family version has no predecessor; every later version must reference the repository's current latest family version and become available later. Repeat retrieval of the same discovery/content is idempotent at the document-version layer while raw retrieval evidence remains retained.
+
+`compare_document_versions` emits exact added and removed paragraphs with paragraph indexes and SHA-256 evidence. It only compares the same explicit family and requires the supplied prior version to be the current version's declared predecessor.
+
+These diffs are evidence, not hawkish/dovish interpretation. No stance classifier, LLM, fundamental-weight change, or execution authority is introduced in v0.7.14.
+
+See `docs/40_V0_7_14_OFFICIAL_DOCUMENT_EVIDENCE.md`.
+
 ## v0.7.13: official central-bank document discovery
 
-v0.7.13 adds provenance-safe first-party document discovery for the Federal Reserve and European Central Bank on top of the v0.7.11 source-trust boundary.
+v0.7.13 adds provenance-safe first-party document discovery for the Federal Reserve and European Central Bank.
 
-The configured first-party feeds are:
+Configured feeds:
 
 - Federal Reserve press releases: `https://www.federalreserve.gov/feeds/press_all.xml`
 - ECB press releases, speeches, interviews, and press-conference transcripts: `https://www.ecb.europa.eu/rss/press.html`
 
-`OfficialFeedDiscovery` supports RSS and Atom structures. Every accepted document retains its publisher item identity/title/timestamp, exact first-party URL, the raw feed evidence-record ID, feed payload SHA-256, and a deterministic discovery ID.
+`OfficialFeedDiscovery` supports RSS and Atom structures. Every accepted document retains publisher item identity/title/timestamp, exact first-party URL, raw feed evidence-record ID, feed payload SHA-256, and deterministic discovery ID.
 
-Every document link is revalidated against the existing official-source HTTPS allowlist. External/mirror links are retained in `rejected_external_links` and are never followed.
+Every document link is revalidated against the official-source HTTPS allowlist. External/mirror links are retained as rejected evidence and never followed. Feed XML containing DTD/entity declarations, malformed roots, duplicate accepted item identities, and invalid/missing timestamps fail closed.
 
-Feed XML containing DTD or entity declarations is rejected before parsing. Malformed roots, missing required fields, duplicate accepted item identities, missing timezone information, and invalid timestamps also fail closed.
-
-`OfficialDocumentDiscoveryOrchestrator` runs feed polls through `ProviderPollRunner`, persists the exact raw feed snapshot to `SourceEvidenceRepository`, verifies read-back, and therefore makes discovery health/provenance durable before downstream use.
-
-Discovery is deliberately **not** document analysis. v0.7.13 does not fetch the linked body, infer document-family lineage, compare current/prior statements, label hawkish/dovish language, or change any trading authority.
+`OfficialDocumentDiscoveryOrchestrator` records provider health and persists/read-backs the exact raw feed snapshot before returning discoveries.
 
 See `docs/39_V0_7_13_OFFICIAL_DOCUMENT_DISCOVERY.md`.
 
 ## v0.7.12: first concrete official statistical provider
 
-v0.7.12 adds a provenance-safe U.S. Bureau of Labor Statistics Public Data API v2 adapter on top of the v0.7.11 OFFICIAL/LICENSED source boundary.
+v0.7.12 adds a provenance-safe U.S. Bureau of Labor Statistics Public Data API v2 adapter.
 
-### Official JSON query provenance
+`OfficialJsonPostClient` keeps canonical read-only query bytes/request SHA-256 separate from the raw response identity. `BlsPublicDataAdapter` requires BLS-level `REQUEST_SUCCEEDED`, parses series/year/period/value/latest/footnotes, and rejects unrequested, duplicate, omitted or malformed series.
 
-`OfficialJsonPostClient` supports first-party APIs whose read-only data contract requires JSON `POST`. It keeps the canonical request body and request SHA-256 separate from the raw response bytes and response evidence identity.
-
-Every query still fails closed on non-official configuration, non-allowlisted URLs, final-host escape, non-200 responses, oversized payloads, malformed JSON, or inconsistent request provenance.
-
-### BLS Public Data API v2
-
-`BlsPublicDataAdapter` targets the official BLS Public Data API v2 endpoint and requires BLS-level `REQUEST_SUCCEEDED`, not merely HTTP 200. It parses series ID, year/period, period name, `Decimal` value, latest flag, and footnote code/text pairs.
-
-The adapter rejects unrequested, duplicate, omitted, or malformed series/observations. Its public-query contract is deliberately conservative: 1-25 unique series IDs and at most a 10-year inclusive range. No BLS credential is embedded in Git.
-
-A historical BLS series observation is **not automatically a scheduled economic-release event**. The adapter does not invent a release timestamp, consensus, revision-publication time, or calendar event identity from a BLS historical observation. A later scheduled-release adapter must explicitly prove event identity and official availability time before the value can participate in the v0.7.11 consensus-vs-actual transaction.
+A historical BLS observation is **not automatically a scheduled economic-release event**. The adapter does not fabricate release time, consensus, revision-publication time, or calendar identity.
 
 See `docs/38_V0_7_12_OFFICIAL_BLS_ADAPTER.md`.
 
@@ -80,15 +84,11 @@ The source trust boundary is explicit:
 
 The repository does not embed or pretend to provide a commercial consensus vendor.
 
-`RawSourcePayload` retains source/publisher authority, exact HTTPS URL/content type, publication/availability/retrieval timestamps, raw bytes, raw SHA-256, and a canonical evidence-record SHA-256 that also binds retrieval provenance.
+`RawSourcePayload` retains exact HTTPS URL/content type, publication/availability/retrieval timestamps, raw bytes, raw SHA-256, and a canonical evidence-record SHA-256 binding retrieval provenance.
 
-`EconomicEventMapping` binds one logical indicator/currency event to one licensed consensus source and one official actual source. Consensus must exist no later than scheduled release time; the official actual cannot exist before it. Source IDs, schedule, indicator, and currency must all match before release-surprise calculation.
+`EconomicEventMapping` binds one logical indicator/currency event to one licensed consensus source and one official actual source. Consensus must exist no later than scheduled release time; official actual evidence cannot exist before it. Source IDs, schedule, indicator, and currency must match before release-surprise calculation.
 
-`SourceEvidenceRepository` durably retains raw source payloads and provider-health evidence. `ProviderPollRunner` records HEALTHY, DEGRADED/rate-limited, or UNAVAILABLE state around provider calls.
-
-`MacroIngestionOrchestrator` persists and reads back both licensed and official raw evidence before creating the deterministic existing `MacroObservation.release` record.
-
-`MacroReadinessEvaluator` requires the exact consensus provider pre-release and both consensus plus official provider after release. Missing, stale, unavailable, or rate-limited required sources fail readiness.
+`SourceEvidenceRepository`, `ProviderPollRunner`, `MacroIngestionOrchestrator`, and `MacroReadinessEvaluator` provide durable raw evidence, health recording, raw-first normalization, and exact-source pre/post-release readiness.
 
 See `docs/37_V0_7_11_MACRO_SOURCE_ORCHESTRATION.md`.
 
@@ -114,7 +114,7 @@ shadow candidate only
 
 The five component ablations are `no_fundamentals`, `no_flow`, `no_session`, `no_zone_quality`, and `no_retest`. They rerun real production seams on one frozen snapshot and cannot submit broker orders.
 
-Promotion-grade component inference uses simultaneous family-wise paired bootstrap bands across the five-component family. Individual per-component intervals remain useful diagnostics but are insufficient for a multi-component promotion decision.
+Promotion-grade component inference uses simultaneous family-wise paired bootstrap bands across the five-component family. Individual per-component intervals remain diagnostic only and are insufficient for a multi-component promotion decision.
 
 See:
 
@@ -209,7 +209,7 @@ Research promotion is fail-closed and non-executable. Missing or statistically u
 
 ## Validation boundary
 
-CI validates editable installation/compilation, dependency integrity, secret scanning, explicit Ruff checks, strict mypy on deterministic production/research/provider/discovery paths, the full branch-aware pytest suite with an enforced 85% floor, and an executed protected simulation paper-order smoke on Python 3.11 and 3.13.
+CI validates editable installation/compilation, dependency integrity, secret scanning, explicit Ruff checks, strict mypy on deterministic production/research/provider/document-evidence paths, the full branch-aware pytest suite with an enforced 85% floor, and an executed protected simulation paper-order smoke on Python 3.11 and 3.13.
 
 Software CI does **not** prove authenticated broker behavior, public-provider/feed availability, or profitability. No authenticated OANDA Practice success is claimed until the separately configured staged validation is run and reviewed.
 
@@ -223,10 +223,11 @@ The repository does not:
 - infer consensus from an official actual;
 - fabricate scheduled release availability from historical BLS series data;
 - trust external/mirror links simply because they appear in an official feed;
-- infer central-bank stance from feed titles or summaries;
+- infer central-bank stance from feed titles, summaries, or raw text-diff count;
+- infer same-document-family identity from title/text similarity;
 - treat generic sentiment as a substitute for release surprise/revision evidence;
 - claim midpoint candle backtests equal executable quote history;
 - allow offline research promotion to grant Practice authority;
 - allow paired research ablations to submit broker orders.
 
-The next P0 data milestone is first-party document-body acquisition plus deterministic visible-text extraction and explicit current-vs-prior same-document-family lineage/diffs. Only after that evidence exists should stance/NLP classification be added. A real licensed consensus/calendar adapter is still required once a licensed provider is selected and configured outside Git, and real prospective evidence should accumulate before strategy thresholds are reconsidered.
+The next central-bank intelligence milestone is a research-only stance evidence layer built strictly on v0.7.14 current-vs-prior source-backed diffs, with explicit evidence spans, negation/uncertainty/conditional-language handling, contradiction states, and a versioned rules/model contract. Any pre-calibration confidence must be labeled as evidence quality rather than probability. A real licensed consensus/calendar adapter is still required once a licensed provider is selected and configured outside Git, and real prospective evidence should accumulate before strategy thresholds are reconsidered.
