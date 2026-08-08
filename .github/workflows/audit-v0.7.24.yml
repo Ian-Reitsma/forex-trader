@@ -35,6 +35,7 @@ jobs:
           scripts/create_technical_annotation_batch.py
           scripts/finalize_technical_annotations.py
           tests/test_audit_risk_and_technical_validation.py
+          tests/test_macro_factor_campaign_identity.py
       - name: Audit tranche strict typing
         run: >-
           python -m mypy --strict --follow-imports=silent
@@ -47,4 +48,9 @@ jobs:
           scripts/create_technical_annotation_batch.py
           scripts/finalize_technical_annotations.py
       - name: Focused audit tests
-        run: pytest -q tests/test_audit_risk_and_technical_validation.py tests/test_campaign_policy.py tests/test_config.py
+        run: >-
+          pytest -q
+          tests/test_audit_risk_and_technical_validation.py
+          tests/test_macro_factor_campaign_identity.py
+          tests/test_campaign_policy.py
+          tests/test_config.py
