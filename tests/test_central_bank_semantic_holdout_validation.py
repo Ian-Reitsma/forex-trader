@@ -11,7 +11,6 @@ from forex_trader.intelligence.official_documents import OfficialDocumentVersion
 from forex_trader.research.central_bank_stance import EvidenceDisposition, StanceDirection
 from forex_trader.research.stance_annotation_workflow import AdjudicationRecord, AnnotationBatch, ReviewerSubmission, build_blinded_annotation_batch
 from forex_trader.research.stance_semantic_holdout import (
-    SEMANTIC_HOLDOUT_SCHEMA_VERSION,
     SemanticPartition,
     build_partition_annotation_batch,
     build_semantic_holdout_manifest,
@@ -234,7 +233,7 @@ def test_partition_audit_rejects_tampering_and_bad_denominators() -> None:
         replace(audit, reviewer_overall_agreement=not audit.reviewer_overall_agreement)
 
 
-def test_partition_finalizer_rejects_duplicate_ids_policy_mismatch_and_late_review() -> None:
+def test_partition_finalizer_rejects_duplicate_ids_and_upstream_identity_tampering() -> None:
     versions, batch = _fixture()
     manifest = build_semantic_holdout_manifest(batch)
     calibration = build_partition_annotation_batch(batch, manifest, SemanticPartition.CALIBRATION)
@@ -259,11 +258,8 @@ def test_partition_finalizer_rejects_duplicate_ids_policy_mismatch_and_late_revi
             adjudications + (adjudications[0],),
             versions,
         )
-
-    changed_policy = replace(submissions[0], annotation_policy_version="other")
     with pytest.raises(ValueError, match="submission ID"):
-        # Immutable reviewer identity catches policy tampering before finalization.
-        _ = changed_policy
+        replace(submissions[0], annotation_policy_version="other")
 
     packet = calibration.packets[0]
     packet_submissions = tuple(item for item in submissions if item.packet_id == packet.packet_id)
@@ -274,13 +270,12 @@ def test_partition_finalizer_rejects_duplicate_ids_policy_mismatch_and_late_revi
         direction=StanceDirection.HAWKISH,
         disposition=EvidenceDisposition.SUPPORTED,
     )
-    all_for_packet = packet_submissions + (late,)
-    early_adjudication = AdjudicationRecord.create(
-        packet,
-        all_for_packet,
-        adjudicator_id="adjudicator-late-test",
-        adjudicated_at=BASE + timedelta(days=26),
-        direction=StanceDirection.HAWKISH,
-        disposition=EvidenceDisposition.SUPPORTED,
-    )
-    assert early_adjudication.adjudicated_at > late.submitted_at
+    with pytest.raises(ValueError, match="cannot precede"):
+        AdjudicationRecord.create(
+            packet,
+            packet_submissions + (late,),
+            adjudicator_id="adjudicator-late-test",
+            adjudicated_at=BASE + timedelta(days=24),
+            direction=StanceDirection.HAWKISH,
+            disposition=EvidenceDisposition.SUPPORTED,
+        )
