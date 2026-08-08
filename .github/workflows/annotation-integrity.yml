@@ -27,18 +27,28 @@ jobs:
         run: >-
           ruff check --select E4,E7,E9,F
           src/forex_trader/research/stance_annotation_workflow.py
+          src/forex_trader/research/stance_semantic_holdout.py
           scripts/export_central_bank_annotation_batch.py
           scripts/finalize_central_bank_annotations.py
+          scripts/create_central_bank_semantic_holdout.py
+          scripts/finalize_central_bank_semantic_partition.py
           tests/test_central_bank_annotation_workflow.py
           tests/test_central_bank_annotation_workflow_cli.py
+          tests/test_central_bank_semantic_holdout.py
+          tests/test_central_bank_semantic_holdout_cli.py
       - name: Strict typing
         run: >-
           python -m mypy --strict --follow-imports=silent
           src/forex_trader/research/stance_annotation_workflow.py
+          src/forex_trader/research/stance_semantic_holdout.py
           scripts/export_central_bank_annotation_batch.py
           scripts/finalize_central_bank_annotations.py
+          scripts/create_central_bank_semantic_holdout.py
+          scripts/finalize_central_bank_semantic_partition.py
       - name: Focused regression suite
         run: >-
           pytest -q
           tests/test_central_bank_annotation_workflow.py
           tests/test_central_bank_annotation_workflow_cli.py
+          tests/test_central_bank_semantic_holdout.py
+          tests/test_central_bank_semantic_holdout_cli.py
