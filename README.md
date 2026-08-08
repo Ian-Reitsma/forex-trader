@@ -4,7 +4,7 @@ A Practice-only FX research and execution platform built around market location,
 
 The project is **not** a promise of profitability and is **not** approved for live-money trading. OANDA integration is locked to fxTrade Practice endpoints.
 
-## Current release: v0.7.14
+## Current release: v0.7.15
 
 The deployable decision path remains structure-first:
 
@@ -30,48 +30,73 @@ reconciliation + protection verification + persistent uncertainty halt
 
 EMA, RSI and ATR remain secondary diagnostics rather than substitutes for location, liquidity, and structure. Spot broker tick activity is explicitly treated as a low-confidence activity proxy, not centralized institutional footprint/delta data.
 
+## v0.7.15: research-only central-bank stance evidence
+
+v0.7.15 adds a deterministic research artifact on top of the v0.7.14 source-backed current-vs-prior document diff. It does **not** feed the deployable fundamental score or grant execution authority.
+
+The provenance chain is explicit:
+
+```text
+first-party feed
+    ↓
+raw official document bytes + SHA-256
+    ↓
+explicit family/version lineage
+    ↓
+added/removed paragraph text + SHA-256
+    ↓
+versioned rule + exact character offsets
+    ↓
+research-only stance evidence
+```
+
+`central-bank-statement-rules-v1` uses a deliberately conservative phrase set across policy rate, inflation, labor, growth, balance sheet, FX, and financial-stability dimensions. Every matched span retains its paragraph hash/text, rule ID, exact phrase offsets, lexical direction, effective change direction, weight, and qualification flags.
+
+Change-side semantics matter. Adding hawkish language contributes hawkish evidence; removing the same hawkish language contributes dovish change evidence. Removed dovish language similarly becomes hawkish change evidence.
+
+Negated matches remain auditable but contribute zero directional weight. Conditional or uncertain matches are explicitly qualified and downweighted; qualified-only evidence is `ambiguous`, not `supported`. If supported hawkish and dovish evidence coexist, the artifact remains `contradictory` rather than being averaged into a misleading scalar. If no rule matches, the system explicitly abstains.
+
+`evidence_quality` is a transparent heuristic research score, **not** probability or calibrated confidence. The artifact carries `evidence_quality_is_probability=false` and cannot be constructed as an executable artifact.
+
+Reproduce a stance artifact from persisted v0.7.14 lineage without any network/runtime mutation:
+
+```bash
+python scripts/analyze_central_bank_stance.py \
+  <official-document-database> \
+  --family-id fed_fomc_statement \
+  --output stance-evidence.json
+```
+
+See `docs/41_V0_7_15_CENTRAL_BANK_STANCE_EVIDENCE.md`.
+
 ## v0.7.14: source-backed official document body evidence
 
-v0.7.14 turns accepted v0.7.13 central-bank discoveries into durable text evidence without yet assigning a stance.
+v0.7.14 turns accepted v0.7.13 central-bank discoveries into durable text evidence before interpretation.
 
-`OfficialDocumentFamily` makes same-document-family identity explicit configuration rather than a title or NLP heuristic. The body is fetched only through the canonical official-source client and provider-health recorder. Raw body bytes must persist and read back before extraction proceeds.
+`OfficialDocumentFamily` makes same-document-family identity explicit configuration. Official bodies are fetched through the canonical official-source client/provider-health recorder, and raw bytes must persist/read back before extraction. Document-body availability is conservatively the actual retrieval time rather than the earlier feed timestamp.
 
-Document-body `available_at` is conservatively the actual retrieval time. The earlier feed publication timestamp is retained separately and is not treated as proof that the page body was already obtainable at that moment.
+UTF-8 HTML/XHTML and plain text are normalized deterministically with navigation/footer/scripts/styles/forms/head chrome excluded. The normalized text and every paragraph are hash-backed. Standard HTML doctypes are accepted; entity declarations and unsupported formats fail closed.
 
-`extract_official_document_text` supports UTF-8 HTML/XHTML and plain text. It excludes navigation, footer, scripts, styles, forms, head content and similar chrome, normalizes deterministic paragraph text, and hashes the exact extracted representation. Standard HTML doctypes are accepted; entity declarations and unsupported formats fail closed.
-
-`OfficialDocumentRepository` maintains append-only SQLite lineage. The first family version has no predecessor; every later version must reference the repository's current latest family version and become available later. Repeat retrieval of the same discovery/content is idempotent at the document-version layer while raw retrieval evidence remains retained.
-
-`compare_document_versions` emits exact added and removed paragraphs with paragraph indexes and SHA-256 evidence. It only compares the same explicit family and requires the supplied prior version to be the current version's declared predecessor.
-
-These diffs are evidence, not hawkish/dovish interpretation. No stance classifier, LLM, fundamental-weight change, or execution authority is introduced in v0.7.14.
+`OfficialDocumentRepository` maintains append-only SQLite lineage. Every later family version must reference the current latest predecessor and become available later. `compare_document_versions` emits exact added/removed paragraph evidence with hashes.
 
 See `docs/40_V0_7_14_OFFICIAL_DOCUMENT_EVIDENCE.md`.
 
 ## v0.7.13: official central-bank document discovery
 
-v0.7.13 adds provenance-safe first-party document discovery for the Federal Reserve and European Central Bank.
-
-Configured feeds:
+Configured first-party feeds:
 
 - Federal Reserve press releases: `https://www.federalreserve.gov/feeds/press_all.xml`
 - ECB press releases, speeches, interviews, and press-conference transcripts: `https://www.ecb.europa.eu/rss/press.html`
 
-`OfficialFeedDiscovery` supports RSS and Atom structures. Every accepted document retains publisher item identity/title/timestamp, exact first-party URL, raw feed evidence-record ID, feed payload SHA-256, and deterministic discovery ID.
-
-Every document link is revalidated against the official-source HTTPS allowlist. External/mirror links are retained as rejected evidence and never followed. Feed XML containing DTD/entity declarations, malformed roots, duplicate accepted item identities, and invalid/missing timestamps fail closed.
-
-`OfficialDocumentDiscoveryOrchestrator` records provider health and persists/read-backs the exact raw feed snapshot before returning discoveries.
+RSS/Atom discoveries retain publisher item identity/title/timestamp, exact first-party URL, raw feed evidence-record ID, feed payload SHA-256, and deterministic discovery ID. Every link is revalidated against the official-source HTTPS allowlist; external/mirror links are retained as rejected evidence and never followed. DTD/entity declarations, malformed roots, duplicate item identities, and invalid/missing timestamps fail closed.
 
 See `docs/39_V0_7_13_OFFICIAL_DOCUMENT_DISCOVERY.md`.
 
 ## v0.7.12: first concrete official statistical provider
 
-v0.7.12 adds a provenance-safe U.S. Bureau of Labor Statistics Public Data API v2 adapter.
+`OfficialJsonPostClient` keeps canonical read-only query bytes/request SHA-256 separate from response provenance. `BlsPublicDataAdapter` targets the official BLS Public Data API v2, requires BLS-level `REQUEST_SUCCEEDED`, and parses series/year/period/value/latest/footnotes while rejecting malformed or incomplete returned series.
 
-`OfficialJsonPostClient` keeps canonical read-only query bytes/request SHA-256 separate from the raw response identity. `BlsPublicDataAdapter` requires BLS-level `REQUEST_SUCCEEDED`, parses series/year/period/value/latest/footnotes, and rejects unrequested, duplicate, omitted or malformed series.
-
-A historical BLS observation is **not automatically a scheduled economic-release event**. The adapter does not fabricate release time, consensus, revision-publication time, or calendar identity.
+A historical BLS observation is **not automatically a scheduled economic-release event**. The adapter does not fabricate a release time, consensus, revision-publication time, or calendar identity.
 
 See `docs/38_V0_7_12_OFFICIAL_BLS_ADAPTER.md`.
 
@@ -82,13 +107,11 @@ The source trust boundary is explicit:
 - **OFFICIAL** — first-party actual releases/documents from central banks or statistical agencies.
 - **LICENSED** — a separately contracted economic-calendar/consensus source used for pre-release market expectations.
 
-The repository does not embed or pretend to provide a commercial consensus vendor.
+The repository does not embed a commercial consensus vendor.
 
-`RawSourcePayload` retains exact HTTPS URL/content type, publication/availability/retrieval timestamps, raw bytes, raw SHA-256, and a canonical evidence-record SHA-256 binding retrieval provenance.
+`RawSourcePayload` retains exact HTTPS URL/content type, publication/availability/retrieval timestamps, raw bytes, raw SHA-256, and a canonical evidence-record SHA-256. `EconomicEventMapping` binds one logical event to one licensed consensus source and one official actual source. Consensus must exist no later than schedule time; official actual evidence cannot exist before it.
 
-`EconomicEventMapping` binds one logical indicator/currency event to one licensed consensus source and one official actual source. Consensus must exist no later than scheduled release time; official actual evidence cannot exist before it. Source IDs, schedule, indicator, and currency must match before release-surprise calculation.
-
-`SourceEvidenceRepository`, `ProviderPollRunner`, `MacroIngestionOrchestrator`, and `MacroReadinessEvaluator` provide durable raw evidence, health recording, raw-first normalization, and exact-source pre/post-release readiness.
+`SourceEvidenceRepository`, `ProviderPollRunner`, `MacroIngestionOrchestrator`, and `MacroReadinessEvaluator` provide durable raw evidence, provider health, raw-first normalization, and exact-source pre/post-release readiness.
 
 See `docs/37_V0_7_11_MACRO_SOURCE_ORCHESTRATION.md`.
 
@@ -112,16 +135,9 @@ chronological calibration / promotion evidence
 shadow candidate only
 ```
 
-The five component ablations are `no_fundamentals`, `no_flow`, `no_session`, `no_zone_quality`, and `no_retest`. They rerun real production seams on one frozen snapshot and cannot submit broker orders.
+The five component ablations are `no_fundamentals`, `no_flow`, `no_session`, `no_zone_quality`, and `no_retest`. Promotion-grade component inference uses simultaneous family-wise paired bootstrap bands across the full five-component family. Individual intervals remain diagnostic only.
 
-Promotion-grade component inference uses simultaneous family-wise paired bootstrap bands across the five-component family. Individual per-component intervals remain diagnostic only and are insufficient for a multi-component promotion decision.
-
-See:
-
-- `docs/31_PROSPECTIVE_PAIRED_ABLATIONS.md`
-- `docs/34_V0_7_8_PAIRED_OUTCOME_MATURITY.md`
-- `docs/35_V0_7_9_PAIRED_ABLATION_UNCERTAINTY.md`
-- `docs/36_V0_7_10_FAMILYWISE_ABLATION_UNCERTAINTY.md`
+See `docs/31_PROSPECTIVE_PAIRED_ABLATIONS.md` and `docs/36_V0_7_10_FAMILYWISE_ABLATION_UNCERTAINTY.md`.
 
 ## Installation and offline verification
 
@@ -150,9 +166,7 @@ forex-trader demo --instrument EUR_USD
 
 Keep OANDA credentials outside source control. Local configuration belongs in `.env`; GitHub-hosted validation uses repository Actions secrets.
 
-The authenticated validation workflow is manual-only, restricted to `main`, serialized, and staged as `read-only`, `round-trip`, and `campaign`. Any stage capable of a Practice write requires the explicit Practice account ID and operator confirmation.
-
-The broker-minimum probe fails closed. Once a known fill exists it attempts to close that exact trade even if protection verification fails, and failed or unverifiable close state remains a critical reconciliation condition.
+The authenticated validation workflow is manual-only, restricted to `main`, serialized, and staged as `read-only`, `round-trip`, and `campaign`. Any stage capable of a Practice write requires an explicit Practice account ID and operator confirmation. The broker-minimum probe fails closed and attempts to close the exact known trade if a fill exists.
 
 See `docs/17_OANDA_PAPER_SETUP.md` and `docs/25_PRACTICE_CAMPAIGN.md`.
 
@@ -169,7 +183,7 @@ python scripts/run_practice_campaign.py \
   --ablation-evidence-path ablation-decisions.jsonl
 ```
 
-Mature complete paired groups with read-only OANDA Practice candles:
+Mature and assemble paired component evidence:
 
 ```bash
 python scripts/label_ablation_decisions.py \
@@ -178,11 +192,7 @@ python scripts/label_ablation_decisions.py \
   --maximum-bars 24 \
   --entry-slippage-pips 0.10 \
   --exit-slippage-pips 0.10
-```
 
-Assemble simultaneous family-wise component evidence:
-
-```bash
 python scripts/assemble_paired_ablations.py \
   matured-ablation-outcomes.jsonl \
   --primary-dataset-id <dataset_sha256_from_research_report> \
@@ -192,26 +202,13 @@ python scripts/assemble_paired_ablations.py \
   --bootstrap-seed 20260807
 ```
 
-Ordinary decision/outcome analysis remains available:
-
-```bash
-python scripts/label_decision_evidence.py \
-  decision-evidence.jsonl \
-  --output outcome-evidence.jsonl
-
-python scripts/analyze_research_dataset.py \
-  decision-evidence.jsonl \
-  outcome-evidence.jsonl \
-  --setup-family zone_continuation
-```
-
-Research promotion is fail-closed and non-executable. Missing or statistically unresolved evidence yields `insufficient_evidence`; observed empirical/integrity failure yields `rejected`; the strongest successful state is `shadow_candidate`.
+Research promotion is fail-closed and non-executable. Missing/statistically unresolved evidence yields `insufficient_evidence`; observed empirical/integrity failure yields `rejected`; the strongest successful state is `shadow_candidate`.
 
 ## Validation boundary
 
-CI validates editable installation/compilation, dependency integrity, secret scanning, explicit Ruff checks, strict mypy on deterministic production/research/provider/document-evidence paths, the full branch-aware pytest suite with an enforced 85% floor, and an executed protected simulation paper-order smoke on Python 3.11 and 3.13.
+CI validates editable installation/compilation, dependency integrity, secret scanning, explicit Ruff checks, strict mypy on deterministic production/research/provider/document/stance paths, the full branch-aware pytest suite with an enforced 85% floor, and an executed protected simulation paper-order smoke on Python 3.11 and 3.13.
 
-Software CI does **not** prove authenticated broker behavior, public-provider/feed availability, or profitability. No authenticated OANDA Practice success is claimed until the separately configured staged validation is run and reviewed.
+Software CI does **not** prove authenticated broker behavior, public-provider/feed availability, stance-model validity, or profitability. No authenticated OANDA Practice success is claimed until the separately configured staged validation is run and reviewed.
 
 ## Deliberate boundaries
 
@@ -222,12 +219,12 @@ The repository does not:
 - scrape an unlicensed economic calendar/news source;
 - infer consensus from an official actual;
 - fabricate scheduled release availability from historical BLS series data;
-- trust external/mirror links simply because they appear in an official feed;
-- infer central-bank stance from feed titles, summaries, or raw text-diff count;
+- trust external/mirror links because they appear in an official feed;
 - infer same-document-family identity from title/text similarity;
-- treat generic sentiment as a substitute for release surprise/revision evidence;
+- treat central-bank stance evidence quality as calibrated probability;
+- feed v0.7.15 stance research into deployable signal fusion;
 - claim midpoint candle backtests equal executable quote history;
 - allow offline research promotion to grant Practice authority;
 - allow paired research ablations to submit broker orders.
 
-The next central-bank intelligence milestone is a research-only stance evidence layer built strictly on v0.7.14 current-vs-prior source-backed diffs, with explicit evidence spans, negation/uncertainty/conditional-language handling, contradiction states, and a versioned rules/model contract. Any pre-calibration confidence must be labeled as evidence quality rather than probability. A real licensed consensus/calendar adapter is still required once a licensed provider is selected and configured outside Git, and real prospective evidence should accumulate before strategy thresholds are reconsidered.
+The next central-bank research milestone is an immutable human-reviewed evaluation corpus tied to exact document-diff/version IDs. Coverage, abstention, false-direction rates, contradiction handling, dimension confusion, and institution/document-family cohorts should determine whether the conservative rules are expanded or replaced by a versioned NLP/LLM model. Runtime integration should occur only after empirical evaluation and calibration support it. A real licensed consensus/calendar adapter is still required once a licensed provider is selected outside Git.
