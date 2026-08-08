@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import cast
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from forex_trader import __version__
@@ -161,6 +162,16 @@ def create_app(
                     severity=severity_filter,
                 )
             ]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/v1/operations/metrics", dependencies=protected, response_class=PlainTextResponse)
+    def operations_metrics(hours: int = 24) -> PlainTextResponse:
+        try:
+            return PlainTextResponse(
+                operations.prometheus(hours=hours),
+                media_type="text/plain; version=0.0.4; charset=utf-8",
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
