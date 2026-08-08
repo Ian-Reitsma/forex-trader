@@ -4,7 +4,7 @@ A Practice-only FX research and execution platform built around market location,
 
 The project is **not** a promise of profitability and is **not** approved for live-money trading. OANDA integration is locked to fxTrade Practice endpoints.
 
-## Current release: v0.7.11
+## Current release: v0.7.12
 
 The deployable decision path remains structure-first:
 
@@ -30,74 +30,57 @@ reconciliation + protection verification + persistent uncertainty halt
 
 EMA, RSI and ATR remain secondary diagnostics rather than substitutes for location, liquidity, and structure. Spot broker tick activity is explicitly treated as a low-confidence activity proxy, not centralized institutional footprint/delta data.
 
-## v0.7.11: point-in-time macro source provenance
+## v0.7.12: first concrete official statistical provider
 
-v0.7.11 closes the first P0 gap between the existing fundamental model and trustworthy external macro evidence.
+v0.7.12 adds a provenance-safe U.S. Bureau of Labor Statistics Public Data API v2 adapter on top of the v0.7.11 OFFICIAL/LICENSED source boundary.
+
+### Official JSON query provenance
+
+`OfficialJsonPostClient` supports first-party APIs whose read-only data contract requires JSON `POST`. It keeps the canonical request body and request SHA-256 separate from the raw response bytes and response evidence identity.
+
+Every query still fails closed on non-official configuration, non-allowlisted URLs, final-host escape, non-200 responses, oversized payloads, malformed JSON, or inconsistent request provenance.
+
+### BLS Public Data API v2
+
+`BlsPublicDataAdapter` targets the official BLS Public Data API v2 endpoint and requires BLS-level `REQUEST_SUCCEEDED`, not merely HTTP 200. It parses:
+
+- series ID;
+- year and period;
+- period name;
+- `Decimal` value;
+- latest flag;
+- footnote code/text pairs.
+
+The adapter rejects unrequested, duplicate, omitted, or malformed series/observations.
+
+Its public-query contract is deliberately conservative: 1-25 unique series IDs and at most a 10-year inclusive range. No BLS credential is embedded in Git.
+
+### Important release-time boundary
+
+A historical BLS series observation is **not automatically a scheduled economic-release event**.
+
+The adapter does not invent a release timestamp, consensus, revision-publication time, or calendar event identity from a BLS historical observation. It therefore does not directly emit `OfficialReleaseEvidence`. A later scheduled-release adapter must explicitly prove event identity and official availability time before the value can participate in the v0.7.11 consensus-vs-actual transaction.
+
+See `docs/38_V0_7_12_OFFICIAL_BLS_ADAPTER.md`.
+
+## v0.7.11: point-in-time macro source provenance
 
 The source trust boundary is explicit:
 
 - **OFFICIAL** — first-party actual releases/documents from central banks or statistical agencies.
 - **LICENSED** — a separately contracted economic-calendar/consensus source used for pre-release market expectations.
 
-The repository does not embed or pretend to provide a commercial consensus vendor. Test fixtures use a synthetic licensed source only to validate the interface.
+The repository does not embed or pretend to provide a commercial consensus vendor.
 
-### Raw-source integrity
+`RawSourcePayload` retains source/publisher authority, exact HTTPS URL/content type, publication/availability/retrieval timestamps, raw bytes, raw SHA-256, and a canonical evidence-record SHA-256 that also binds retrieval provenance.
 
-`RawSourcePayload` retains the exact response bytes plus:
+`EconomicEventMapping` binds one logical indicator/currency event to one licensed consensus source and one official actual source. Consensus must exist no later than scheduled release time; the official actual cannot exist before it. Source IDs, schedule, indicator, and currency must all match before release-surprise calculation.
 
-- source ID, publisher, and authority class;
-- exact HTTPS URL and content type;
-- `published_at`, `available_at`, and `retrieved_at` timestamps;
-- SHA-256 of the raw bytes;
-- a canonical evidence-record SHA-256 that also binds retrieval provenance.
+`SourceEvidenceRepository` durably retains raw source payloads and provider-health evidence. `ProviderPollRunner` records HEALTHY, DEGRADED/rate-limited, or UNAVAILABLE state around provider calls.
 
-`OfficialSourceClient` is read-only. Requested and final URLs must remain within the approved official publisher host. Non-200 responses, host escape, invalid chronology, hash mismatch, and oversized payloads fail closed.
+`MacroIngestionOrchestrator` persists and reads back both licensed and official raw evidence before creating the deterministic existing `MacroObservation.release` record.
 
-### Exact event identity
-
-`EconomicEventMapping` binds one logical indicator/currency event to one licensed consensus source and one official actual source with explicit directionality, unit, and importance.
-
-`LicensedConsensusEvidence` must exist no later than the scheduled release. `OfficialReleaseEvidence` cannot exist before the scheduled release. Source IDs, scheduled timestamps, indicator, and currency must all match before the existing release-surprise model can consume the pair.
-
-This prevents post-release information from masquerading as consensus and prevents an actual release from being joined to the wrong event.
-
-### Durable evidence and provider health
-
-`SourceEvidenceRepository` persists raw payloads and point-in-time provider-health observations in SQLite. Identical response bytes retrieved at different times retain the same payload hash but distinct evidence-record identities.
-
-`ProviderPollRunner` records source state automatically:
-
-```text
-successful poll       -> HEALTHY
-explicit rate limit   -> DEGRADED + rate_limited=true, then fail the poll
-provider/parser error -> UNAVAILABLE, then fail the poll
-stale/missing health  -> UNAVAILABLE at readiness time
-```
-
-### Macro ingestion transaction
-
-`MacroIngestionOrchestrator` enforces:
-
-1. licensed consensus polling no later than scheduled release time;
-2. official actual polling no earlier than scheduled release time;
-3. provider identity matching against the event mapping;
-4. exact consensus/actual validation;
-5. durable retention of both raw evidence records;
-6. deterministic `MacroObservation.release` identity derived from mapping + raw evidence identities;
-7. append through the existing macro-observation sink only after raw evidence is verifiably retained.
-
-There is no broker-write path in this orchestration layer.
-
-### Event-specific readiness
-
-`MacroReadinessEvaluator` requires the providers that actually feed the event:
-
-```text
-pre-release  -> licensed consensus source required
-post-release -> licensed consensus + official actual source required
-```
-
-Missing, stale, unavailable, or rate-limited required sources fail readiness. Quote/candle/account/reconciliation readiness remains owned by the existing system gates.
+`MacroReadinessEvaluator` requires the exact consensus provider pre-release and both consensus plus official provider after release. Missing, stale, unavailable, or rate-limited required sources fail readiness.
 
 See `docs/37_V0_7_11_MACRO_SOURCE_ORCHESTRATION.md`.
 
@@ -124,8 +107,6 @@ shadow candidate only
 The five component ablations are `no_fundamentals`, `no_flow`, `no_session`, `no_zone_quality`, and `no_retest`. They rerun real production seams on one frozen snapshot and cannot submit broker orders.
 
 Promotion-grade component inference uses simultaneous family-wise paired bootstrap bands across the five-component family. Individual per-component intervals remain useful diagnostics but are insufficient for a multi-component promotion decision.
-
-v0.7.11 also repairs release-state drift inherited from v0.7.10: family-wise production code had been merged while several tests and the runtime version identity still reflected v0.7.9. The release aligns tests/runtime identity with the already-merged family-wise contract; it does not weaken that contract.
 
 See:
 
@@ -220,18 +201,9 @@ Research promotion is fail-closed and non-executable. Missing or statistically u
 
 ## Validation boundary
 
-CI validates:
+CI validates editable installation/compilation, dependency integrity, secret scanning, explicit Ruff checks, strict mypy on deterministic production/research/provider paths, the full branch-aware pytest suite with an enforced 85% floor, and an executed protected simulation paper-order smoke on Python 3.11 and 3.13.
 
-- editable package installation and compilation;
-- dependency integrity;
-- secret-assignment scanning;
-- explicit Ruff critical-path checks;
-- strict mypy on deterministic production/research/macro source paths;
-- full branch-aware pytest coverage with an enforced 85% floor;
-- executed protected simulation paper-order smoke;
-- Python 3.11 and Python 3.13.
-
-Software CI does **not** prove authenticated broker behavior, external macro-provider availability, or profitability. No authenticated OANDA Practice success is claimed until the separately configured staged validation is run and reviewed.
+Software CI does **not** prove authenticated broker behavior, public-provider availability, or profitability. No authenticated OANDA Practice success is claimed until the separately configured staged validation is run and reviewed.
 
 ## Deliberate boundaries
 
@@ -241,9 +213,10 @@ The repository does not:
 - fabricate centralized order flow from spot tick counts;
 - scrape an unlicensed economic calendar/news source;
 - infer consensus from an official actual;
-- treat a generic sentiment score as a substitute for scheduled-event surprise/revision evidence;
+- fabricate scheduled release availability from historical BLS series data;
+- treat generic sentiment as a substitute for release surprise/revision evidence;
 - claim midpoint candle backtests equal executable quote history;
 - allow offline research promotion to grant Practice authority;
 - allow paired research ablations to submit broker orders.
 
-The next P0 data milestone is concrete provider integration behind the v0.7.11 contracts: a licensed consensus/calendar adapter plus official scheduled-release/document adapters, with credentials external to Git, exact source freshness carried into campaign/decision evidence, and real prospective evidence accumulated before any strategy threshold is reconsidered.
+The next P0 data milestone is official scheduled-release/document discovery plus a real licensed consensus/calendar adapter once a licensed provider is selected and configured outside Git. Those adapters should feed the v0.7.11 orchestration rather than bypass it, and real prospective evidence should accumulate before strategy thresholds are reconsidered.
