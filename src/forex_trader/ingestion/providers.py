@@ -43,11 +43,14 @@ class OrderFlowSnapshot:
     volume_expansion: Decimal | None = None
     absorption: Decimal | None = None
     depth_imbalance: Decimal | None = None
+    directional_pressure: Decimal | None = None
     confidence: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         if self.observed_at.tzinfo is None:
             raise ValueError("order-flow snapshot time must be timezone-aware")
+        if self.directional_pressure is not None and not Decimal("-1") <= self.directional_pressure <= Decimal("1"):
+            raise ValueError("order-flow directional pressure must be in [-1,1]")
         if not Decimal("0") <= self.confidence <= Decimal("1"):
             raise ValueError("order-flow confidence must be in [0,1]")
 
