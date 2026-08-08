@@ -1,13 +1,35 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
-import json
 
 from forex_trader.domain.enums import Direction
 from forex_trader.domain.portfolio import OpenPosition
+
+
+def default_macro_factor_map() -> dict[str, tuple[str, ...]]:
+    """Return the audited v1 policy taxonomy for the initial FX universe.
+
+    These are qualitative concentration tags, not statistical factor betas. They
+    intentionally identify shared scheduled-macro/rates dependencies that can be
+    missed by a rolling return-correlation veto.
+    """
+
+    return {
+        "EUR_USD": ("usd_macro", "usd_rates", "eur_macro", "eur_rates"),
+        "GBP_USD": ("usd_macro", "usd_rates", "gbp_macro", "gbp_rates"),
+        "USD_JPY": ("usd_macro", "usd_rates", "jpy_macro", "jpy_rates"),
+        "USD_CHF": ("usd_macro", "usd_rates", "chf_macro", "chf_rates"),
+        "AUD_USD": ("usd_macro", "usd_rates", "aud_macro", "aud_rates", "commodity_cycle"),
+        "USD_CAD": ("usd_macro", "usd_rates", "cad_macro", "cad_rates", "commodity_cycle"),
+        "NZD_USD": ("usd_macro", "usd_rates", "nzd_macro", "nzd_rates", "commodity_cycle"),
+        "EUR_GBP": ("eur_macro", "eur_rates", "gbp_macro", "gbp_rates"),
+        "EUR_JPY": ("eur_macro", "eur_rates", "jpy_macro", "jpy_rates"),
+        "GBP_JPY": ("gbp_macro", "gbp_rates", "jpy_macro", "jpy_rates"),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +53,7 @@ class MacroFactorClusterGuard:
     """Cap gross exposure to explicit macro/event thesis clusters.
 
     This guard is deliberately separate from return correlation and currency-leg
-    concentration.  The mapping is policy data, not inferred from recent prices:
+    concentration. The mapping is policy data, not inferred from recent prices:
     instruments that share a factor such as ``usd_rates`` accumulate gross
     account-currency notional in the same bucket even when pairwise correlation
     temporarily breaks down.
@@ -73,10 +95,15 @@ class MacroFactorClusterGuard:
         raw_map = payload.get("instrument_factors")
         if not isinstance(raw_map, dict):
             raise ValueError("macro factor policy requires instrument_factors")
+        normalized_map: dict[str, tuple[str, ...]] = {}
+        for key, value in raw_map.items():
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                raise ValueError(f"macro factor policy entry {key!s} must be a string list")
+            normalized_map[str(key)] = tuple(value)
         configured_limit = Decimal(str(payload.get("maximum_factor_exposure_fraction", "2.5")))
         configured_strict = bool(payload.get("require_classification", True))
         return cls(
-            {str(key): value for key, value in raw_map.items()},
+            normalized_map,
             maximum_factor_exposure_fraction=(
                 configured_limit
                 if maximum_factor_exposure_fraction is None
