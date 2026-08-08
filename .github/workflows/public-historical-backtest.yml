@@ -22,7 +22,7 @@ concurrency:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -45,7 +45,7 @@ jobs:
           --days 35
           --lag-days 7
           --minimum-calibration-trades 10
-          --concurrency-per-pair 4
+          --concurrency-per-pair 12
           --maximum-holding-minutes 120
           --entry-latency-ms 500
           --slippage-pips 0.10
