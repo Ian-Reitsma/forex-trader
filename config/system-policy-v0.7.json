@@ -75,22 +75,42 @@
   "flow_policy": {
     "broker_tick_activity_is_institutional_flow": false,
     "institutional_provider_contract": true,
-    "required_flow_policy_when_provider_unavailable": "abstain"
+    "required_flow_policy_when_provider_unavailable": "abstain",
+    "flow_divergence_authority": "research",
+    "vwap_repositioning_authority": "research"
   },
   "research_policy": {
     "quality_score_is_probability": false,
     "outcome_probability_requires_calibration": true,
     "event_replay_order": ["available_at", "provider_sequence", "event_id"],
     "promotion_requires_positive_profit_only": false,
-    "required_evidence": ["expectancy_after_costs", "drawdown", "calibration", "ablation", "replay_reproducibility"]
+    "required_evidence": ["expectancy_after_costs", "drawdown", "calibration", "ablation", "replay_reproducibility"],
+    "technical_ground_truth": {
+      "policy_version": "technical-annotation-v1",
+      "reviewer_visible_inputs": "raw_completed_candles_only",
+      "minimum_independent_reviewers": 2,
+      "disagreement_requires_independent_adjudication": true,
+      "calibration_fraction": "2/3_chronological",
+      "holdout_fraction": "1/3_chronological",
+      "model_predictions_hidden": true,
+      "trade_outcomes_hidden": true
+    }
   },
   "risk_policy": {
-    "version": "practice-risk-v0.7",
+    "version": "practice-risk-v0.7.24",
     "default_per_trade_fraction": "0.0015",
     "default_daily_loss_fraction": "0.01",
     "default_trailing_drawdown_fraction": "0.10",
     "default_reserved_risk_fraction": "0.02",
     "default_gap_stress_multiplier": "1.25",
+    "macro_factor_clusters": {
+      "enabled_by_default": true,
+      "policy": "macro-factor-clusters-v1",
+      "default_maximum_factor_exposure_fraction": "2.5",
+      "require_classification": true,
+      "exposure_measure": "gross_account_currency_notional",
+      "independent_from_return_correlation": true
+    },
     "stop_widening_without_new_authorization": false
   }
 }
