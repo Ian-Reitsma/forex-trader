@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import importlib
+import sys
+from pathlib import Path
+from typing import Callable, cast
+
 from forex_trader.research.gdelt_history import ResilientGdeltDocHistoryClient
 
-import scripts.run_public_historical_backtest as campaign
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-# The campaign module intentionally keeps its downloader dependency injectable so
-# production research can swap a licensed PIT news provider later. For the public
-# GDELT campaign, use the hardened parser that handles publisher-originated invalid
-# JSON escapes without weakening timestamp or schema validation.
-campaign.GdeltDocHistoryClient = ResilientGdeltDocHistoryClient  # type: ignore[misc]
+campaign = importlib.import_module("scripts.run_public_historical_backtest")
+setattr(campaign, "GdeltDocHistoryClient", ResilientGdeltDocHistoryClient)
+main = cast(Callable[[], int], getattr(campaign, "main"))
 
 
 if __name__ == "__main__":
-    raise SystemExit(campaign.main())
+    raise SystemExit(main())
