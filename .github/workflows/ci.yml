@@ -71,6 +71,7 @@ jobs:
           src/forex_trader/research/ablations.py
           src/forex_trader/research/advanced.py
           src/forex_trader/research/captured_signal_ablation.py
+          src/forex_trader/research/central_bank_stance.py
           src/forex_trader/research/cohorts.py
           src/forex_trader/research/dataset.py
           src/forex_trader/research/evidence.py
@@ -81,6 +82,7 @@ jobs:
           src/forex_trader/research/production_ablation.py
           src/forex_trader/research/production_signal_ablation.py
           src/forex_trader/research/promotion_evidence.py
+          scripts/analyze_central_bank_stance.py
           scripts/analyze_phase_d_paths.py
           scripts/analyze_research_dataset.py
           scripts/assemble_paired_ablations.py
@@ -91,6 +93,8 @@ jobs:
           tests/test_ablation_outcome_maturity.py
           tests/test_ablation_promotion_cli_uncertainty.py
           tests/test_campaign_decision_evidence.py
+          tests/test_central_bank_stance_cli.py
+          tests/test_central_bank_stance_evidence.py
           tests/test_macro_source_orchestration.py
           tests/test_official_bls_adapter.py
           tests/test_official_document_discovery.py
@@ -144,6 +148,7 @@ jobs:
           src/forex_trader/research/ablations.py
           src/forex_trader/research/advanced.py
           src/forex_trader/research/captured_signal_ablation.py
+          src/forex_trader/research/central_bank_stance.py
           src/forex_trader/research/cohorts.py
           src/forex_trader/research/dataset.py
           src/forex_trader/research/evidence.py
@@ -154,6 +159,7 @@ jobs:
           src/forex_trader/research/production_ablation.py
           src/forex_trader/research/production_signal_ablation.py
           src/forex_trader/research/promotion_evidence.py
+          scripts/analyze_central_bank_stance.py
           scripts/assemble_paired_ablations.py
           scripts/assess_research_promotion.py
           scripts/label_ablation_decisions.py
