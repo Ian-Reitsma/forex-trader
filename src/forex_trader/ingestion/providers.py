@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from forex_trader.domain.context import CrossAssetSignal, ProviderHealth
+from forex_trader.domain.events import ScheduledMacroEvent
 from forex_trader.intelligence.events import ConsensusSnapshot, NewsDocument, ReleaseActual, ReleaseMetadata
 
 
@@ -13,6 +14,13 @@ class EconomicCalendarProvider(Protocol):
     def consensus_snapshots(self, *, start: datetime, end: datetime) -> tuple[ConsensusSnapshot, ...]: ...
     def release_actuals(self, *, start: datetime, end: datetime) -> tuple[ReleaseActual, ...]: ...
     def release_metadata(self) -> tuple[ReleaseMetadata, ...]: ...
+    def scheduled_events(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        as_of: datetime,
+    ) -> tuple[ScheduledMacroEvent, ...]: ...
     def health(self) -> ProviderHealth: ...
 
 
