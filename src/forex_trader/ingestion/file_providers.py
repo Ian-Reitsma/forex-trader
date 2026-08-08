@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from forex_trader.domain.context import CrossAssetSignal, HealthState, ProviderHealth
+from forex_trader.domain.events import EventImportance, ScheduledMacroEvent
 from forex_trader.ingestion.providers import OrderFlowSnapshot
 from forex_trader.intelligence.events import ConsensusSnapshot, NewsDocument, ReleaseActual, ReleaseMetadata
 
@@ -47,7 +49,13 @@ def _load_document(path: Path) -> object:
 
 
 def _rows(document: object, key: str) -> list[dict[str, Any]]:
-    payload = document.get(key, []) if isinstance(document, dict) else document
+    if isinstance(document, dict):
+        payload = document.get(key, [])
+    elif isinstance(document, list):
+        tagged = [item for item in document if isinstance(item, dict) and "kind" in item]
+        payload = [item for item in tagged if str(item.get("kind")) == key] if tagged else document
+    else:
+        payload = document
     if payload is None:
         return []
     if not isinstance(payload, list):
@@ -179,13 +187,51 @@ class JsonEconomicCalendarProvider(_JsonProviderBase):
             for row in rows
         )
 
+    def scheduled_events(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        as_of: datetime,
+    ) -> tuple[ScheduledMacroEvent, ...]:
+        events: list[ScheduledMacroEvent] = []
+        for row in _rows(self._document(), "scheduled"):
+            scheduled_at = _aware(row["scheduled_at"], field="scheduled_at")
+            available_at = _aware(row.get("available_at", row["scheduled_at"]), field="available_at")
+            if available_at > as_of or not start <= scheduled_at <= end:
+                continue
+            source = str(row.get("source") or self.provider_name)
+            raw_event_id = str(
+                row.get("event_id")
+                or f"{row['currency']}:{row['name']}:{scheduled_at.isoformat()}"
+            )
+            try:
+                event_id = UUID(raw_event_id)
+            except ValueError:
+                event_id = uuid5(NAMESPACE_URL, f"{source}:{raw_event_id}")
+            events.append(
+                ScheduledMacroEvent(
+                    event_id=event_id,
+                    currency=str(row["currency"]).upper(),
+                    scheduled_at=scheduled_at,
+                    name=str(row["name"]),
+                    importance=EventImportance(str(row.get("importance", "high")).lower()),
+                    source=source,
+                    pre_blackout=timedelta(minutes=int(row.get("pre_blackout_minutes", 15))),
+                    post_blackout=timedelta(minutes=int(row.get("post_blackout_minutes", 5))),
+                    confidence=_decimal(row.get("confidence", "1"), field="confidence"),
+                )
+            )
+        return tuple(sorted(events, key=lambda item: (item.scheduled_at, str(item.event_id))))
+
     def health(self) -> ProviderHealth:
         try:
             document = self._document()
             timestamps = [
                 _aware(row["available_at"], field="available_at")
-                for key in ("consensus", "actuals")
+                for key in ("consensus", "actuals", "scheduled")
                 for row in _rows(document, key)
+                if "available_at" in row
             ]
             return self._health_from_times(timestamps)
         except Exception as exc:
