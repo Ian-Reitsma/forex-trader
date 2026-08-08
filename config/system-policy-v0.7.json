@@ -94,6 +94,23 @@
       "holdout_fraction": "1/3_chronological",
       "model_predictions_hidden": true,
       "trade_outcomes_hidden": true
+    },
+    "historical_replay_archive": {
+      "schema_version": "1.0",
+      "authority": "research_only",
+      "manifest_file_checksums_required": true,
+      "event_payload_hashes_required": true,
+      "duplicate_event_ids_rejected": true,
+      "duplicate_provider_channel_sequences_rejected": true,
+      "required_event_type_coverage_enforced": true,
+      "availability_period_enforced": true,
+      "event_order": ["available_at", "provider_sequence", "event_id"],
+      "executable_quote_contract": "historical_bid_ask",
+      "quote_interpolation_allowed": false,
+      "future_quote_reach_forward_allowed": false,
+      "stale_quote_policy": "fail_closed",
+      "source_path_traversal_allowed": false,
+      "bundled_historical_vendor_data": false
     }
   },
   "risk_policy": {
