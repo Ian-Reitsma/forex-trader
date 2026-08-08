@@ -198,7 +198,12 @@ def build_blinded_technical_batch(
                 candles=window.candles,
             )
         )
-    ordered = tuple(sorted(packets, key=lambda item: (item.window_end, item.instrument, item.timeframe, item.packet_id)))
+    ordered = tuple(
+        sorted(
+            packets,
+            key=lambda item: (item.window_end, item.instrument, item.timeframe, item.packet_id),
+        )
+    )
     if not ordered:
         raise ValueError("cannot build an empty technical annotation batch")
     batch_identity = "|".join(
@@ -292,25 +297,25 @@ def finalize_technical_labels(
         agreement = all(label == first for label in labels[1:])
         if agreement:
             if packet.packet_id in adjudication_map:
-                adjudicator = adjudication_map[packet.packet_id]
-                if adjudicator.adjudicator_id in reviews:
+                unanimous_adjudication = adjudication_map[packet.packet_id]
+                if unanimous_adjudication.adjudicator_id in reviews:
                     raise ValueError("adjudicator must be independent from packet reviewers")
-                if adjudicator.label != first:
+                if unanimous_adjudication.label != first:
                     raise ValueError("unnecessary adjudication contradicts unanimous reviewer labels")
             finalized.append(FinalTechnicalLabel(packet.packet_id, first, reviewer_ids, True))
             continue
-        adjudicator = adjudication_map.get(packet.packet_id)
-        if adjudicator is None:
+        required_adjudication = adjudication_map.get(packet.packet_id)
+        if required_adjudication is None:
             raise ValueError(f"packet {packet.packet_id} has reviewer disagreement and requires adjudication")
-        if adjudicator.adjudicator_id in reviews:
+        if required_adjudication.adjudicator_id in reviews:
             raise ValueError("adjudicator must be independent from packet reviewers")
         finalized.append(
             FinalTechnicalLabel(
                 packet.packet_id,
-                adjudicator.label,
+                required_adjudication.label,
                 reviewer_ids,
                 False,
-                adjudicator.adjudicator_id,
+                required_adjudication.adjudicator_id,
             )
         )
     return TechnicalValidationCorpus(batch.batch_id, batch.policy_version, tuple(finalized))
@@ -341,7 +346,11 @@ def technical_batch_from_payload(payload: Mapping[str, object]) -> TechnicalAnno
             candles=candles,
         )
         expected_hash = hashlib.sha256(
-            json.dumps([_candle_payload(candle) for candle in candles], sort_keys=True, separators=(",", ":")).encode()
+            json.dumps(
+                [_candle_payload(candle) for candle in candles],
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
         ).hexdigest()
         if expected_hash != packet.candle_hash:
             raise ValueError(f"technical annotation candle hash mismatch for {packet.packet_id}")
