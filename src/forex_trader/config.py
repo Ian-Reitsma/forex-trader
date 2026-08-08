@@ -16,6 +16,7 @@ from forex_trader.adapters.timeframe import TimeframeMappedMarketData
 from forex_trader.application.engine import TradingEngine
 from forex_trader.application.external_context import ExternalContextAggregator, ExternalContextFusionPolicy
 from forex_trader.application.fx_engine import FxTradingEngine
+from forex_trader.application.ports import MarketDataProvider, PaperBroker
 from forex_trader.domain.correlation_risk import CorrelationRiskGuard
 from forex_trader.domain.costs import SessionCostModel
 from forex_trader.domain.enums import OperatingMode, ProviderKind
@@ -300,24 +301,29 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
         raise ValueError("; ".join(errors))
     repository = AdvancedTradingRepository(config.database_path)
 
+    provider: MarketDataProvider
+    broker: PaperBroker
+    macro_as_of: datetime | None
     if config.provider is ProviderKind.OANDA:
         assert config.oanda_token is not None
-        provider = SafeOandaPracticeClient(
+        oanda_provider = SafeOandaPracticeClient(
             token=config.oanda_token,
             account_id=config.oanda_account_id,
             rest_url=config.oanda_rest_url,
             stream_url=config.oanda_stream_url,
             timeout_seconds=config.oanda_timeout_seconds,
         )
-        broker = ReconciliationGuardedBroker(provider, repository)
+        provider = oanda_provider
+        broker = ReconciliationGuardedBroker(oanda_provider, repository)
         macro_as_of = None
     else:
-        provider = SyntheticMarketData(
+        synthetic_provider = SyntheticMarketData(
             direction="long",
             quote_granularity=config.lower_timeframe,
         )
-        broker = SimulatedPaperBroker(provider)
-        macro_as_of = provider.anchor
+        provider = synthetic_provider
+        broker = SimulatedPaperBroker(synthetic_provider)
+        macro_as_of = synthetic_provider.anchor
 
     seed_book = load_macro_file(
         macro_file,
@@ -339,18 +345,24 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
         maximum_signed_correlation=config.max_signed_correlation,
     )
     external_context = _external_context(config)
-    fusion_kwargs = {
-        "minimum_score": config.minimum_score,
-        "maximum_spread_pips": config.maximum_spread_pips,
-        "require_fundamentals": config.require_fundamentals,
-        "minimum_independent_confirmations": config.minimum_independent_confirmations,
-        "minimum_independent_sources": config.minimum_independent_sources,
-    }
-    fusion_policy = (
-        ExternalContextFusionPolicy(external_context, **fusion_kwargs)
-        if external_context.configured
-        else RegimeAwareSignalFusionPolicy(**fusion_kwargs)
-    )
+    fusion_policy: RegimeAwareSignalFusionPolicy
+    if external_context.configured:
+        fusion_policy = ExternalContextFusionPolicy(
+            external_context,
+            minimum_score=config.minimum_score,
+            maximum_spread_pips=config.maximum_spread_pips,
+            require_fundamentals=config.require_fundamentals,
+            minimum_independent_confirmations=config.minimum_independent_confirmations,
+            minimum_independent_sources=config.minimum_independent_sources,
+        )
+    else:
+        fusion_policy = RegimeAwareSignalFusionPolicy(
+            minimum_score=config.minimum_score,
+            maximum_spread_pips=config.maximum_spread_pips,
+            require_fundamentals=config.require_fundamentals,
+            minimum_independent_confirmations=config.minimum_independent_confirmations,
+            minimum_independent_sources=config.minimum_independent_sources,
+        )
     return FxTradingEngine(
         market_data=market_data,
         broker=broker,
