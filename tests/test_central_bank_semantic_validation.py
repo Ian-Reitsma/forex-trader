@@ -294,26 +294,25 @@ def test_semantic_report_is_deterministic_under_input_order() -> None:
 
 def test_evaluation_fails_on_duplicate_ground_truth_mixed_policy_or_missing_versions() -> None:
     previous, current, item = fixture_cases()[0]
-    with pytest.raises(ValueError, match="multiple adjudicated labels"):
-        evaluate_semantic_labels((item, item), (previous, current))
-    alternate_policy = label(
-        *pair(
-            family_id="fed_other_policy",
-            old_text="Inflation has eased.",
-            new_text="Inflation remains elevated.",
-            offset_days=8,
-        ),
+    duplicate_diff_label = CentralBankSemanticLabel.create(
+        compare_document_versions(previous, current),
+        annotation_policy_version=POLICY,
+        annotator_ids=("reviewer-c", "reviewer-d"),
+        adjudicated=True,
+        adjudicator_id="adjudicator-2",
+        labeled_at=current.available_at + timedelta(days=2),
         direction=StanceDirection.HAWKISH,
         disposition=EvidenceDisposition.SUPPORTED,
-        policy="human-policy-v2",
     )
+    with pytest.raises(ValueError, match="multiple adjudicated labels"):
+        evaluate_semantic_labels((item, duplicate_diff_label), (previous, current))
+
     alternate_pair = pair(
         family_id="fed_other_policy",
         old_text="Inflation has eased.",
         new_text="Inflation remains elevated.",
         offset_days=8,
     )
-    # Rebuild against the exact versions used by the label so only policy mixing is under test.
     alternate_policy = label(
         *alternate_pair,
         direction=StanceDirection.HAWKISH,
