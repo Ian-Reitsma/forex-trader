@@ -258,10 +258,10 @@ def test_macro_factor_policy_validation_and_pricing_paths(tmp_path) -> None:  # 
         json.dumps(
             {
                 "maximum_factor_exposure_fraction": "4",
-                "require_classification": false,
+                "require_classification": False,
                 "instrument_factors": {"EUR_USD": ["usd_rates"]},
             }
-        ).replace("false", "false")
+        )
     )
     loaded = MacroFactorClusterGuard.from_json_file(path)
     assert loaded.maximum_factor_exposure_fraction == Decimal("4")
