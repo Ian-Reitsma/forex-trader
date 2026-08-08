@@ -8,6 +8,7 @@ from typing import Callable, Iterable, Mapping
 
 from forex_trader.domain.correlation_risk import CorrelationRiskGuard
 from forex_trader.domain.enums import RiskDisposition
+from forex_trader.domain.macro_factor_risk import MacroFactorClusterGuard
 from forex_trader.domain.market_calendar import pair_holiday_blackout
 from forex_trader.domain.models import AccountSnapshot, Quote, RiskAuthorization, TradeCandidate, jsonable
 from forex_trader.domain.portfolio import OpenPosition
@@ -34,6 +35,7 @@ class EnhancedRiskPolicy(RiskPolicy):
         margin_buffer_fraction: Decimal = Decimal("0.20"),
         authorization_ttl_seconds: int = 15,
         correlation_guard: CorrelationRiskGuard | None = None,
+        macro_factor_guard: MacroFactorClusterGuard | None = None,
         state_provider: RiskStateProvider | None = None,
         max_drawdown_fraction: Decimal = Decimal("0.10"),
         max_loss_streak: int = 6,
@@ -64,6 +66,7 @@ class EnhancedRiskPolicy(RiskPolicy):
         if gap_stress_multiplier < Decimal("1"):
             raise ValueError("gap_stress_multiplier must be at least 1")
         self.state_provider = state_provider
+        self.macro_factor_guard = macro_factor_guard
         self.max_drawdown_fraction = max_drawdown_fraction
         self.max_loss_streak = max_loss_streak
         self.max_reserved_risk_fraction = max_reserved_risk_fraction
@@ -83,6 +86,7 @@ class EnhancedRiskPolicy(RiskPolicy):
         margin_rate: Decimal | None = None,
         maximum_position_units: Decimal | None = None,
     ) -> RiskAuthorization:
+        existing = list(positions)
         capital_base = min(account.balance, account.nav)
         if classify_phase(quote.time) is SessionPhase.ROLLOVER:
             return self.deny(candidate, "rollover exposure is prohibited", account_id=account.account_id)
@@ -108,7 +112,7 @@ class EnhancedRiskPolicy(RiskPolicy):
             candidate,
             account,
             quote,
-            positions=positions,
+            positions=existing,
             conversion_rate=conversion_rate,
             mark_price=mark_price,
             margin_rate=margin_rate,
@@ -116,6 +120,39 @@ class EnhancedRiskPolicy(RiskPolicy):
         )
         if result.disposition is not RiskDisposition.GRANTED:
             return result
+
+        factor_reason: str | None = None
+        factor_name: str | None = None
+        factor_exposure = Decimal("0")
+        if self.macro_factor_guard is not None:
+            if conversion_rate is None or mark_price is None:
+                return self.deny(
+                    candidate,
+                    "macro factor risk requires conversion and mark-price providers",
+                    account_id=account.account_id,
+                )
+            assert candidate.entry_price is not None
+            factor_decision = self.macro_factor_guard.evaluate_candidate(
+                candidate_instrument=candidate.instrument,
+                candidate_direction=candidate.direction,
+                candidate_units=result.units,
+                candidate_entry_price=candidate.entry_price,
+                positions=existing,
+                account_currency=account.currency,
+                capital_base=capital_base,
+                conversion_rate=conversion_rate,
+                mark_price=mark_price,
+            )
+            if factor_decision.blocked:
+                return self.deny(
+                    candidate,
+                    factor_decision.reason or "macro factor concentration vetoed the position",
+                    account_id=account.account_id,
+                )
+            factor_name = factor_decision.maximum_factor
+            factor_exposure = factor_decision.maximum_factor_exposure
+            if factor_name is not None:
+                factor_reason = f"maximum macro factor exposure={factor_name}:{factor_exposure}"
 
         reserved = Decimal(str(state.get("reserved_risk", "0"))) if state else Decimal("0")
         pending = Decimal(str(state.get("pending_risk", "0"))) if state else Decimal("0")
@@ -136,6 +173,13 @@ class EnhancedRiskPolicy(RiskPolicy):
             "drawdown_fraction": str(state.get("drawdown_fraction", "0")) if state else "0",
             "loss_streak": str(state.get("loss_streak", 0)) if state else "0",
         }
+        if self.macro_factor_guard is not None:
+            limits["macro_factor_exposure_fraction"] = str(
+                self.macro_factor_guard.maximum_factor_exposure_fraction
+            )
+            if factor_name is not None:
+                limits["maximum_macro_factor"] = factor_name
+                limits["maximum_macro_factor_exposure"] = str(factor_exposure)
         integrity_source = "|".join(
             (
                 str(result.authorization_id),
@@ -149,6 +193,7 @@ class EnhancedRiskPolicy(RiskPolicy):
             )
         )
         integrity = hashlib.sha256(integrity_source.encode()).hexdigest()
+        extra_reasons = (factor_reason,) if factor_reason is not None else ()
         return replace(
             result,
             candidate_hash=candidate_hash,
@@ -164,5 +209,5 @@ class EnhancedRiskPolicy(RiskPolicy):
             risk_policy_version=self.risk_policy_version,
             limits_consumed=limits,
             integrity_digest=integrity,
-            reasons=(*result.reasons, f"gap-stressed maximum loss={stressed_loss}"),
+            reasons=(*result.reasons, *extra_reasons, f"gap-stressed maximum loss={stressed_loss}"),
         )
