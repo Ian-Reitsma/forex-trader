@@ -21,6 +21,7 @@ from forex_trader.domain.costs import SessionCostModel
 from forex_trader.domain.enums import OperatingMode, ProviderKind
 from forex_trader.domain.fundamentals import FundamentalBook
 from forex_trader.domain.fusion import RegimeAwareSignalFusionPolicy
+from forex_trader.domain.macro_factor_risk import MacroFactorClusterGuard, default_macro_factor_map
 from forex_trader.domain.macro_history import PointInTimeFundamentalBook
 from forex_trader.domain.models import CurrencyFundamentals
 from forex_trader.domain.risk_advanced import EnhancedRiskPolicy
@@ -91,6 +92,10 @@ class AppConfig:
     gap_stress_multiplier: Decimal = Decimal("1.25")
     max_signed_correlation: float = 0.85
     correlation_minimum_observations: int = 40
+    enable_macro_factor_risk: bool = True
+    macro_factor_policy_path: str | None = None
+    max_macro_factor_exposure_fraction: Decimal = Decimal("2.5")
+    require_macro_factor_classification: bool = True
     auto_discover_currency_instruments: bool = False
     economic_calendar_path: str | None = None
     news_path: str | None = None
@@ -138,6 +143,10 @@ class AppConfig:
             gap_stress_multiplier=_decimal_env("FOREX_GAP_STRESS_MULTIPLIER", "1.25"),
             max_signed_correlation=float(os.getenv("FOREX_MAX_SIGNED_CORRELATION", "0.85")),
             correlation_minimum_observations=int(os.getenv("FOREX_CORRELATION_MINIMUM_OBSERVATIONS", "40")),
+            enable_macro_factor_risk=_bool(os.getenv("FOREX_ENABLE_MACRO_FACTOR_RISK"), True),
+            macro_factor_policy_path=_optional_env("FOREX_MACRO_FACTOR_POLICY_PATH"),
+            max_macro_factor_exposure_fraction=_decimal_env("FOREX_MAX_MACRO_FACTOR_EXPOSURE_FRACTION", "2.5"),
+            require_macro_factor_classification=_bool(os.getenv("FOREX_REQUIRE_MACRO_FACTOR_CLASSIFICATION"), True),
             auto_discover_currency_instruments=_bool(os.getenv("FOREX_AUTO_DISCOVER_CURRENCY_INSTRUMENTS"), False),
             economic_calendar_path=_optional_env("FOREX_ECONOMIC_CALENDAR_PATH"),
             news_path=_optional_env("FOREX_NEWS_PATH"),
@@ -201,9 +210,12 @@ class AppConfig:
             errors.append("FOREX_MAX_SIGNED_CORRELATION must be in (0, 1]")
         if self.correlation_minimum_observations < 10:
             errors.append("FOREX_CORRELATION_MINIMUM_OBSERVATIONS must be at least 10")
+        if self.max_macro_factor_exposure_fraction <= 0:
+            errors.append("FOREX_MAX_MACRO_FACTOR_EXPOSURE_FRACTION must be positive")
         if self.order_flow_max_age_seconds <= 0:
             errors.append("FOREX_ORDER_FLOW_MAX_AGE_SECONDS must be positive")
         for env_name, path in (
+            ("FOREX_MACRO_FACTOR_POLICY_PATH", self.macro_factor_policy_path),
             ("FOREX_ECONOMIC_CALENDAR_PATH", self.economic_calendar_path),
             ("FOREX_NEWS_PATH", self.news_path),
             ("FOREX_CROSS_ASSET_PATH", self.cross_asset_path),
@@ -263,6 +275,22 @@ def _external_context(config: AppConfig) -> ExternalContextAggregator:
             config.order_flow_path,
             maximum_snapshot_age_seconds=config.order_flow_max_age_seconds,
         ),
+    )
+
+
+def _macro_factor_guard(config: AppConfig) -> MacroFactorClusterGuard | None:
+    if not config.enable_macro_factor_risk:
+        return None
+    if config.macro_factor_policy_path is not None:
+        return MacroFactorClusterGuard.from_json_file(
+            config.macro_factor_policy_path,
+            maximum_factor_exposure_fraction=config.max_macro_factor_exposure_fraction,
+            require_classification=config.require_macro_factor_classification,
+        )
+    return MacroFactorClusterGuard(
+        default_macro_factor_map(),
+        maximum_factor_exposure_fraction=config.max_macro_factor_exposure_fraction,
+        require_classification=config.require_macro_factor_classification,
     )
 
 
@@ -341,8 +369,10 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
             max_reserved_risk_fraction=config.max_reserved_risk_fraction,
             gap_stress_multiplier=config.gap_stress_multiplier,
             correlation_guard=correlation_guard,
+            macro_factor_guard=_macro_factor_guard(config),
             state_provider=repository.advanced_risk_state,
             environment=config.provider.value,
+            risk_policy_version="practice-risk-v0.7.24",
         ),
         mode=config.mode,
         enable_paper_orders=config.enable_paper_orders,
