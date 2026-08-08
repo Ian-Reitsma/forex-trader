@@ -36,7 +36,7 @@ class DimensionSemanticLabel:
     disposition: EvidenceDisposition
 
     def __post_init__(self) -> None:
-        _validate_direction_disposition(self.direction, self.disposition, prefix="dimension semantic label")
+        _validate_direction_disposition(self.direction, self.disposition, "dimension semantic label")
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,11 +73,10 @@ class CentralBankSemanticLabel:
             raise ValueError("semantic label current and previous versions must differ")
         if not self.annotation_policy_version.strip():
             raise ValueError("semantic label annotation policy version is required")
-        normalized_annotators = tuple(item.strip() for item in self.annotator_ids)
-        if not normalized_annotators or any(not item for item in normalized_annotators):
-            raise ValueError("semantic label requires non-empty annotator IDs")
-        if normalized_annotators != self.annotator_ids or len(set(self.annotator_ids)) != len(self.annotator_ids):
-            raise ValueError("semantic label annotator IDs must be normalized and unique")
+        if not self.annotator_ids or any(not item.strip() or item != item.strip() for item in self.annotator_ids):
+            raise ValueError("semantic label requires normalized non-empty annotator IDs")
+        if tuple(sorted(set(self.annotator_ids))) != self.annotator_ids:
+            raise ValueError("semantic label annotator IDs must be sorted and unique")
         if self.adjudicated:
             if len(self.annotator_ids) < 2:
                 raise ValueError("adjudicated semantic label requires at least two source annotators")
@@ -87,9 +86,8 @@ class CentralBankSemanticLabel:
             raise ValueError("unadjudicated semantic label cannot name an adjudicator")
         if self.labeled_at.tzinfo is None:
             raise ValueError("semantic label labeled_at must be timezone-aware")
-        _validate_direction_disposition(self.direction, self.disposition, prefix="semantic label")
-        dimensions = tuple(sorted(self.dimensions, key=lambda item: item.dimension.value))
-        if dimensions != self.dimensions:
+        _validate_direction_disposition(self.direction, self.disposition, "semantic label")
+        if tuple(sorted(self.dimensions, key=lambda item: item.dimension.value)) != self.dimensions:
             raise ValueError("semantic label dimensions must be sorted by dimension")
         if len({item.dimension for item in self.dimensions}) != len(self.dimensions):
             raise ValueError("semantic label dimensions cannot repeat")
@@ -124,8 +122,8 @@ class CentralBankSemanticLabel:
         disposition: EvidenceDisposition,
         dimensions: Iterable[DimensionSemanticLabel] = (),
     ) -> CentralBankSemanticLabel:
-        normalized_annotators = tuple(sorted({item.strip() for item in annotator_ids if item.strip()}))
-        normalized_dimensions = tuple(sorted(dimensions, key=lambda item: item.dimension.value))
+        annotators = tuple(sorted({item.strip() for item in annotator_ids if item.strip()}))
+        dimension_labels = tuple(sorted(dimensions, key=lambda item: item.dimension.value))
         diff_id = official_document_diff_id(diff)
         label_id = _semantic_label_id(
             diff_id=diff_id,
@@ -133,13 +131,13 @@ class CentralBankSemanticLabel:
             previous_version_id=diff.previous_version_id,
             current_version_id=diff.current_version_id,
             annotation_policy_version=annotation_policy_version,
-            annotator_ids=normalized_annotators,
+            annotator_ids=annotators,
             adjudicated=adjudicated,
             adjudicator_id=adjudicator_id,
             labeled_at=labeled_at,
             direction=direction,
             disposition=disposition,
-            dimensions=normalized_dimensions,
+            dimensions=dimension_labels,
         )
         return cls(
             label_id=label_id,
@@ -152,13 +150,13 @@ class CentralBankSemanticLabel:
             previous_version_id=diff.previous_version_id,
             current_version_id=diff.current_version_id,
             annotation_policy_version=annotation_policy_version,
-            annotator_ids=normalized_annotators,
+            annotator_ids=annotators,
             adjudicated=adjudicated,
             adjudicator_id=adjudicator_id,
             labeled_at=labeled_at,
             direction=direction,
             disposition=disposition,
-            dimensions=normalized_dimensions,
+            dimensions=dimension_labels,
         )
 
 
@@ -186,12 +184,11 @@ class DimensionSemanticMetrics:
     def __post_init__(self) -> None:
         if self.sample_size < 1:
             raise ValueError("dimension semantic metrics require a positive sample")
-        for value in (self.prediction_present_count, self.exact_direction_count, self.exact_disposition_count):
-            if not 0 <= value <= self.sample_size:
+        for count in (self.prediction_present_count, self.exact_direction_count, self.exact_disposition_count):
+            if not 0 <= count <= self.sample_size:
                 raise ValueError("dimension semantic metric count is outside its sample")
-        for value in (self.exact_direction_accuracy, self.exact_disposition_accuracy):
-            if not Decimal("0") <= value <= Decimal("1"):
-                raise ValueError("dimension semantic accuracy must be in [0,1]")
+        for rate in (self.exact_direction_accuracy, self.exact_disposition_accuracy):
+            _validate_rate(rate, "dimension semantic accuracy")
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,11 +207,9 @@ class SemanticCohortMetrics:
             raise ValueError("semantic cohort identity is required")
         if self.sample_size < 1:
             raise ValueError("semantic cohort sample must be positive")
-        for value in (self.exact_direction_accuracy, self.exact_disposition_accuracy, self.abstention_rate):
-            if not Decimal("0") <= value <= Decimal("1"):
-                raise ValueError("semantic cohort rate must be in [0,1]")
-        if self.false_direction_rate_when_called is not None and not Decimal("0") <= self.false_direction_rate_when_called <= Decimal("1"):
-            raise ValueError("semantic cohort false-direction rate must be in [0,1]")
+        for rate in (self.exact_direction_accuracy, self.exact_disposition_accuracy, self.abstention_rate):
+            _validate_rate(rate, "semantic cohort rate")
+        _validate_optional_rate(self.false_direction_rate_when_called, "semantic cohort false-direction rate")
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,21 +258,44 @@ class SemanticEvaluationReport:
             raise ValueError("semantic evaluation label IDs do not match evaluated sample")
         if len(self.excluded_unadjudicated_label_ids) != self.unadjudicated_label_records:
             raise ValueError("semantic evaluation unadjudicated exclusions are inconsistent")
-        for value in (self.exact_direction_accuracy, self.exact_disposition_accuracy, self.abstention_rate):
-            if not Decimal("0") <= value <= Decimal("1"):
-                raise ValueError("semantic evaluation rate must be in [0,1]")
+        for rate in (self.exact_direction_accuracy, self.exact_disposition_accuracy, self.abstention_rate):
+            _validate_rate(rate, "semantic evaluation rate")
         _validate_optional_rate(self.directional_truth_coverage, "directional truth coverage")
         _validate_optional_rate(self.directional_truth_exact_recall, "directional truth exact recall")
         _validate_optional_rate(self.false_direction_rate_when_called, "false direction rate")
         _validate_optional_rate(self.contradiction_recall, "contradiction recall")
         _validate_optional_rate(self.ambiguous_disposition_recall, "ambiguous disposition recall")
-        expected_id = _semantic_report_id(self)
-        if self.report_id != expected_id:
+        if self.report_id != _semantic_report_id(
+            implementation_version=self.implementation_version,
+            stance_ruleset_version=self.stance_ruleset_version,
+            annotation_policy_version=self.annotation_policy_version,
+            total_label_records=self.total_label_records,
+            adjudicated_label_records=self.adjudicated_label_records,
+            unadjudicated_label_records=self.unadjudicated_label_records,
+            evaluated_labels=self.evaluated_labels,
+            exact_direction_accuracy=self.exact_direction_accuracy,
+            exact_disposition_accuracy=self.exact_disposition_accuracy,
+            abstention_rate=self.abstention_rate,
+            directional_truth_count=self.directional_truth_count,
+            directional_truth_coverage=self.directional_truth_coverage,
+            directional_truth_exact_recall=self.directional_truth_exact_recall,
+            directional_call_count=self.directional_call_count,
+            false_direction_rate_when_called=self.false_direction_rate_when_called,
+            truth_contradictory_count=self.truth_contradictory_count,
+            contradiction_recall=self.contradiction_recall,
+            truth_ambiguous_disposition_count=self.truth_ambiguous_disposition_count,
+            ambiguous_disposition_recall=self.ambiguous_disposition_recall,
+            confusion=self.confusion,
+            dimensions=self.dimensions,
+            cohorts=self.cohorts,
+            evaluated_label_ids=self.evaluated_label_ids,
+            excluded_unadjudicated_label_ids=self.excluded_unadjudicated_label_ids,
+        ):
             raise ValueError("semantic evaluation report ID does not match its evidence payload")
 
 
 @dataclass(frozen=True, slots=True)
-class _EvaluatedSemanticCase:
+class _EvaluatedCase:
     label: CentralBankSemanticLabel
     current: OfficialDocumentVersion
     predicted_direction: StanceDirection
@@ -291,19 +309,11 @@ def official_document_diff_id(diff: OfficialDocumentDiff) -> str:
         "previous_version_id": diff.previous_version_id,
         "current_version_id": diff.current_version_id,
         "added": [
-            {
-                "side": item.side,
-                "paragraph_index": item.paragraph_index,
-                "text_sha256": item.text_sha256,
-            }
+            {"side": item.side, "paragraph_index": item.paragraph_index, "text_sha256": item.text_sha256}
             for item in diff.added
         ],
         "removed": [
-            {
-                "side": item.side,
-                "paragraph_index": item.paragraph_index,
-                "text_sha256": item.text_sha256,
-            }
+            {"side": item.side, "paragraph_index": item.paragraph_index, "text_sha256": item.text_sha256}
             for item in diff.removed
         ],
     }
@@ -314,18 +324,18 @@ def evaluate_semantic_labels(
     labels: Iterable[CentralBankSemanticLabel],
     versions: Iterable[OfficialDocumentVersion],
 ) -> SemanticEvaluationReport:
-    label_records = tuple(labels)
-    if not label_records:
+    records = tuple(labels)
+    if not records:
         raise ValueError("semantic evaluation requires a non-empty human label corpus")
-    if len({item.label_id for item in label_records}) != len(label_records):
+    if len({item.label_id for item in records}) != len(records):
         raise ValueError("semantic label corpus cannot contain duplicate label IDs")
     version_records = tuple(versions)
     version_by_id = {item.version_id: item for item in version_records}
     if len(version_by_id) != len(version_records):
         raise ValueError("semantic evaluation document versions cannot repeat version IDs")
 
-    adjudicated = tuple(item for item in label_records if item.adjudicated)
-    unadjudicated = tuple(item for item in label_records if not item.adjudicated)
+    adjudicated = tuple(item for item in records if item.adjudicated)
+    unadjudicated = tuple(item for item in records if not item.adjudicated)
     if not adjudicated:
         raise ValueError("semantic evaluation requires at least one adjudicated human label")
     if len({item.diff_id for item in adjudicated}) != len(adjudicated):
@@ -335,7 +345,7 @@ def evaluate_semantic_labels(
         raise ValueError("semantic evaluation cannot mix adjudicated annotation policy versions")
     annotation_policy_version = next(iter(policies))
 
-    cases: list[_EvaluatedSemanticCase] = []
+    cases: list[_EvaluatedCase] = []
     for label in adjudicated:
         current = version_by_id.get(label.current_version_id)
         previous = version_by_id.get(label.previous_version_id)
@@ -351,110 +361,114 @@ def evaluate_semantic_labels(
         prediction = extract_central_bank_stance(diff)
         if prediction.ruleset_version != STANCE_RULESET_VERSION:
             raise ValueError("semantic evaluation stance ruleset identity drifted unexpectedly")
-        predicted_dimensions = {
-            item.dimension: (item.direction, item.disposition)
-            for item in prediction.dimensions
-        }
         cases.append(
-            _EvaluatedSemanticCase(
+            _EvaluatedCase(
                 label=label,
                 current=current,
                 predicted_direction=prediction.direction,
                 predicted_disposition=prediction.disposition,
-                predicted_dimensions=predicted_dimensions,
+                predicted_dimensions={
+                    item.dimension: (item.direction, item.disposition)
+                    for item in prediction.dimensions
+                },
             )
         )
     cases.sort(key=lambda item: (item.current.available_at, item.label.label_id))
 
     total = len(cases)
-    exact_direction = sum(item.predicted_direction is item.label.direction for item in cases)
-    exact_disposition = sum(item.predicted_disposition is item.label.disposition for item in cases)
-    abstained = sum(item.predicted_disposition is EvidenceDisposition.ABSTAINED for item in cases)
+    exact_direction_count = sum(item.predicted_direction is item.label.direction for item in cases)
+    exact_disposition_count = sum(item.predicted_disposition is item.label.disposition for item in cases)
+    abstention_count = sum(item.predicted_disposition is EvidenceDisposition.ABSTAINED for item in cases)
     truth_directional = [item for item in cases if item.label.direction in _DIRECTIONAL]
-    directional_called_on_truth = [item for item in truth_directional if item.predicted_direction in _DIRECTIONAL]
-    exact_directional_truth = [item for item in truth_directional if item.predicted_direction is item.label.direction]
+    directional_truth_calls = [item for item in truth_directional if item.predicted_direction in _DIRECTIONAL]
+    directional_truth_exact = [item for item in truth_directional if item.predicted_direction is item.label.direction]
     directional_calls = [item for item in cases if item.predicted_direction in _DIRECTIONAL]
     false_directional_calls = [item for item in directional_calls if item.predicted_direction is not item.label.direction]
     truth_contradictory = [item for item in cases if item.label.direction is StanceDirection.CONTRADICTORY]
-    caught_contradictory = [item for item in truth_contradictory if item.predicted_direction is StanceDirection.CONTRADICTORY]
     truth_ambiguous = [item for item in cases if item.label.disposition is EvidenceDisposition.AMBIGUOUS]
-    caught_ambiguous = [item for item in truth_ambiguous if item.predicted_disposition is EvidenceDisposition.AMBIGUOUS]
 
     confusion_counts: dict[tuple[StanceDirection, StanceDirection], int] = {}
-    for item in cases:
-        key = (item.label.direction, item.predicted_direction)
+    for case in cases:
+        key = (case.label.direction, case.predicted_direction)
         confusion_counts[key] = confusion_counts.get(key, 0) + 1
     confusion = tuple(
         SemanticConfusionCell(truth, predicted, count)
-        for (truth, predicted), count in sorted(
-            confusion_counts.items(), key=lambda item: (item[0][0].value, item[0][1].value)
-        )
+        for (truth, predicted), count in sorted(confusion_counts.items(), key=lambda item: (item[0][0].value, item[0][1].value))
     )
     dimensions = _dimension_metrics(cases)
     cohorts = _cohort_metrics(cases)
-    evaluated_label_ids = tuple(item.label.label_id for item in cases)
+    evaluated_ids = tuple(item.label.label_id for item in cases)
     excluded_ids = tuple(sorted(item.label_id for item in unadjudicated))
 
-    provisional = SemanticEvaluationReport(
-        report_id="0" * 64,
+    exact_direction_accuracy = _ratio(exact_direction_count, total)
+    exact_disposition_accuracy = _ratio(exact_disposition_count, total)
+    abstention_rate = _ratio(abstention_count, total)
+    directional_truth_coverage = _optional_ratio(len(directional_truth_calls), len(truth_directional))
+    directional_truth_exact_recall = _optional_ratio(len(directional_truth_exact), len(truth_directional))
+    false_direction_rate_when_called = _optional_ratio(len(false_directional_calls), len(directional_calls))
+    contradiction_recall = _optional_ratio(
+        sum(item.predicted_direction is StanceDirection.CONTRADICTORY for item in truth_contradictory),
+        len(truth_contradictory),
+    )
+    ambiguous_disposition_recall = _optional_ratio(
+        sum(item.predicted_disposition is EvidenceDisposition.AMBIGUOUS for item in truth_ambiguous),
+        len(truth_ambiguous),
+    )
+    report_id = _semantic_report_id(
+        implementation_version=__version__,
+        stance_ruleset_version=STANCE_RULESET_VERSION,
+        annotation_policy_version=annotation_policy_version,
+        total_label_records=len(records),
+        adjudicated_label_records=len(adjudicated),
+        unadjudicated_label_records=len(unadjudicated),
+        evaluated_labels=total,
+        exact_direction_accuracy=exact_direction_accuracy,
+        exact_disposition_accuracy=exact_disposition_accuracy,
+        abstention_rate=abstention_rate,
+        directional_truth_count=len(truth_directional),
+        directional_truth_coverage=directional_truth_coverage,
+        directional_truth_exact_recall=directional_truth_exact_recall,
+        directional_call_count=len(directional_calls),
+        false_direction_rate_when_called=false_direction_rate_when_called,
+        truth_contradictory_count=len(truth_contradictory),
+        contradiction_recall=contradiction_recall,
+        truth_ambiguous_disposition_count=len(truth_ambiguous),
+        ambiguous_disposition_recall=ambiguous_disposition_recall,
+        confusion=confusion,
+        dimensions=dimensions,
+        cohorts=cohorts,
+        evaluated_label_ids=evaluated_ids,
+        excluded_unadjudicated_label_ids=excluded_ids,
+    )
+    return SemanticEvaluationReport(
+        report_id=report_id,
         schema_version=SEMANTIC_EVALUATION_SCHEMA_VERSION,
         research_only=True,
         execution_authority=False,
         implementation_version=__version__,
         stance_ruleset_version=STANCE_RULESET_VERSION,
         annotation_policy_version=annotation_policy_version,
-        total_label_records=len(label_records),
+        total_label_records=len(records),
         adjudicated_label_records=len(adjudicated),
         unadjudicated_label_records=len(unadjudicated),
         evaluated_labels=total,
-        exact_direction_accuracy=_ratio(exact_direction, total),
-        exact_disposition_accuracy=_ratio(exact_disposition, total),
-        abstention_rate=_ratio(abstained, total),
+        exact_direction_accuracy=exact_direction_accuracy,
+        exact_disposition_accuracy=exact_disposition_accuracy,
+        abstention_rate=abstention_rate,
         directional_truth_count=len(truth_directional),
-        directional_truth_coverage=_optional_ratio(len(directional_called_on_truth), len(truth_directional)),
-        directional_truth_exact_recall=_optional_ratio(len(exact_directional_truth), len(truth_directional)),
+        directional_truth_coverage=directional_truth_coverage,
+        directional_truth_exact_recall=directional_truth_exact_recall,
         directional_call_count=len(directional_calls),
-        false_direction_rate_when_called=_optional_ratio(len(false_directional_calls), len(directional_calls)),
+        false_direction_rate_when_called=false_direction_rate_when_called,
         truth_contradictory_count=len(truth_contradictory),
-        contradiction_recall=_optional_ratio(len(caught_contradictory), len(truth_contradictory)),
+        contradiction_recall=contradiction_recall,
         truth_ambiguous_disposition_count=len(truth_ambiguous),
-        ambiguous_disposition_recall=_optional_ratio(len(caught_ambiguous), len(truth_ambiguous)),
+        ambiguous_disposition_recall=ambiguous_disposition_recall,
         confusion=confusion,
         dimensions=dimensions,
         cohorts=cohorts,
-        evaluated_label_ids=evaluated_label_ids,
+        evaluated_label_ids=evaluated_ids,
         excluded_unadjudicated_label_ids=excluded_ids,
-    )
-    report_id = _semantic_report_id(provisional, ignore_report_id=True)
-    return SemanticEvaluationReport(
-        report_id=report_id,
-        schema_version=provisional.schema_version,
-        research_only=provisional.research_only,
-        execution_authority=provisional.execution_authority,
-        implementation_version=provisional.implementation_version,
-        stance_ruleset_version=provisional.stance_ruleset_version,
-        annotation_policy_version=provisional.annotation_policy_version,
-        total_label_records=provisional.total_label_records,
-        adjudicated_label_records=provisional.adjudicated_label_records,
-        unadjudicated_label_records=provisional.unadjudicated_label_records,
-        evaluated_labels=provisional.evaluated_labels,
-        exact_direction_accuracy=provisional.exact_direction_accuracy,
-        exact_disposition_accuracy=provisional.exact_disposition_accuracy,
-        abstention_rate=provisional.abstention_rate,
-        directional_truth_count=provisional.directional_truth_count,
-        directional_truth_coverage=provisional.directional_truth_coverage,
-        directional_truth_exact_recall=provisional.directional_truth_exact_recall,
-        directional_call_count=provisional.directional_call_count,
-        false_direction_rate_when_called=provisional.false_direction_rate_when_called,
-        truth_contradictory_count=provisional.truth_contradictory_count,
-        contradiction_recall=provisional.contradiction_recall,
-        truth_ambiguous_disposition_count=provisional.truth_ambiguous_disposition_count,
-        ambiguous_disposition_recall=provisional.ambiguous_disposition_recall,
-        confusion=provisional.confusion,
-        dimensions=provisional.dimensions,
-        cohorts=provisional.cohorts,
-        evaluated_label_ids=provisional.evaluated_label_ids,
-        excluded_unadjudicated_label_ids=provisional.excluded_unadjudicated_label_ids,
     )
 
 
@@ -473,14 +487,6 @@ def load_semantic_label_corpus(path: str | Path) -> tuple[CentralBankSemanticLab
             dimensions_raw = raw.get("dimensions", [])
             if not isinstance(dimensions_raw, list):
                 raise ValueError("dimensions must be a list")
-            dimensions = tuple(
-                DimensionSemanticLabel(
-                    dimension=PolicyDimension(item["dimension"]),
-                    direction=StanceDirection(item["direction"]),
-                    disposition=EvidenceDisposition(item["disposition"]),
-                )
-                for item in dimensions_raw
-            )
             annotators_raw = raw["annotator_ids"]
             if not isinstance(annotators_raw, list):
                 raise ValueError("annotator_ids must be a list")
@@ -497,11 +503,18 @@ def load_semantic_label_corpus(path: str | Path) -> tuple[CentralBankSemanticLab
                 annotation_policy_version=str(raw["annotation_policy_version"]),
                 annotator_ids=tuple(str(item) for item in annotators_raw),
                 adjudicated=_strict_bool(raw["adjudicated"], "adjudicated"),
-                adjudicator_id=(str(raw["adjudicator_id"]) if raw.get("adjudicator_id") is not None else None),
+                adjudicator_id=str(raw["adjudicator_id"]) if raw.get("adjudicator_id") is not None else None,
                 labeled_at=datetime.fromisoformat(str(raw["labeled_at"])),
                 direction=StanceDirection(raw["direction"]),
                 disposition=EvidenceDisposition(raw["disposition"]),
-                dimensions=dimensions,
+                dimensions=tuple(
+                    DimensionSemanticLabel(
+                        dimension=PolicyDimension(item["dimension"]),
+                        direction=StanceDirection(item["direction"]),
+                        disposition=EvidenceDisposition(item["disposition"]),
+                    )
+                    for item in dimensions_raw
+                ),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"semantic label JSONL line {line_number} is invalid: {exc}") from exc
@@ -511,25 +524,17 @@ def load_semantic_label_corpus(path: str | Path) -> tuple[CentralBankSemanticLab
     return tuple(labels)
 
 
-def _dimension_metrics(cases: list[_EvaluatedSemanticCase]) -> tuple[DimensionSemanticMetrics, ...]:
-    truth_by_dimension: dict[PolicyDimension, list[tuple[DimensionSemanticLabel, tuple[StanceDirection, EvidenceDisposition] | None]]] = {}
+def _dimension_metrics(cases: list[_EvaluatedCase]) -> tuple[DimensionSemanticMetrics, ...]:
+    grouped: dict[PolicyDimension, list[tuple[DimensionSemanticLabel, tuple[StanceDirection, EvidenceDisposition] | None]]] = {}
     for case in cases:
-        for label in case.label.dimensions:
-            truth_by_dimension.setdefault(label.dimension, []).append(
-                (label, case.predicted_dimensions.get(label.dimension))
-            )
+        for truth in case.label.dimensions:
+            grouped.setdefault(truth.dimension, []).append((truth, case.predicted_dimensions.get(truth.dimension)))
     result: list[DimensionSemanticMetrics] = []
-    for dimension, values in sorted(truth_by_dimension.items(), key=lambda item: item[0].value):
+    for dimension, values in sorted(grouped.items(), key=lambda item: item[0].value):
         sample = len(values)
         present = sum(prediction is not None for _, prediction in values)
-        direction_matches = sum(
-            prediction is not None and prediction[0] is truth.direction
-            for truth, prediction in values
-        )
-        disposition_matches = sum(
-            prediction is not None and prediction[1] is truth.disposition
-            for truth, prediction in values
-        )
+        direction_matches = sum(prediction is not None and prediction[0] is truth.direction for truth, prediction in values)
+        disposition_matches = sum(prediction is not None and prediction[1] is truth.disposition for truth, prediction in values)
         result.append(
             DimensionSemanticMetrics(
                 dimension=dimension,
@@ -544,17 +549,13 @@ def _dimension_metrics(cases: list[_EvaluatedSemanticCase]) -> tuple[DimensionSe
     return tuple(result)
 
 
-def _cohort_metrics(cases: list[_EvaluatedSemanticCase]) -> tuple[SemanticCohortMetrics, ...]:
-    buckets: dict[tuple[str, str, str], list[_EvaluatedSemanticCase]] = {}
+def _cohort_metrics(cases: list[_EvaluatedCase]) -> tuple[SemanticCohortMetrics, ...]:
+    grouped: dict[tuple[str, str, str], list[_EvaluatedCase]] = {}
     for case in cases:
-        key = (case.current.institution, case.current.document_type, case.current.family_id)
-        buckets.setdefault(key, []).append(case)
+        grouped.setdefault((case.current.institution, case.current.document_type, case.current.family_id), []).append(case)
     result: list[SemanticCohortMetrics] = []
-    for (institution, document_type, family_id), values in sorted(buckets.items(), key=lambda item: item[0]):
+    for (institution, document_type, family_id), values in sorted(grouped.items(), key=lambda item: item[0]):
         sample = len(values)
-        direction_matches = sum(item.predicted_direction is item.label.direction for item in values)
-        disposition_matches = sum(item.predicted_disposition is item.label.disposition for item in values)
-        abstained = sum(item.predicted_disposition is EvidenceDisposition.ABSTAINED for item in values)
         calls = [item for item in values if item.predicted_direction in _DIRECTIONAL]
         false_calls = [item for item in calls if item.predicted_direction is not item.label.direction]
         result.append(
@@ -563,27 +564,13 @@ def _cohort_metrics(cases: list[_EvaluatedSemanticCase]) -> tuple[SemanticCohort
                 document_type=document_type,
                 family_id=family_id,
                 sample_size=sample,
-                exact_direction_accuracy=_ratio(direction_matches, sample),
-                exact_disposition_accuracy=_ratio(disposition_matches, sample),
-                abstention_rate=_ratio(abstained, sample),
+                exact_direction_accuracy=_ratio(sum(item.predicted_direction is item.label.direction for item in values), sample),
+                exact_disposition_accuracy=_ratio(sum(item.predicted_disposition is item.label.disposition for item in values), sample),
+                abstention_rate=_ratio(sum(item.predicted_disposition is EvidenceDisposition.ABSTAINED for item in values), sample),
                 false_direction_rate_when_called=_optional_ratio(len(false_calls), len(calls)),
             )
         )
     return tuple(result)
-
-
-def _validate_direction_disposition(
-    direction: StanceDirection,
-    disposition: EvidenceDisposition,
-    *,
-    prefix: str,
-) -> None:
-    if direction is StanceDirection.CONTRADICTORY and disposition is not EvidenceDisposition.CONTRADICTORY:
-        raise ValueError(f"{prefix} contradictory direction requires contradictory disposition")
-    if disposition is EvidenceDisposition.CONTRADICTORY and direction is not StanceDirection.CONTRADICTORY:
-        raise ValueError(f"{prefix} contradictory disposition requires contradictory direction")
-    if disposition is EvidenceDisposition.ABSTAINED and direction is not StanceDirection.NEUTRAL:
-        raise ValueError(f"{prefix} abstained disposition requires neutral direction")
 
 
 def _semantic_label_id(
@@ -616,48 +603,66 @@ def _semantic_label_id(
         "direction": direction.value,
         "disposition": disposition.value,
         "dimensions": [
-            {
-                "dimension": item.dimension.value,
-                "direction": item.direction.value,
-                "disposition": item.disposition.value,
-            }
+            {"dimension": item.dimension.value, "direction": item.direction.value, "disposition": item.disposition.value}
             for item in dimensions
         ],
     }
     return hashlib.sha256(_canonical_json(payload)).hexdigest()
 
 
-def _semantic_report_id(report: SemanticEvaluationReport, *, ignore_report_id: bool = False) -> str:
+def _semantic_report_id(
+    *,
+    implementation_version: str,
+    stance_ruleset_version: str,
+    annotation_policy_version: str,
+    total_label_records: int,
+    adjudicated_label_records: int,
+    unadjudicated_label_records: int,
+    evaluated_labels: int,
+    exact_direction_accuracy: Decimal,
+    exact_disposition_accuracy: Decimal,
+    abstention_rate: Decimal,
+    directional_truth_count: int,
+    directional_truth_coverage: Decimal | None,
+    directional_truth_exact_recall: Decimal | None,
+    directional_call_count: int,
+    false_direction_rate_when_called: Decimal | None,
+    truth_contradictory_count: int,
+    contradiction_recall: Decimal | None,
+    truth_ambiguous_disposition_count: int,
+    ambiguous_disposition_recall: Decimal | None,
+    confusion: tuple[SemanticConfusionCell, ...],
+    dimensions: tuple[DimensionSemanticMetrics, ...],
+    cohorts: tuple[SemanticCohortMetrics, ...],
+    evaluated_label_ids: tuple[str, ...],
+    excluded_unadjudicated_label_ids: tuple[str, ...],
+) -> str:
     payload = {
-        "schema_version": report.schema_version,
-        "research_only": report.research_only,
-        "execution_authority": report.execution_authority,
-        "implementation_version": report.implementation_version,
-        "stance_ruleset_version": report.stance_ruleset_version,
-        "annotation_policy_version": report.annotation_policy_version,
-        "total_label_records": report.total_label_records,
-        "adjudicated_label_records": report.adjudicated_label_records,
-        "unadjudicated_label_records": report.unadjudicated_label_records,
-        "evaluated_labels": report.evaluated_labels,
-        "exact_direction_accuracy": str(report.exact_direction_accuracy),
-        "exact_disposition_accuracy": str(report.exact_disposition_accuracy),
-        "abstention_rate": str(report.abstention_rate),
-        "directional_truth_count": report.directional_truth_count,
-        "directional_truth_coverage": _decimal_or_none(report.directional_truth_coverage),
-        "directional_truth_exact_recall": _decimal_or_none(report.directional_truth_exact_recall),
-        "directional_call_count": report.directional_call_count,
-        "false_direction_rate_when_called": _decimal_or_none(report.false_direction_rate_when_called),
-        "truth_contradictory_count": report.truth_contradictory_count,
-        "contradiction_recall": _decimal_or_none(report.contradiction_recall),
-        "truth_ambiguous_disposition_count": report.truth_ambiguous_disposition_count,
-        "ambiguous_disposition_recall": _decimal_or_none(report.ambiguous_disposition_recall),
+        "schema_version": SEMANTIC_EVALUATION_SCHEMA_VERSION,
+        "research_only": True,
+        "execution_authority": False,
+        "implementation_version": implementation_version,
+        "stance_ruleset_version": stance_ruleset_version,
+        "annotation_policy_version": annotation_policy_version,
+        "total_label_records": total_label_records,
+        "adjudicated_label_records": adjudicated_label_records,
+        "unadjudicated_label_records": unadjudicated_label_records,
+        "evaluated_labels": evaluated_labels,
+        "exact_direction_accuracy": str(exact_direction_accuracy),
+        "exact_disposition_accuracy": str(exact_disposition_accuracy),
+        "abstention_rate": str(abstention_rate),
+        "directional_truth_count": directional_truth_count,
+        "directional_truth_coverage": _decimal_or_none(directional_truth_coverage),
+        "directional_truth_exact_recall": _decimal_or_none(directional_truth_exact_recall),
+        "directional_call_count": directional_call_count,
+        "false_direction_rate_when_called": _decimal_or_none(false_direction_rate_when_called),
+        "truth_contradictory_count": truth_contradictory_count,
+        "contradiction_recall": _decimal_or_none(contradiction_recall),
+        "truth_ambiguous_disposition_count": truth_ambiguous_disposition_count,
+        "ambiguous_disposition_recall": _decimal_or_none(ambiguous_disposition_recall),
         "confusion": [
-            {
-                "truth_direction": item.truth_direction.value,
-                "predicted_direction": item.predicted_direction.value,
-                "count": item.count,
-            }
-            for item in report.confusion
+            {"truth_direction": item.truth_direction.value, "predicted_direction": item.predicted_direction.value, "count": item.count}
+            for item in confusion
         ],
         "dimensions": [
             {
@@ -669,7 +674,7 @@ def _semantic_report_id(report: SemanticEvaluationReport, *, ignore_report_id: b
                 "exact_direction_accuracy": str(item.exact_direction_accuracy),
                 "exact_disposition_accuracy": str(item.exact_disposition_accuracy),
             }
-            for item in report.dimensions
+            for item in dimensions
         ],
         "cohorts": [
             {
@@ -682,14 +687,21 @@ def _semantic_report_id(report: SemanticEvaluationReport, *, ignore_report_id: b
                 "abstention_rate": str(item.abstention_rate),
                 "false_direction_rate_when_called": _decimal_or_none(item.false_direction_rate_when_called),
             }
-            for item in report.cohorts
+            for item in cohorts
         ],
-        "evaluated_label_ids": list(report.evaluated_label_ids),
-        "excluded_unadjudicated_label_ids": list(report.excluded_unadjudicated_label_ids),
+        "evaluated_label_ids": list(evaluated_label_ids),
+        "excluded_unadjudicated_label_ids": list(excluded_unadjudicated_label_ids),
     }
-    if not ignore_report_id:
-        _require_sha256(report.report_id, "semantic evaluation report_id")
     return hashlib.sha256(_canonical_json(payload)).hexdigest()
+
+
+def _validate_direction_disposition(direction: StanceDirection, disposition: EvidenceDisposition, prefix: str) -> None:
+    if direction is StanceDirection.CONTRADICTORY and disposition is not EvidenceDisposition.CONTRADICTORY:
+        raise ValueError(f"{prefix} contradictory direction requires contradictory disposition")
+    if disposition is EvidenceDisposition.CONTRADICTORY and direction is not StanceDirection.CONTRADICTORY:
+        raise ValueError(f"{prefix} contradictory disposition requires contradictory direction")
+    if disposition is EvidenceDisposition.ABSTAINED and direction is not StanceDirection.NEUTRAL:
+        raise ValueError(f"{prefix} abstained disposition requires neutral direction")
 
 
 def _canonical_json(value: object) -> bytes:
@@ -703,14 +715,17 @@ def _ratio(numerator: int, denominator: int) -> Decimal:
 
 
 def _optional_ratio(numerator: int, denominator: int) -> Decimal | None:
-    if denominator == 0:
-        return None
-    return _ratio(numerator, denominator)
+    return None if denominator == 0 else _ratio(numerator, denominator)
+
+
+def _validate_rate(value: Decimal, name: str) -> None:
+    if not Decimal("0") <= value <= Decimal("1"):
+        raise ValueError(f"{name} must be in [0,1]")
 
 
 def _validate_optional_rate(value: Decimal | None, name: str) -> None:
-    if value is not None and not Decimal("0") <= value <= Decimal("1"):
-        raise ValueError(f"{name} must be in [0,1]")
+    if value is not None:
+        _validate_rate(value, name)
 
 
 def _decimal_or_none(value: Decimal | None) -> str | None:
