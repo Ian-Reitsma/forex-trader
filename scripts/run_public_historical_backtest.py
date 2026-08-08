@@ -76,23 +76,19 @@ async def _download_news(
     return tuple(records)
 
 
-async def _download_ticks(
+async def _download_pair_ticks(
     *,
-    instruments: tuple[str, ...],
+    instrument: str,
     start: datetime,
     end: datetime,
     cache_dir: Path,
     concurrency_per_pair: int,
-) -> dict[str, tuple[HistoricalTick, ...]]:
-    async def load(instrument: str) -> tuple[str, tuple[HistoricalTick, ...]]:
-        client = DukascopyHistoryClient(
-            cache_dir=cache_dir / "dukascopy",
-            max_concurrency=concurrency_per_pair,
-        )
-        return instrument, await client.ticks(instrument, start, end)
-
-    results = await asyncio.gather(*(load(instrument) for instrument in instruments))
-    return dict(results)
+) -> tuple[HistoricalTick, ...]:
+    client = DukascopyHistoryClient(
+        cache_dir=cache_dir / "dukascopy",
+        max_concurrency=concurrency_per_pair,
+    )
+    return await client.ticks(instrument, start, end)
 
 
 def _baseline_filter(*, news: bool) -> StrategyFilter:
@@ -139,17 +135,19 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     strong_news = tuple(item for item in observations if strong_news_observation(item))
     fundamental_book = PointInTimeFundamentalBook(observations)
 
-    tick_history = await _download_ticks(
-        instruments=instruments,
-        start=start,
-        end=end,
-        cache_dir=cache_dir,
-        concurrency_per_pair=args.concurrency_per_pair,
-    )
     opportunities: list[TickBacktestOpportunity] = []
     per_instrument: dict[str, dict[str, int]] = {}
     for instrument in instruments:
-        ticks = tick_history[instrument]
+        # Deliberately process one complete pair at a time. Exact tick sequencing is
+        # preserved, but the runner never retains several major-pair tick tapes in
+        # memory simultaneously.
+        ticks = await _download_pair_ticks(
+            instrument=instrument,
+            start=start,
+            end=end,
+            cache_dir=cache_dir,
+            concurrency_per_pair=args.concurrency_per_pair,
+        )
         generated = generate_tick_opportunities(
             instrument=instrument,
             ticks=ticks,
@@ -164,6 +162,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
             "ticks": len(ticks),
             "opportunities": len(generated),
         }
+        del ticks
     opportunities.sort(key=lambda item: (item.decision_time, item.instrument))
     opportunity_tuple = tuple(opportunities)
 
@@ -222,7 +221,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
             "holdout": _jsonable(summarize_trades([item.trade for item in baseline_technical_holdout])),
             "holdout_risk_scenarios": _reports_for_risk_scenarios(baseline_technical_holdout),
         },
-        "gdelt_conflict_veto": {
+        "historical_news_conflict_veto": {
             "filter": _jsonable(baseline_news),
             "calibration": _jsonable(summarize_trades([item.trade for item in baseline_news_cal])),
             "holdout": _jsonable(summarize_trades([item.trade for item in baseline_news_holdout])),
