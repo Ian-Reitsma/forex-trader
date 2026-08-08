@@ -3,14 +3,17 @@ from __future__ import annotations
 import hmac
 from datetime import datetime
 from decimal import Decimal
+from typing import cast
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from forex_trader import __version__
 from forex_trader.application.engine import TradingEngine
+from forex_trader.application.operations import OperationalRepository, OperationalTelemetryService
 from forex_trader.application.readiness import assess_engine_readiness
 from forex_trader.domain.models import jsonable
+from forex_trader.domain.operations import OperationalCategory, OperationalSeverity
 
 
 class ReleaseInput(BaseModel):
@@ -66,6 +69,7 @@ def create_app(
     loopback development; the CLI never enables it for a non-loopback bind.
     """
     app = FastAPI(title="Forex Trader Control API", version=__version__)
+    operations = OperationalTelemetryService(cast(OperationalRepository, engine.repository))
 
     def require_auth(authorization: str | None = Header(default=None)) -> None:
         if api_token is None:
@@ -130,6 +134,35 @@ def create_app(
             "snapshot": jsonable(snapshot),
             "providers": jsonable(providers),
         }
+
+    @app.get("/v1/operations/summary", dependencies=protected)
+    def operations_summary(hours: int = 24) -> dict[str, object]:
+        try:
+            return jsonable(operations.snapshot(hours=hours))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/v1/operations/events", dependencies=protected)
+    def operations_events(
+        limit: int = 200,
+        hours: int = 24,
+        category: str | None = None,
+        severity: str | None = None,
+    ) -> list[dict[str, object]]:
+        try:
+            category_filter = None if category is None else OperationalCategory(category.lower())
+            severity_filter = None if severity is None else OperationalSeverity(severity.lower())
+            return [
+                jsonable(event)
+                for event in operations.events(
+                    limit=limit,
+                    hours=hours,
+                    category=category_filter,
+                    severity=severity_filter,
+                )
+            ]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/v1/promotion", dependencies=protected)
     def promotion() -> dict[str, object]:
