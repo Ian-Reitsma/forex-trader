@@ -121,18 +121,13 @@ def ablations(
     harmful: str | None = None,
     uncertain: str | None = None,
     raw_only: bool = False,
+    individual_only: bool = False,
     sample_size: int = 50,
     full_expectancy_r: Decimal = Decimal("0.25"),
 ) -> tuple[AblationEvidence, ...]:
-    rows = []
+    rows: list[AblationEvidence] = []
     for name in ABLATION_NAMES:
-        ablated = (
-            Decimal("0.35")
-            if name == harmful
-            else Decimal("0.29")
-            if name == uncertain
-            else Decimal("0.20")
-        )
+        ablated = Decimal("0.35") if name == harmful else Decimal("0.29") if name == uncertain else Decimal("0.20")
         kwargs: dict[str, object] = {}
         if not raw_only:
             if name == harmful:
@@ -153,9 +148,18 @@ def ablations(
                 "paired_losses": losses,
                 "paired_ties": ties,
                 "confidence": Decimal("0.90"),
-                "bootstrap_iterations": 2000,
+                "bootstrap_iterations": 5000,
                 "bootstrap_seed": 20260807,
             }
+            if not individual_only:
+                kwargs.update(
+                    {
+                        "interval_scope": "simultaneous_familywise",
+                        "multiple_testing_method": "paired_bootstrap_max_deviation_simultaneous",
+                        "familywise_confidence": Decimal("0.90"),
+                        "family_size": len(ABLATION_NAMES),
+                    }
+                )
         rows.append(
             AblationEvidence(
                 name=name,
@@ -200,12 +204,10 @@ def test_missing_ablations_and_replay_is_insufficient_not_shadow_candidate() -> 
     assert assessment.practice_authority_changed is False
 
 
-def test_complete_positive_bundle_can_only_nominate_shadow_candidate() -> None:
-    evidence = build_evidence(
-        ablation_rows=ablations(),
-        replay_evidence=replay("same", "same"),
+def test_complete_familywise_positive_bundle_can_only_nominate_shadow_candidate() -> None:
+    assessment = assess_research_promotion(
+        build_evidence(ablation_rows=ablations(), replay_evidence=replay("same", "same"))
     )
-    assessment = assess_research_promotion(evidence)
     assert assessment.disposition is ResearchPromotionDisposition.SHADOW_CANDIDATE
     assert assessment.shadow_candidate is True
     assert assessment.hard_failures == ()
@@ -213,12 +215,17 @@ def test_complete_positive_bundle_can_only_nominate_shadow_candidate() -> None:
     assert assessment.practice_authority_changed is False
 
 
+def test_individual_component_intervals_are_insufficient_for_multi_component_promotion() -> None:
+    assessment = assess_research_promotion(
+        build_evidence(ablation_rows=ablations(individual_only=True), replay_evidence=replay("same", "same"))
+    )
+    assert assessment.disposition is ResearchPromotionDisposition.INSUFFICIENT_EVIDENCE
+    assert all(f"ablation_multiple_testing_control:{name}" in assessment.missing_evidence for name in ABLATION_NAMES)
+
+
 def test_confidently_harmful_component_rejects_bundle() -> None:
     assessment = assess_research_promotion(
-        build_evidence(
-            ablation_rows=ablations(harmful="no_fundamentals"),
-            replay_evidence=replay("same", "same"),
-        )
+        build_evidence(ablation_rows=ablations(harmful="no_fundamentals"), replay_evidence=replay("same", "same"))
     )
     assert assessment.disposition is ResearchPromotionDisposition.REJECTED
     assert any("no_fundamentals" in item and "confidently harmful" in item for item in assessment.hard_failures)
@@ -226,10 +233,7 @@ def test_confidently_harmful_component_rejects_bundle() -> None:
 
 def test_uncertain_material_harm_is_insufficient_not_rejected() -> None:
     assessment = assess_research_promotion(
-        build_evidence(
-            ablation_rows=ablations(uncertain="no_flow"),
-            replay_evidence=replay("same", "same"),
-        )
+        build_evidence(ablation_rows=ablations(uncertain="no_flow"), replay_evidence=replay("same", "same"))
     )
     assert assessment.disposition is ResearchPromotionDisposition.INSUFFICIENT_EVIDENCE
     assert assessment.hard_failures == ()
@@ -238,10 +242,7 @@ def test_uncertain_material_harm_is_insufficient_not_rejected() -> None:
 
 def test_raw_mean_only_ablation_artifact_is_insufficient() -> None:
     assessment = assess_research_promotion(
-        build_evidence(
-            ablation_rows=ablations(raw_only=True),
-            replay_evidence=replay("same", "same"),
-        )
+        build_evidence(ablation_rows=ablations(raw_only=True), replay_evidence=replay("same", "same"))
     )
     assert assessment.disposition is ResearchPromotionDisposition.INSUFFICIENT_EVIDENCE
     assert all(f"ablation_uncertainty:{name}" in assessment.missing_evidence for name in ABLATION_NAMES)
@@ -249,10 +250,7 @@ def test_raw_mean_only_ablation_artifact_is_insufficient() -> None:
 
 def test_ablation_dataset_mismatch_rejects_bundle() -> None:
     assessment = assess_research_promotion(
-        build_evidence(
-            ablation_rows=ablations(dataset_id="different-dataset"),
-            replay_evidence=replay("same", "same"),
-        )
+        build_evidence(ablation_rows=ablations(dataset_id="different-dataset"), replay_evidence=replay("same", "same"))
     )
     assert assessment.disposition is ResearchPromotionDisposition.REJECTED
     assert any("dataset_id mismatch" in item for item in assessment.hard_failures)
@@ -260,40 +258,57 @@ def test_ablation_dataset_mismatch_rejects_bundle() -> None:
 
 def test_ablation_denominator_or_full_baseline_mismatch_rejects_bundle() -> None:
     wrong_count = assess_research_promotion(
-        build_evidence(
-            ablation_rows=ablations(sample_size=49),
-            replay_evidence=replay("same", "same"),
-        )
+        build_evidence(ablation_rows=ablations(sample_size=49), replay_evidence=replay("same", "same"))
     )
     assert wrong_count.disposition is ResearchPromotionDisposition.REJECTED
     assert any("sample_size 49 != untouched_test_trades 50" in item for item in wrong_count.hard_failures)
 
     wrong_full = assess_research_promotion(
-        build_evidence(
-            ablation_rows=ablations(full_expectancy_r=Decimal("0.24")),
-            replay_evidence=replay("same", "same"),
-        )
+        build_evidence(ablation_rows=ablations(full_expectancy_r=Decimal("0.24")), replay_evidence=replay("same", "same"))
     )
     assert wrong_full.disposition is ResearchPromotionDisposition.REJECTED
     assert any("full_expectancy_r 0.24" in item for item in wrong_full.hard_failures)
 
 
+def test_familywise_configuration_mismatch_rejects_bundle() -> None:
+    rows = list(ablations())
+    original = rows[0]
+    rows[0] = AblationEvidence(
+        name=original.name,
+        full_expectancy_r=original.full_expectancy_r,
+        ablated_expectancy_r=original.ablated_expectancy_r,
+        sample_size=original.sample_size,
+        dataset_id=original.dataset_id,
+        lower_confidence_component_increment_r=original.lower_confidence_component_increment_r,
+        upper_confidence_component_increment_r=original.upper_confidence_component_increment_r,
+        paired_wins=original.paired_wins,
+        paired_losses=original.paired_losses,
+        paired_ties=original.paired_ties,
+        confidence=original.confidence,
+        bootstrap_iterations=original.bootstrap_iterations,
+        bootstrap_seed=99,
+        interval_scope=original.interval_scope,
+        multiple_testing_method=original.multiple_testing_method,
+        familywise_confidence=original.familywise_confidence,
+        family_size=original.family_size,
+    )
+    assessment = assess_research_promotion(
+        build_evidence(ablation_rows=tuple(rows), replay_evidence=replay("same", "same"))
+    )
+    assert assessment.disposition is ResearchPromotionDisposition.REJECTED
+    assert "ablation family-wise configuration mismatch across required components" in assessment.hard_failures
+
+
 def test_nondeterministic_replay_rejects_bundle() -> None:
     assessment = assess_research_promotion(
-        build_evidence(
-            ablation_rows=ablations(),
-            replay_evidence=replay("first", "second"),
-        )
+        build_evidence(ablation_rows=ablations(), replay_evidence=replay("first", "second"))
     )
     assert assessment.disposition is ResearchPromotionDisposition.REJECTED
     assert "replay result hashes differ under the same manifest" in assessment.hard_failures
 
 
 def test_phase_d_change_requires_confirmed_paired_holdout() -> None:
-    evidence = build_evidence(
-        ablation_rows=ablations(),
-        replay_evidence=replay("same", "same"),
-    )
+    evidence = build_evidence(ablation_rows=ablations(), replay_evidence=replay("same", "same"))
     missing = assess_research_promotion(evidence, proposed_phase_d_policy="limit-0.25r-structural")
     assert missing.disposition is ResearchPromotionDisposition.INSUFFICIENT_EVIDENCE
     assert "phase_d_holdout:limit-0.25r-structural" in missing.missing_evidence
@@ -301,12 +316,7 @@ def test_phase_d_change_requires_confirmed_paired_holdout() -> None:
     confirmed_evidence = build_evidence(
         ablation_rows=ablations(),
         replay_evidence=replay("same", "same"),
-        phase_d=PhaseDHoldoutEvidence(
-            "limit-0.25r-structural",
-            True,
-            40,
-            Decimal("0.07"),
-        ),
+        phase_d=PhaseDHoldoutEvidence("limit-0.25r-structural", True, 40, Decimal("0.07")),
     )
     confirmed = assess_research_promotion(
         confirmed_evidence,
@@ -317,11 +327,7 @@ def test_phase_d_change_requires_confirmed_paired_holdout() -> None:
 
 def test_excess_provider_error_rate_rejects_otherwise_good_bundle() -> None:
     assessment = assess_research_promotion(
-        build_evidence(
-            ablation_rows=ablations(),
-            replay_evidence=replay("same", "same"),
-            errors=5,
-        )
+        build_evidence(ablation_rows=ablations(), replay_evidence=replay("same", "same"), errors=5)
     )
     assert assessment.disposition is ResearchPromotionDisposition.REJECTED
     assert any("decision_error_rate" in item for item in assessment.hard_failures)
@@ -340,8 +346,8 @@ def test_report_must_be_isolated_to_requested_setup_family() -> None:
         )
 
 
-def test_partial_uncertainty_contract_is_rejected_at_construction() -> None:
-    with pytest.raises(ValueError, match="supplied together"):
+def test_partial_uncertainty_and_family_contracts_are_rejected_at_construction() -> None:
+    with pytest.raises(ValueError, match="uncertainty fields"):
         AblationEvidence(
             name="no_flow",
             full_expectancy_r=Decimal("0.25"),
@@ -350,15 +356,18 @@ def test_partial_uncertainty_contract_is_rejected_at_construction() -> None:
             dataset_id=DATASET,
             lower_confidence_component_increment_r=Decimal("0.01"),
         )
+    with pytest.raises(ValueError, match="family-wise fields"):
+        AblationEvidence(
+            name="no_flow",
+            full_expectancy_r=Decimal("0.25"),
+            ablated_expectancy_r=Decimal("0.20"),
+            sample_size=50,
+            dataset_id=DATASET,
+            interval_scope="simultaneous_familywise",
+        )
 
 
 def test_bundle_digest_is_order_independent_for_ablations() -> None:
-    forward = build_evidence(
-        ablation_rows=ablations(),
-        replay_evidence=replay("same", "same"),
-    )
-    reverse = build_evidence(
-        ablation_rows=tuple(reversed(ablations())),
-        replay_evidence=replay("same", "same"),
-    )
+    forward = build_evidence(ablation_rows=ablations(), replay_evidence=replay("same", "same"))
+    reverse = build_evidence(ablation_rows=tuple(reversed(ablations())), replay_evidence=replay("same", "same"))
     assert forward.bundle_digest == reverse.bundle_digest

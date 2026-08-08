@@ -37,6 +37,7 @@ jobs:
           src/forex_trader/api/app.py
           src/forex_trader/application/campaign.py
           src/forex_trader/application/fx_engine.py
+          src/forex_trader/application/macro_ingestion.py
           src/forex_trader/application/readiness.py
           src/forex_trader/application/signal_capture.py
           src/forex_trader/application/sync.py
@@ -53,6 +54,8 @@ jobs:
           src/forex_trader/domain/technicals.py
           src/forex_trader/domain/zone_features.py
           src/forex_trader/infrastructure/advanced_repository.py
+          src/forex_trader/infrastructure/source_evidence_repository.py
+          src/forex_trader/ingestion/official_sources.py
           src/forex_trader/ingestion/providers.py
           src/forex_trader/intelligence/events.py
           src/forex_trader/research/ablation_maturity.py
@@ -81,6 +84,7 @@ jobs:
           tests/test_ablation_outcome_maturity.py
           tests/test_ablation_promotion_cli_uncertainty.py
           tests/test_campaign_decision_evidence.py
+          tests/test_macro_source_orchestration.py
           tests/test_paired_ablation_uncertainty.py
           tests/test_phase_abcd_context.py
           tests/test_phase_abcd_intelligence.py
@@ -98,11 +102,13 @@ jobs:
           tests/test_research_promotion_cli.py
           tests/test_research_promotion_evidence.py
           tests/test_shadow_ablation_capture.py
+          tests/test_version_identity.py
       - name: Strict Phase A-D typing
         run: >-
           python -m mypy --strict --follow-imports=silent
           src/forex_trader/application/campaign.py
           src/forex_trader/application/fx_engine.py
+          src/forex_trader/application/macro_ingestion.py
           src/forex_trader/application/signal_capture.py
           src/forex_trader/intelligence/events.py
           src/forex_trader/domain/component_confirmation.py
@@ -112,6 +118,8 @@ jobs:
           src/forex_trader/domain/setup_lifecycle.py
           src/forex_trader/domain/technicals.py
           src/forex_trader/domain/position_management.py
+          src/forex_trader/infrastructure/source_evidence_repository.py
+          src/forex_trader/ingestion/official_sources.py
           src/forex_trader/research/ablation_maturity.py
           src/forex_trader/research/ablation_runtime.py
           src/forex_trader/research/ablation_uncertainty.py

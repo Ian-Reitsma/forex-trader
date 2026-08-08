@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from forex_trader.research.ablation_uncertainty import (
+    paired_ablation_familywise_evidence,
     paired_ablation_uncertainty_evidence,
     write_paired_ablation_uncertainty_evidence,
 )
@@ -15,7 +16,7 @@ from forex_trader.research.ablations import AblationVariant, MaturedAblationOutc
 
 DATASET = "d" * 64
 PAYLOAD = "a" * 64
-POLICY = "policy-v0.7.9"
+POLICY = "policy-v0.7.10"
 
 
 def _outcomes(samples: int = 20) -> tuple[MaturedAblationOutcome, ...]:
@@ -81,7 +82,7 @@ def test_paired_uncertainty_is_deterministic_and_uses_full_minus_ablated_delta()
     assert (session.paired_wins, session.paired_losses, session.paired_ties) == (0, 0, 20)
 
 
-def test_uncertainty_artifact_serializes_method_configuration_and_counts(tmp_path) -> None:
+def test_individual_uncertainty_artifact_serializes_scope_and_counts(tmp_path) -> None:
     outcomes = _outcomes()
     evidence = paired_ablation_uncertainty_evidence(
         outcomes,
@@ -101,8 +102,11 @@ def test_uncertainty_artifact_serializes_method_configuration_and_counts(tmp_pat
     assert payload["execution_authority"] is False
     assert payload["uncertainty"] == {
         "method": "paired_bootstrap_mean_percentile",
+        "interval_scope": "individual_component",
         "delta_semantics": "full_realized_r_minus_ablated_realized_r",
         "confidence": "0.95",
+        "familywise_confidence": None,
+        "family_size": None,
         "bootstrap_iterations": 1200,
         "bootstrap_seed": 42,
     }
@@ -111,6 +115,33 @@ def test_uncertainty_artifact_serializes_method_configuration_and_counts(tmp_pat
     assert row["component_increment_r"] == "0.10"
     assert row["paired_wins"] == 20
     assert row["lower_confidence_component_increment_r"] == "0.10"
+
+
+def test_familywise_uncertainty_uses_one_simultaneous_width_and_serializes_family(tmp_path) -> None:
+    outcomes = _outcomes()
+    evidence = paired_ablation_familywise_evidence(
+        outcomes,
+        primary_dataset_id=DATASET,
+        familywise_confidence=Decimal("0.90"),
+        bootstrap_iterations=1000,
+        bootstrap_seed=17,
+    )
+    widths = {
+        item.upper_confidence_component_increment_r - item.component_increment_r
+        for item in evidence
+    }
+    assert len(widths) == 1
+    assert all(item.interval_scope == "simultaneous_familywise" for item in evidence)
+    assert all(item.multiple_testing_method == "paired_bootstrap_max_deviation_simultaneous" for item in evidence)
+    assert all(item.familywise_confidence == Decimal("0.90") for item in evidence)
+    assert all(item.family_size == 5 for item in evidence)
+
+    output = tmp_path / "familywise.json"
+    write_paired_ablation_uncertainty_evidence(output, evidence, artifact_id=paired_artifact_id(outcomes))
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["uncertainty"]["interval_scope"] == "simultaneous_familywise"
+    assert payload["uncertainty"]["familywise_confidence"] == "0.90"
+    assert payload["uncertainty"]["family_size"] == 5
 
 
 def test_invalid_bootstrap_configuration_fails_closed() -> None:
@@ -127,11 +158,23 @@ def test_invalid_bootstrap_configuration_fails_closed() -> None:
             primary_dataset_id=DATASET,
             bootstrap_iterations=99,
         )
+    with pytest.raises(ValueError, match="familywise_confidence"):
+        paired_ablation_familywise_evidence(
+            outcomes,
+            primary_dataset_id=DATASET,
+            familywise_confidence=Decimal("1"),
+        )
+    with pytest.raises(ValueError, match="bootstrap_iterations"):
+        paired_ablation_familywise_evidence(
+            outcomes,
+            primary_dataset_id=DATASET,
+            bootstrap_iterations=99,
+        )
 
 
-def test_assembler_exposes_deterministic_bootstrap_controls() -> None:
+def test_assembler_exposes_deterministic_familywise_bootstrap_controls() -> None:
     text = Path("scripts/assemble_paired_ablations.py").read_text(encoding="utf-8")
-    assert "--confidence" in text
+    assert "--familywise-confidence" in text
     assert "--bootstrap-iterations" in text
     assert "--bootstrap-seed" in text
-    assert "paired_ablation_uncertainty_evidence" in text
+    assert "paired_ablation_familywise_evidence" in text
