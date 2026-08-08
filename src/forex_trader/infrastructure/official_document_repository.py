@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
+from typing import cast
 
 from forex_trader.intelligence.official_documents import OfficialDocumentVersion
 
@@ -141,7 +142,7 @@ class OfficialDocumentRepository:
         return self._from_row(row) if row is not None else None
 
     def _latest_row(self, family_id: str) -> sqlite3.Row | None:
-        return self._connection.execute(
+        row = self._connection.execute(
             """
             SELECT * FROM official_document_versions
             WHERE family_id = ?
@@ -149,6 +150,7 @@ class OfficialDocumentRepository:
             """,
             (family_id,),
         ).fetchone()
+        return cast(sqlite3.Row | None, row)
 
     @staticmethod
     def _from_row(row: sqlite3.Row) -> OfficialDocumentVersion:
