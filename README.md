@@ -4,7 +4,7 @@ A Practice-only FX research and execution platform built around market location,
 
 The project is **not** a promise of profitability and is **not** approved for live-money trading. OANDA integration is locked to fxTrade Practice endpoints.
 
-## Current release: v0.7.17
+## Current release: v0.7.18
 
 The deployable decision path remains structure-first:
 
@@ -30,6 +30,30 @@ reconciliation + protection verification + persistent uncertainty halt
 
 EMA, RSI and ATR remain secondary diagnostics rather than substitutes for location, liquidity, and structure. Spot broker tick activity is explicitly a low-confidence activity proxy, not centralized institutional footprint/delta data.
 
+## v0.7.18: chronological family-wise central-bank stance statistics
+
+v0.7.18 adds the independent statistical-validation policy for the v0.7.16 research-only FX reaction panels. It does **not** claim that real stance outcomes have passed this gate and it does not grant runtime or execution authority.
+
+The inference policy is frozen before real evaluation: horizons `(5, 15, 60, 240)`, primary horizon 60 minutes, first two-thirds chronological calibration/final one-third untouched holdout, minimum 24 directional events with 16 calibration and 8 holdout, minimum 80% observed-event coverage, 90% simultaneous family-wise confidence, 5,000 joint event-level bootstrap iterations, a required timezone-aware frozen `as_of`, and the fixed 300-second source baseline-delay policy.
+
+Each bootstrap iteration resamples document events once and applies the same resample vector to all four horizons, then takes the maximum absolute mean deviation across the family. This preserves cross-horizon dependence and prevents post-hoc selection of whichever horizon happens to look best.
+
+The strongest possible state is `informational_signal_candidate`, and only when the untouched 60-minute simultaneous lower mean bound is above zero. If the 60-minute simultaneous upper bound is below zero the result is `rejected`; otherwise it is `insufficient_evidence`. Strong secondary horizons cannot override the fixed primary result.
+
+The source remains `completed_midpoint_candle_open_proxy_not_execution`. A favorable result would be informational market-reaction evidence only—not semantic truth, causal attribution, executable P/L, or after-cost expectancy.
+
+```bash
+python scripts/validate_central_bank_stance_statistics.py \
+  <official-document-database> \
+  <candle-archive.jsonl> \
+  --family-id fed_fomc_statement \
+  --instrument EUR_USD \
+  --as-of 2026-08-08T12:00:00+00:00 \
+  --output stance-statistical-validation.json
+```
+
+See `docs/44_V0_7_18_CENTRAL_BANK_STANCE_STATISTICS.md`.
+
 ## v0.7.17: source-bound central-bank semantic validation
 
 v0.7.17 adds the human-ground-truth contract and offline evaluator required to test the v0.7.15 stance extractor semantically. It does **not** claim that semantic validation has passed, and it does not feed stance into deployable fundamentals.
@@ -38,9 +62,7 @@ v0.7.17 adds the human-ground-truth contract and offline evaluator required to t
 
 The evaluator reconstructs every labeled diff from the durable official-document database before scoring it. Missing versions, lineage mismatches, source-diff hash mismatches, duplicate adjudicated truth, and mixed annotation-policy versions fail closed.
 
-`SemanticEvaluationReport` records exact direction/disposition accuracy, abstention, directional coverage/recall, false directional-call rate, contradiction/ambiguity recall, a direction confusion matrix, per-dimension metrics, and institution/document-family cohorts. The report SHA binds the implementation version, stance ruleset, annotation policy, metrics, evaluated label IDs, and unadjudicated exclusions.
-
-Market outcomes are never used as linguistic ground truth. The repository contains synthetic test labels only; no real expert-labeled semantic result is claimed.
+`SemanticEvaluationReport` records exact direction/disposition accuracy, abstention, directional coverage/recall, false directional-call rate, contradiction/ambiguity recall, a direction confusion matrix, per-dimension metrics, and institution/document-family cohorts. Market outcomes are never used as linguistic ground truth. The repository contains synthetic test labels only; no real expert-labeled semantic result is claimed.
 
 ```bash
 python scripts/evaluate_central_bank_stance_semantics.py \
@@ -53,7 +75,7 @@ See `docs/43_V0_7_17_CENTRAL_BANK_SEMANTIC_VALIDATION.md`.
 
 ## Central-bank evidence chain
 
-The research chain now separates source integrity, interpretation, semantic truth, and market response:
+The research chain now separates source integrity, interpretation, semantic truth, and market-response statistics:
 
 ```text
 first-party Fed/ECB discovery
@@ -66,9 +88,9 @@ source-backed current-vs-prior paragraph diff
         ↓
 v0.7.15 deterministic research-only stance artifact
        ↙                                      ↘
-v0.7.17 human semantic evaluation      v0.7.16 FX reaction outcomes
+v0.7.17 human semantic evaluation      v0.7.16 FX reaction panels
        ↓                                      ↓
-semantic evidence                      statistical market evidence
+semantic evidence                      v0.7.18 family-wise statistics
                  \                    /
                   independent gates
                         ↓
@@ -82,8 +104,9 @@ Recent milestone documents:
 - `docs/39_V0_7_13_OFFICIAL_DOCUMENT_DISCOVERY.md` — first-party Federal Reserve and ECB feed discovery with external-link rejection.
 - `docs/40_V0_7_14_OFFICIAL_DOCUMENT_EVIDENCE.md` — raw official body retention, deterministic visible text, lineage, and exact paragraph diffs.
 - `docs/41_V0_7_15_CENTRAL_BANK_STANCE_EVIDENCE.md` — source-span-bound research stance with negation/uncertainty/conditional/contradiction handling.
-- `docs/42_V0_7_16_CENTRAL_BANK_STANCE_OUTCOMES.md` — complete-horizon, point-in-time FX market-reaction panels; midpoint proxy, not execution.
+- `docs/42_V0_7_16_CENTRAL_BANK_STANCE_OUTCOMES.md` — complete-horizon point-in-time FX reaction panels; midpoint proxy, not execution.
 - `docs/43_V0_7_17_CENTRAL_BANK_SEMANTIC_VALIDATION.md` — human label provenance and semantic evaluation contract.
+- `docs/44_V0_7_18_CENTRAL_BANK_STANCE_STATISTICS.md` — frozen chronological family-wise market-reaction inference.
 
 ## Research evidence and component attribution
 
@@ -142,9 +165,9 @@ See `docs/17_OANDA_PAPER_SETUP.md` and `docs/25_PRACTICE_CAMPAIGN.md`.
 
 ## Validation boundary
 
-CI validates editable installation/compilation, dependency integrity, secret scanning, explicit Ruff checks, strict mypy on deterministic production/research/provider/document/stance/outcome/semantic paths, the full branch-aware pytest suite with an enforced 85% floor, and an executed protected simulation paper-order smoke on Python 3.11 and 3.13.
+CI validates editable installation/compilation, dependency integrity, secret scanning, explicit Ruff checks, strict mypy on deterministic production/research/provider/document/stance/outcome/semantic/statistical paths, the full branch-aware pytest suite with an enforced 85% floor, and an executed protected simulation paper-order smoke on Python 3.11 and 3.13.
 
-Software CI does **not** prove authenticated broker behavior, public-provider availability, stance-model semantic validity, causal event impact, executable stance expectancy, or profitability.
+Software CI does **not** prove authenticated broker behavior, public-provider availability, stance-model semantic validity, causal event impact, real-world statistical edge, executable stance expectancy, or profitability.
 
 ## Deliberate boundaries
 
@@ -158,10 +181,11 @@ The repository does not:
 - trust external/mirror links because they appear in an official feed;
 - infer same-document-family identity from title/text similarity;
 - treat central-bank stance evidence quality as calibrated probability;
-- use v0.7.16 market direction as semantic ground truth;
-- feed v0.7.15-v0.7.17 stance research into deployable signal fusion;
+- use market direction as semantic ground truth;
+- let a favorable secondary horizon replace the predeclared 60-minute statistical primary;
+- feed v0.7.15-v0.7.18 stance research into deployable signal fusion;
 - treat favorable midpoint direction as executable profit;
 - allow offline research promotion to grant Practice authority;
 - allow paired research ablations to submit broker orders.
 
-The next central-bank evidence requirement is a **real**, independently human-reviewed and adjudicated corpus evaluated on a predeclared holdout. In parallel, v0.7.16 market outcomes need chronological uncertainty analysis with simultaneous treatment of the full 5/15/60/240-minute horizon family. Only if semantic and statistical validation both survive should after-cost execution research be considered. A real licensed consensus/calendar adapter is still required once a licensed provider is selected outside Git.
+The next evidence requirement is real data, not another synthetic success claim: a genuinely independent human-reviewed/adjudicated semantic corpus for v0.7.17 and a real point-in-time stance-outcome sample evaluated with the frozen v0.7.18 policy. Only if both gates survive should an after-cost execution study be considered. A real licensed consensus/calendar adapter is still required once a licensed provider is selected outside Git.
