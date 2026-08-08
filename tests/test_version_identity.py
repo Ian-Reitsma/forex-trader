@@ -13,7 +13,7 @@ from forex_trader.application.campaign_policy import (
 
 
 def test_runtime_and_installed_distribution_versions_match() -> None:
-    assert __version__ == "0.7.22"
+    assert __version__ == "0.7.23"
     assert distribution_version("forex-trader") == __version__
 
 
@@ -31,6 +31,7 @@ def test_campaign_policy_identity_contains_implementation_version(engine, monkey
 
 
 def test_build_revision_changes_campaign_fingerprint(engine, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("GITHUB_SHA", "github-sha")
     monkeypatch.setenv("FOREX_BUILD_REVISION", "abc123")
     first = campaign_policy_context(engine)
     monkeypatch.setenv("FOREX_BUILD_REVISION", "def456")
