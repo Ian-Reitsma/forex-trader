@@ -15,7 +15,11 @@ from forex_trader.research.official_news_history import (
     OfficialCentralBankHistoryClient,
     official_news_observations,
 )
-from forex_trader.research.public_history import currencies_for_instruments, utc_range
+from forex_trader.research.public_history import (
+    HistoricalNewsRecord,
+    currencies_for_instruments,
+    utc_range,
+)
 from forex_trader.research.resilient_tick_history import ResilientDukascopyHistoryClient
 from forex_trader.research.scalp_target import (
     FrozenScalpTargetResult,
@@ -124,7 +128,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     news_client = OfficialCentralBankHistoryClient(cache_dir=cache_dir / "official-news")
-    news_records = []
+    news_records: list[HistoricalNewsRecord] = []
     for currency in currencies:
         news_records.extend(await news_client.records((currency,), development_start, holdout_end))
     observations = official_news_observations(tuple(news_records))
