@@ -4,7 +4,7 @@ A Practice-only FX research and execution platform built around market location,
 
 The project is **not** a promise of profitability and is **not** approved for live-money trading. OANDA integration is locked to fxTrade Practice endpoints.
 
-## Current release: v0.7.18
+## Current release: v0.7.22
 
 The deployable decision path remains structure-first:
 
@@ -29,6 +29,45 @@ reconciliation + protection verification + persistent uncertainty halt
 ```
 
 EMA, RSI and ATR remain secondary diagnostics rather than substitutes for location, liquidity, and structure. Spot broker tick activity is explicitly a low-confidence activity proxy, not centralized institutional footprint/delta data.
+
+## v0.7.22: sealed central-bank semantic calibration / holdout
+
+v0.7.22 adds the missing independent holdout boundary for the v0.7.19 blinded human-annotation workflow. It does **not** define a semantic pass threshold, claim that the v0.7.15 stance extractor is semantically valid, or grant runtime/execution authority.
+
+One complete frozen annotation batch is split deterministically in chronological order: the first `floor(2N/3)` packets are calibration and the final one-third are holdout. The split has no random seed, stratification option, user-selectable ratio, or best-looking partition selector. An immutable manifest binds the source batch, family, annotation policy, `as_of`, packet denominator, and exact ordered packet IDs in both partitions.
+
+Calibration and holdout are emitted as normal v0.7.19 annotation batches so the existing blinded reviewer/adjudicator tooling can be reused without a second truth schema. Partition finalization still reconstructs the **complete** official-document source batch before accepting either subset, then rejects partition swaps, cross-partition submissions/adjudications, incomplete packets, cherry-picked reviewer submissions, source drift, or manifest tampering.
+
+“Sealed holdout” is a process/data-access boundary around **human-reviewed/adjudicated truth**, not encryption of public central-bank documents. Semantic acceptance criteria must be selected using calibration labels only, then frozen with the extractor/ruleset/evaluator identity before holdout truth is collected/opened and evaluated once.
+
+```bash
+python scripts/create_central_bank_semantic_holdout.py \
+  blinded-annotation-batch.json \
+  --manifest-output semantic-holdout-manifest.json \
+  --calibration-output semantic-calibration-batch.json \
+  --holdout-output semantic-holdout-batch.json
+
+python scripts/finalize_central_bank_semantic_partition.py \
+  <official-document-database> \
+  blinded-annotation-batch.json \
+  semantic-holdout-manifest.json \
+  semantic-calibration-batch.json \
+  calibration-reviewer-submissions.jsonl \
+  calibration-adjudications.jsonl \
+  --partition calibration \
+  --labels-output calibration-semantic-labels.jsonl \
+  --audit-output calibration-partition-audit.jsonl
+```
+
+See `docs/47_V0_7_22_SEMANTIC_HOLDOUT.md` and `docs/48_V0_7_22_RELEASE_MARKER.md`.
+
+## v0.7.19: blinded central-bank semantic annotation
+
+v0.7.19 operationalizes independent human-label collection without exposing stance-model predictions, rule hits, evidence quality, market outcomes, or trading results to reviewers. Frozen batch export is source-complete at one explicit `as_of`; every packet binds exact prior/current official text, provenance, version IDs, paragraph diffs, hashes, and annotation-policy identity.
+
+Each packet requires at least two independent pseudonymous reviewers and an independent adjudicator. Finalization reconstructs the frozen official-document batch, requires adjudication to account for every supplied reviewer submission, and emits the existing v0.7.17 semantic-label schema plus a separate disagreement audit. The repository still bundles no real human semantic corpus.
+
+See `docs/45_V0_7_19_BLINDED_ANNOTATION_WORKFLOW.md`.
 
 ## v0.7.18: chronological family-wise central-bank stance statistics
 
@@ -75,7 +114,7 @@ See `docs/43_V0_7_17_CENTRAL_BANK_SEMANTIC_VALIDATION.md`.
 
 ## Central-bank evidence chain
 
-The research chain now separates source integrity, interpretation, semantic truth, and market-response statistics:
+The research chain now separates source integrity, blinded truth collection, semantic evaluation, and market-response statistics:
 
 ```text
 first-party Fed/ECB discovery
@@ -87,14 +126,21 @@ explicit same-family version lineage
 source-backed current-vs-prior paragraph diff
         ↓
 v0.7.15 deterministic research-only stance artifact
-       ↙                                      ↘
-v0.7.17 human semantic evaluation      v0.7.16 FX reaction panels
-       ↓                                      ↓
-semantic evidence                      v0.7.18 family-wise statistics
-                 \                    /
-                  independent gates
-                        ↓
-              no runtime authority yet
+        ↓ model-blinded source packets
+v0.7.19 independent human annotation
+        ↓
+v0.7.22 sealed calibration / holdout truth boundary
+        ↓
+v0.7.17 semantic evaluation of adjudicated labels
+
+independently:
+v0.7.16 FX reaction panels
+        ↓
+v0.7.18 family-wise market-reaction statistics
+
+semantic gate + market-response gate
+        ↓
+no runtime authority yet
 ```
 
 Recent milestone documents:
@@ -107,6 +153,9 @@ Recent milestone documents:
 - `docs/42_V0_7_16_CENTRAL_BANK_STANCE_OUTCOMES.md` — complete-horizon point-in-time FX reaction panels; midpoint proxy, not execution.
 - `docs/43_V0_7_17_CENTRAL_BANK_SEMANTIC_VALIDATION.md` — human label provenance and semantic evaluation contract.
 - `docs/44_V0_7_18_CENTRAL_BANK_STANCE_STATISTICS.md` — frozen chronological family-wise market-reaction inference.
+- `docs/45_V0_7_19_BLINDED_ANNOTATION_WORKFLOW.md` — model/outcome-blinded source-complete human annotation and adjudication.
+- `docs/47_V0_7_22_SEMANTIC_HOLDOUT.md` — immutable chronological semantic calibration/holdout partition and anti-leakage workflow.
+- `docs/48_V0_7_22_RELEASE_MARKER.md` — release identity and authority boundary.
 
 ## Research evidence and component attribution
 
@@ -167,7 +216,9 @@ See `docs/17_OANDA_PAPER_SETUP.md` and `docs/25_PRACTICE_CAMPAIGN.md`.
 
 CI validates editable installation/compilation, dependency integrity, secret scanning, explicit Ruff checks, strict mypy on deterministic production/research/provider/document/stance/outcome/semantic/statistical paths, the full branch-aware pytest suite with an enforced 85% floor, and an executed protected simulation paper-order smoke on Python 3.11 and 3.13.
 
-Software CI does **not** prove authenticated broker behavior, public-provider availability, stance-model semantic validity, causal event impact, real-world statistical edge, executable stance expectancy, or profitability.
+The separate `Annotation integrity` workflow directly lints, strict-types, and regression-tests the blinded annotation and semantic-holdout modules/operator paths on Python 3.11 and 3.13.
+
+Software CI does **not** prove authenticated broker behavior, public-provider availability, human reviewer quality, stance-model semantic validity, causal event impact, real-world statistical edge, executable stance expectancy, or profitability.
 
 ## Deliberate boundaries
 
@@ -182,10 +233,13 @@ The repository does not:
 - infer same-document-family identity from title/text similarity;
 - treat central-bank stance evidence quality as calibrated probability;
 - use market direction as semantic ground truth;
+- expose stance-model predictions or market outcomes to the supported blinded-review packet;
+- let holdout truth determine semantic acceptance thresholds;
+- claim a semantic acceptance threshold before real calibration evidence exists;
 - let a favorable secondary horizon replace the predeclared 60-minute statistical primary;
-- feed v0.7.15-v0.7.18 stance research into deployable signal fusion;
+- feed v0.7.15-v0.7.22 stance/semantic research into deployable signal fusion;
 - treat favorable midpoint direction as executable profit;
 - allow offline research promotion to grant Practice authority;
 - allow paired research ablations to submit broker orders.
 
-The next evidence requirement is real data, not another synthetic success claim: a genuinely independent human-reviewed/adjudicated semantic corpus for v0.7.17 and a real point-in-time stance-outcome sample evaluated with the frozen v0.7.18 policy. Only if both gates survive should an after-cost execution study be considered. A real licensed consensus/calendar adapter is still required once a licensed provider is selected outside Git.
+The next semantic evidence requirement is real independently reviewed calibration data, not another synthetic success claim. Calibration labels should be evaluated under v0.7.17, semantic acceptance criteria should then be predeclared and frozen, and only afterward should holdout truth be finalized for one independent evaluation. Separately, a real point-in-time stance-outcome sample must survive the frozen v0.7.18 market-reaction policy. Only if both independent gates survive should an after-cost execution study be considered. A real licensed consensus/calendar adapter is still required once a licensed provider is selected outside Git.
