@@ -275,7 +275,7 @@ def test_generate_opportunities_uses_quote_after_signal_bar(monkeypatch) -> None
             displacement=True,
             reward_risk=Decimal("1.9"),
             setup_family="sweep_reclaim",
-            setup_state="confirmed",
+            setup_state="entry_confirmed",
             structure_shift=True,
             retest_confirmed=True,
             location_score=Decimal("0.8"),
