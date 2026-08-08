@@ -89,6 +89,8 @@ class OperationalSnapshot:
 class OperationalPolicy:
     provider_unavailable_is_critical: bool = True
     provider_degraded_is_warning: bool = True
+    provider_rate_limited_is_warning: bool = True
+    provider_runtime_error_is_error: bool = True
     execution_unknown_is_critical: bool = True
     reconciliation_not_ready_is_critical: bool = True
     active_halt_is_critical: bool = True
@@ -124,7 +126,10 @@ class OperationalPolicy:
         risk_dispositions: Counter[str] = Counter()
         risk_reasons: Counter[str] = Counter()
         execution_statuses: Counter[str] = Counter()
-        provider_states: dict[str, tuple[datetime, str]] = {}
+        provider_states: dict[
+            str,
+            tuple[datetime, str, bool, OperationalSeverity],
+        ] = {}
         evaluation_errors = 0
 
         for event in recent:
@@ -161,7 +166,12 @@ class OperationalPolicy:
                 if provider and state:
                     previous = provider_states.get(provider)
                     if previous is None or event.observed_at > previous[0]:
-                        provider_states[provider] = (event.observed_at, state)
+                        provider_states[provider] = (
+                            event.observed_at,
+                            state,
+                            bool(payload.get("rate_limited")),
+                            event.severity,
+                        )
 
         alerts: list[OperationalAlert] = []
         if halt_rows and self.active_halt_is_critical:
@@ -196,7 +206,7 @@ class OperationalPolicy:
                     unresolved_execution,
                 )
             )
-        for provider, (_, state) in sorted(provider_states.items()):
+        for provider, (_, state, rate_limited, provider_severity) in sorted(provider_states.items()):
             if state == "unavailable" and self.provider_unavailable_is_critical:
                 alerts.append(
                     OperationalAlert(
@@ -206,12 +216,43 @@ class OperationalPolicy:
                         source=provider,
                     )
                 )
+            elif state == "error" and self.provider_runtime_error_is_error:
+                alerts.append(
+                    OperationalAlert(
+                        "PROVIDER_RUNTIME_ERROR",
+                        OperationalSeverity.ERROR,
+                        f"provider {provider} recorded a runtime error",
+                        source=provider,
+                    )
+                )
             elif state == "degraded" and self.provider_degraded_is_warning:
                 alerts.append(
                     OperationalAlert(
                         "PROVIDER_DEGRADED",
                         OperationalSeverity.WARNING,
                         f"provider {provider} is degraded",
+                        source=provider,
+                    )
+                )
+            if rate_limited and self.provider_rate_limited_is_warning:
+                alerts.append(
+                    OperationalAlert(
+                        "PROVIDER_RATE_LIMITED",
+                        OperationalSeverity.WARNING,
+                        f"provider {provider} is rate limited",
+                        source=provider,
+                    )
+                )
+            if (
+                provider_severity is OperationalSeverity.ERROR
+                and state not in {"error", "unavailable"}
+                and self.provider_runtime_error_is_error
+            ):
+                alerts.append(
+                    OperationalAlert(
+                        "PROVIDER_RUNTIME_ERROR",
+                        OperationalSeverity.ERROR,
+                        f"provider {provider} emitted an error-severity operational event",
                         source=provider,
                     )
                 )
