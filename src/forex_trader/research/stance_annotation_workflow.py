@@ -9,7 +9,6 @@ from typing import Iterable, Mapping
 
 from forex_trader.intelligence.official_documents import (
     DocumentTextChange,
-    OfficialDocumentDiff,
     OfficialDocumentVersion,
     compare_document_versions,
 )
@@ -26,6 +25,83 @@ ANNOTATION_BATCH_SCHEMA_VERSION = "central-bank-blinded-annotation-batch-v1"
 REVIEWER_SUBMISSION_SCHEMA_VERSION = "central-bank-reviewer-submission-v1"
 ADJUDICATION_SCHEMA_VERSION = "central-bank-adjudication-v1"
 FINALIZATION_AUDIT_SCHEMA_VERSION = "central-bank-annotation-finalization-audit-v1"
+
+_BATCH_KEYS = frozenset({"manifest", "packets"})
+_MANIFEST_KEYS = frozenset(
+    {
+        "batch_id",
+        "schema_version",
+        "research_only",
+        "execution_authority",
+        "family_id",
+        "annotation_policy_version",
+        "as_of",
+        "packet_count",
+        "packet_ids",
+    }
+)
+_PACKET_KEYS = frozenset(
+    {
+        "packet_id",
+        "schema_version",
+        "research_only",
+        "execution_authority",
+        "annotation_policy_version",
+        "family_id",
+        "source_id",
+        "institution",
+        "document_type",
+        "currency",
+        "previous_version_id",
+        "current_version_id",
+        "previous_document_url",
+        "current_document_url",
+        "previous_published_at",
+        "current_published_at",
+        "previous_available_at",
+        "current_available_at",
+        "previous_text_sha256",
+        "current_text_sha256",
+        "previous_text",
+        "current_text",
+        "diff_id",
+        "added",
+        "removed",
+    }
+)
+_SUBMISSION_KEYS = frozenset(
+    {
+        "submission_id",
+        "schema_version",
+        "research_only",
+        "execution_authority",
+        "packet_id",
+        "annotation_policy_version",
+        "reviewer_id",
+        "submitted_at",
+        "direction",
+        "disposition",
+        "dimensions",
+    }
+)
+_ADJUDICATION_KEYS = frozenset(
+    {
+        "adjudication_id",
+        "schema_version",
+        "research_only",
+        "execution_authority",
+        "packet_id",
+        "annotation_policy_version",
+        "source_submission_ids",
+        "adjudicator_id",
+        "adjudicated_at",
+        "direction",
+        "disposition",
+        "dimensions",
+    }
+)
+_CHANGE_KEYS = frozenset({"side", "paragraph_index", "text", "text_sha256"})
+_DIMENSION_KEYS = frozenset({"dimension", "direction", "disposition"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +152,7 @@ class BlindedAnnotationPacket:
         if any(not item.strip() for item in required):
             raise ValueError("annotation packet identity and source text fields are required")
         for value, name in (
+            (self.packet_id, "packet_id"),
             (self.previous_version_id, "previous_version_id"),
             (self.current_version_id, "current_version_id"),
             (self.previous_text_sha256, "previous_text_sha256"),
@@ -101,8 +178,29 @@ class BlindedAnnotationPacket:
             raise ValueError("annotation packet current text hash does not match text")
         if any(item.side != "added" for item in self.added) or any(item.side != "removed" for item in self.removed):
             raise ValueError("annotation packet diff changes must preserve their declared side")
-        expected_packet_id = _packet_id(self)
-        if self.packet_id != expected_packet_id:
+        if self.packet_id != _packet_id_values(
+            annotation_policy_version=self.annotation_policy_version,
+            family_id=self.family_id,
+            source_id=self.source_id,
+            institution=self.institution,
+            document_type=self.document_type,
+            currency=self.currency,
+            previous_version_id=self.previous_version_id,
+            current_version_id=self.current_version_id,
+            previous_document_url=self.previous_document_url,
+            current_document_url=self.current_document_url,
+            previous_published_at=self.previous_published_at,
+            current_published_at=self.current_published_at,
+            previous_available_at=self.previous_available_at,
+            current_available_at=self.current_available_at,
+            previous_text_sha256=self.previous_text_sha256,
+            current_text_sha256=self.current_text_sha256,
+            previous_text=self.previous_text,
+            current_text=self.current_text,
+            diff_id=self.diff_id,
+            added=self.added,
+            removed=self.removed,
+        ):
             raise ValueError("annotation packet ID does not match its source-only payload")
 
     @classmethod
@@ -113,16 +211,13 @@ class BlindedAnnotationPacket:
         *,
         annotation_policy_version: str,
     ) -> BlindedAnnotationPacket:
-        if not annotation_policy_version.strip():
+        policy = annotation_policy_version.strip()
+        if not policy:
             raise ValueError("annotation policy version is required")
         _validate_source_pair(previous, current)
         diff = compare_document_versions(previous, current)
-        provisional = cls(
-            packet_id="0" * 64,
-            schema_version=ANNOTATION_PACKET_SCHEMA_VERSION,
-            research_only=True,
-            execution_authority=False,
-            annotation_policy_version=annotation_policy_version,
+        packet_id = _packet_id_values(
+            annotation_policy_version=policy,
             family_id=current.family_id,
             source_id=current.source_id,
             institution=current.institution,
@@ -144,34 +239,32 @@ class BlindedAnnotationPacket:
             added=diff.added,
             removed=diff.removed,
         )
-        # Bypass the temporary ID by reconstructing once from the source-only canonical payload.
-        packet_id = _packet_id(provisional, ignore_packet_id=True)
         return cls(
             packet_id=packet_id,
-            schema_version=provisional.schema_version,
-            research_only=provisional.research_only,
-            execution_authority=provisional.execution_authority,
-            annotation_policy_version=provisional.annotation_policy_version,
-            family_id=provisional.family_id,
-            source_id=provisional.source_id,
-            institution=provisional.institution,
-            document_type=provisional.document_type,
-            currency=provisional.currency,
-            previous_version_id=provisional.previous_version_id,
-            current_version_id=provisional.current_version_id,
-            previous_document_url=provisional.previous_document_url,
-            current_document_url=provisional.current_document_url,
-            previous_published_at=provisional.previous_published_at,
-            current_published_at=provisional.current_published_at,
-            previous_available_at=provisional.previous_available_at,
-            current_available_at=provisional.current_available_at,
-            previous_text_sha256=provisional.previous_text_sha256,
-            current_text_sha256=provisional.current_text_sha256,
-            previous_text=provisional.previous_text,
-            current_text=provisional.current_text,
-            diff_id=provisional.diff_id,
-            added=provisional.added,
-            removed=provisional.removed,
+            schema_version=ANNOTATION_PACKET_SCHEMA_VERSION,
+            research_only=True,
+            execution_authority=False,
+            annotation_policy_version=policy,
+            family_id=current.family_id,
+            source_id=current.source_id,
+            institution=current.institution,
+            document_type=current.document_type,
+            currency=current.currency.upper(),
+            previous_version_id=previous.version_id,
+            current_version_id=current.version_id,
+            previous_document_url=previous.document_url,
+            current_document_url=current.document_url,
+            previous_published_at=previous.published_at,
+            current_published_at=current.published_at,
+            previous_available_at=previous.available_at,
+            current_available_at=current.available_at,
+            previous_text_sha256=previous.text_sha256,
+            current_text_sha256=current.text_sha256,
+            previous_text=previous.text,
+            current_text=current.text,
+            diff_id=official_document_diff_id(diff),
+            added=diff.added,
+            removed=diff.removed,
         )
 
 
@@ -257,7 +350,15 @@ class ReviewerSubmission:
             raise ValueError("reviewer submission timestamp must be timezone-aware")
         _validate_truth(self.direction, self.disposition, "reviewer submission")
         _validate_dimensions(self.dimensions, "reviewer submission")
-        if self.submission_id != _submission_id(self):
+        if self.submission_id != _submission_id_values(
+            packet_id=self.packet_id,
+            annotation_policy_version=self.annotation_policy_version,
+            reviewer_id=self.reviewer_id,
+            submitted_at=self.submitted_at,
+            direction=self.direction,
+            disposition=self.disposition,
+            dimensions=self.dimensions,
+        ):
             raise ValueError("reviewer submission ID does not match its immutable review payload")
 
     @classmethod
@@ -332,7 +433,16 @@ class AdjudicationRecord:
             raise ValueError("adjudication timestamp must be timezone-aware")
         _validate_truth(self.direction, self.disposition, "adjudication")
         _validate_dimensions(self.dimensions, "adjudication")
-        if self.adjudication_id != _adjudication_id(self):
+        if self.adjudication_id != _adjudication_id_values(
+            packet_id=self.packet_id,
+            annotation_policy_version=self.annotation_policy_version,
+            source_submission_ids=self.source_submission_ids,
+            adjudicator_id=self.adjudicator_id,
+            adjudicated_at=self.adjudicated_at,
+            direction=self.direction,
+            disposition=self.disposition,
+            dimensions=self.dimensions,
+        ):
             raise ValueError("adjudication ID does not match its immutable payload")
 
     @classmethod
@@ -418,7 +528,16 @@ class FinalizationAudit:
             raise ValueError("annotation audit reviewer IDs must be sorted and unique")
         if len(self.source_submission_ids) != len(self.reviewer_ids):
             raise ValueError("annotation audit reviewer/submission denominators must match")
-        if self.audit_id != _audit_id(self):
+        if self.audit_id != _audit_id_values(
+            batch_id=self.batch_id,
+            packet_id=self.packet_id,
+            adjudication_id=self.adjudication_id,
+            semantic_label_id=self.semantic_label_id,
+            source_submission_ids=self.source_submission_ids,
+            reviewer_ids=self.reviewer_ids,
+            reviewer_overall_agreement=self.reviewer_overall_agreement,
+            reviewer_dimension_agreement=self.reviewer_dimension_agreement,
+        ):
             raise ValueError("annotation finalization audit ID does not match its payload")
 
 
@@ -440,7 +559,8 @@ def build_blinded_annotation_batch(
 ) -> AnnotationBatch:
     if as_of.tzinfo is None:
         raise ValueError("annotation batch as_of must be timezone-aware")
-    if not annotation_policy_version.strip():
+    policy = annotation_policy_version.strip()
+    if not policy:
         raise ValueError("annotation policy version is required")
     source = tuple(versions)
     if len(source) < 2:
@@ -452,10 +572,12 @@ def build_blinded_annotation_batch(
         raise ValueError("annotation batch must contain exactly one explicit document family")
     family_id = next(iter(family_ids))
     by_id = {item.version_id: item for item in source}
-    eligible = tuple(sorted(
-        (item for item in source if item.predecessor_version_id is not None and item.available_at <= as_of),
-        key=lambda item: (item.available_at, item.version_id),
-    ))
+    eligible = tuple(
+        sorted(
+            (item for item in source if item.predecessor_version_id is not None and item.available_at <= as_of),
+            key=lambda item: (item.available_at, item.version_id),
+        )
+    )
     if not eligible:
         raise ValueError("annotation batch has no comparable document versions by its frozen as_of")
     packets: list[BlindedAnnotationPacket] = []
@@ -470,7 +592,7 @@ def build_blinded_annotation_batch(
             BlindedAnnotationPacket.create(
                 previous,
                 current,
-                annotation_policy_version=annotation_policy_version,
+                annotation_policy_version=policy,
             )
         )
     packet_tuple = tuple(packets)
@@ -478,7 +600,7 @@ def build_blinded_annotation_batch(
     manifest = AnnotationBatchManifest(
         batch_id=_batch_id(
             family_id=family_id,
-            annotation_policy_version=annotation_policy_version,
+            annotation_policy_version=policy,
             as_of=as_of,
             packet_ids=packet_ids,
         ),
@@ -486,7 +608,7 @@ def build_blinded_annotation_batch(
         research_only=True,
         execution_authority=False,
         family_id=family_id,
-        annotation_policy_version=annotation_policy_version,
+        annotation_policy_version=policy,
         as_of=as_of,
         packet_count=len(packet_tuple),
         packet_ids=packet_ids,
@@ -500,15 +622,16 @@ def finalize_annotation_batch(
     adjudications: Iterable[AdjudicationRecord],
     versions: Iterable[OfficialDocumentVersion],
 ) -> tuple[FinalizedAnnotation, ...]:
+    version_records = tuple(versions)
     rebuilt = build_blinded_annotation_batch(
-        versions,
+        version_records,
         annotation_policy_version=batch.manifest.annotation_policy_version,
         as_of=batch.manifest.as_of,
     )
     if rebuilt != batch:
         raise ValueError("annotation batch does not match reconstructed frozen source evidence")
     packet_by_id = {item.packet_id: item for item in batch.packets}
-    version_by_id = {item.version_id: item for item in versions}
+    version_by_id = {item.version_id: item for item in version_records}
     submission_records = tuple(submissions)
     adjudication_records = tuple(adjudications)
     if len({item.submission_id for item in submission_records}) != len(submission_records):
@@ -557,18 +680,17 @@ def finalize_annotation_batch(
         submission_ids = tuple(sorted(item.submission_id for item in source_submissions))
         overall_agreement = len({(item.direction, item.disposition) for item in source_submissions}) == 1
         dimension_agreement = len({item.dimensions for item in source_submissions}) == 1
-        audit_id = _audit_id_values(
-            batch_id=batch.manifest.batch_id,
-            packet_id=packet.packet_id,
-            adjudication_id=adjudication.adjudication_id,
-            semantic_label_id=semantic_label.label_id,
-            source_submission_ids=submission_ids,
-            reviewer_ids=reviewer_ids,
-            reviewer_overall_agreement=overall_agreement,
-            reviewer_dimension_agreement=dimension_agreement,
-        )
         audit = FinalizationAudit(
-            audit_id=audit_id,
+            audit_id=_audit_id_values(
+                batch_id=batch.manifest.batch_id,
+                packet_id=packet.packet_id,
+                adjudication_id=adjudication.adjudication_id,
+                semantic_label_id=semantic_label.label_id,
+                source_submission_ids=submission_ids,
+                reviewer_ids=reviewer_ids,
+                reviewer_overall_agreement=overall_agreement,
+                reviewer_dimension_agreement=dimension_agreement,
+            ),
             schema_version=FINALIZATION_AUDIT_SCHEMA_VERSION,
             research_only=True,
             execution_authority=False,
@@ -678,7 +800,9 @@ def finalization_audit_to_dict(item: FinalizationAudit) -> dict[str, object]:
 
 def load_annotation_batch(path: str | Path) -> AnnotationBatch:
     raw = _load_json_object(path, "annotation batch")
+    _require_exact_keys(raw, _BATCH_KEYS, "annotation batch")
     manifest_raw = _require_mapping(raw.get("manifest"), "annotation batch manifest")
+    _require_exact_keys(manifest_raw, _MANIFEST_KEYS, "annotation batch manifest")
     packets_raw = _require_list(raw.get("packets"), "annotation batch packets")
     manifest = AnnotationBatchManifest(
         batch_id=_require_str(manifest_raw.get("batch_id"), "batch_id"),
@@ -691,16 +815,28 @@ def load_annotation_batch(path: str | Path) -> AnnotationBatch:
         packet_count=_require_int(manifest_raw.get("packet_count"), "packet_count"),
         packet_ids=_require_str_tuple(manifest_raw.get("packet_ids"), "packet_ids"),
     )
-    packets = tuple(_packet_from_mapping(_require_mapping(item, "annotation packet")) for item in packets_raw)
-    return AnnotationBatch(manifest=manifest, packets=packets)
+    packets: list[BlindedAnnotationPacket] = []
+    for item in packets_raw:
+        mapping = _require_mapping(item, "annotation packet")
+        _require_exact_keys(mapping, _PACKET_KEYS, "annotation packet")
+        packets.append(_packet_from_mapping(mapping))
+    return AnnotationBatch(manifest=manifest, packets=tuple(packets))
 
 
 def load_reviewer_submissions(path: str | Path) -> tuple[ReviewerSubmission, ...]:
-    return tuple(_submission_from_mapping(item) for item in _load_jsonl_objects(path, "reviewer submission"))
+    result: list[ReviewerSubmission] = []
+    for item in _load_jsonl_objects(path, "reviewer submission"):
+        _require_exact_keys(item, _SUBMISSION_KEYS, "reviewer submission")
+        result.append(_submission_from_mapping(item))
+    return tuple(result)
 
 
 def load_adjudications(path: str | Path) -> tuple[AdjudicationRecord, ...]:
-    return tuple(_adjudication_from_mapping(item) for item in _load_jsonl_objects(path, "adjudication"))
+    result: list[AdjudicationRecord] = []
+    for item in _load_jsonl_objects(path, "adjudication"):
+        _require_exact_keys(item, _ADJUDICATION_KEYS, "adjudication")
+        result.append(_adjudication_from_mapping(item))
+    return tuple(result)
 
 
 def _packet_to_dict(item: BlindedAnnotationPacket) -> dict[str, object]:
@@ -797,13 +933,7 @@ def _adjudication_from_mapping(raw: Mapping[str, object]) -> AdjudicationRecord:
 
 
 def _validate_source_pair(previous: OfficialDocumentVersion, current: OfficialDocumentVersion) -> None:
-    fields = (
-        "family_id",
-        "source_id",
-        "institution",
-        "document_type",
-        "currency",
-    )
+    fields = ("family_id", "source_id", "institution", "document_type", "currency")
     if any(getattr(previous, field) != getattr(current, field) for field in fields):
         raise ValueError("annotation packet source pair changes explicit family metadata")
     if current.predecessor_version_id != previous.version_id:
@@ -867,16 +997,57 @@ def _validate_dimensions(dimensions: tuple[DimensionSemanticLabel, ...], prefix:
         raise ValueError(f"{prefix} dimensions cannot repeat")
 
 
-def _packet_id(item: BlindedAnnotationPacket, *, ignore_packet_id: bool = False) -> str:
-    if not ignore_packet_id:
-        _require_sha256(item.packet_id, "packet_id")
-    return hashlib.sha256(_canonical_json(_packet_identity_payload(item))).hexdigest()
-
-
-def _packet_identity_payload(item: BlindedAnnotationPacket) -> dict[str, object]:
-    payload = _packet_to_dict(item)
-    payload.pop("packet_id")
-    return payload
+def _packet_id_values(
+    *,
+    annotation_policy_version: str,
+    family_id: str,
+    source_id: str,
+    institution: str,
+    document_type: str,
+    currency: str,
+    previous_version_id: str,
+    current_version_id: str,
+    previous_document_url: str,
+    current_document_url: str,
+    previous_published_at: datetime,
+    current_published_at: datetime,
+    previous_available_at: datetime,
+    current_available_at: datetime,
+    previous_text_sha256: str,
+    current_text_sha256: str,
+    previous_text: str,
+    current_text: str,
+    diff_id: str,
+    added: tuple[DocumentTextChange, ...],
+    removed: tuple[DocumentTextChange, ...],
+) -> str:
+    payload = {
+        "schema_version": ANNOTATION_PACKET_SCHEMA_VERSION,
+        "research_only": True,
+        "execution_authority": False,
+        "annotation_policy_version": annotation_policy_version,
+        "family_id": family_id,
+        "source_id": source_id,
+        "institution": institution,
+        "document_type": document_type,
+        "currency": currency,
+        "previous_version_id": previous_version_id,
+        "current_version_id": current_version_id,
+        "previous_document_url": previous_document_url,
+        "current_document_url": current_document_url,
+        "previous_published_at": previous_published_at.isoformat(),
+        "current_published_at": current_published_at.isoformat(),
+        "previous_available_at": previous_available_at.isoformat(),
+        "current_available_at": current_available_at.isoformat(),
+        "previous_text_sha256": previous_text_sha256,
+        "current_text_sha256": current_text_sha256,
+        "previous_text": previous_text,
+        "current_text": current_text,
+        "diff_id": diff_id,
+        "added": [_change_to_dict(value) for value in added],
+        "removed": [_change_to_dict(value) for value in removed],
+    }
+    return hashlib.sha256(_canonical_json(payload)).hexdigest()
 
 
 def _batch_id(
@@ -896,18 +1067,6 @@ def _batch_id(
         "packet_ids": list(packet_ids),
     }
     return hashlib.sha256(_canonical_json(payload)).hexdigest()
-
-
-def _submission_id(item: ReviewerSubmission) -> str:
-    return _submission_id_values(
-        packet_id=item.packet_id,
-        annotation_policy_version=item.annotation_policy_version,
-        reviewer_id=item.reviewer_id,
-        submitted_at=item.submitted_at,
-        direction=item.direction,
-        disposition=item.disposition,
-        dimensions=item.dimensions,
-    )
 
 
 def _submission_id_values(
@@ -935,19 +1094,6 @@ def _submission_id_values(
     return hashlib.sha256(_canonical_json(payload)).hexdigest()
 
 
-def _adjudication_id(item: AdjudicationRecord) -> str:
-    return _adjudication_id_values(
-        packet_id=item.packet_id,
-        annotation_policy_version=item.annotation_policy_version,
-        source_submission_ids=item.source_submission_ids,
-        adjudicator_id=item.adjudicator_id,
-        adjudicated_at=item.adjudicated_at,
-        direction=item.direction,
-        disposition=item.disposition,
-        dimensions=item.dimensions,
-    )
-
-
 def _adjudication_id_values(
     *,
     packet_id: str,
@@ -973,19 +1119,6 @@ def _adjudication_id_values(
         "dimensions": [_dimension_to_dict(value) for value in dimensions],
     }
     return hashlib.sha256(_canonical_json(payload)).hexdigest()
-
-
-def _audit_id(item: FinalizationAudit) -> str:
-    return _audit_id_values(
-        batch_id=item.batch_id,
-        packet_id=item.packet_id,
-        adjudication_id=item.adjudication_id,
-        semantic_label_id=item.semantic_label_id,
-        source_submission_ids=item.source_submission_ids,
-        reviewer_ids=item.reviewer_ids,
-        reviewer_overall_agreement=item.reviewer_overall_agreement,
-        reviewer_dimension_agreement=item.reviewer_dimension_agreement,
-    )
 
 
 def _audit_id_values(
@@ -1037,6 +1170,7 @@ def _changes_from_value(value: object, name: str) -> tuple[DocumentTextChange, .
     result: list[DocumentTextChange] = []
     for record in records:
         raw = _require_mapping(record, f"{name} change")
+        _require_exact_keys(raw, _CHANGE_KEYS, f"{name} change")
         result.append(
             DocumentTextChange(
                 side=_require_str(raw.get("side"), "side"),
@@ -1050,19 +1184,18 @@ def _changes_from_value(value: object, name: str) -> tuple[DocumentTextChange, .
 
 def _dimensions_from_value(value: object) -> tuple[DimensionSemanticLabel, ...]:
     records = _require_list(value, "dimensions")
-    return tuple(
-        sorted(
-            (
-                DimensionSemanticLabel(
-                    dimension=PolicyDimension(_require_str(_require_mapping(record, "dimension").get("dimension"), "dimension")),
-                    direction=StanceDirection(_require_str(_require_mapping(record, "dimension").get("direction"), "direction")),
-                    disposition=EvidenceDisposition(_require_str(_require_mapping(record, "dimension").get("disposition"), "disposition")),
-                )
-                for record in records
-            ),
-            key=lambda item: item.dimension.value,
+    result: list[DimensionSemanticLabel] = []
+    for record in records:
+        raw = _require_mapping(record, "dimension")
+        _require_exact_keys(raw, _DIMENSION_KEYS, "dimension")
+        result.append(
+            DimensionSemanticLabel(
+                dimension=PolicyDimension(_require_str(raw.get("dimension"), "dimension")),
+                direction=StanceDirection(_require_str(raw.get("direction"), "direction")),
+                disposition=EvidenceDisposition(_require_str(raw.get("disposition"), "disposition")),
+            )
         )
-    )
+    return tuple(sorted(result, key=lambda item: item.dimension.value))
 
 
 def _load_json_object(path: str | Path, name: str) -> Mapping[str, object]:
@@ -1131,6 +1264,14 @@ def _require_datetime(value: object, name: str) -> datetime:
 
 def _require_str_tuple(value: object, name: str) -> tuple[str, ...]:
     return tuple(_require_str(item, name) for item in _require_list(value, name))
+
+
+def _require_exact_keys(value: Mapping[str, object], expected: frozenset[str], name: str) -> None:
+    actual = frozenset(value.keys())
+    if actual != expected:
+        missing = sorted(expected - actual)
+        unexpected = sorted(actual - expected)
+        raise ValueError(f"{name} keys do not match schema; missing={missing} unexpected={unexpected}")
 
 
 def _canonical_json(value: object) -> bytes:
