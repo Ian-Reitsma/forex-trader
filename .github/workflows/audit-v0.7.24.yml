@@ -35,6 +35,7 @@ jobs:
           scripts/create_technical_annotation_batch.py
           scripts/finalize_technical_annotations.py
           tests/test_audit_risk_and_technical_validation.py
+          tests/test_audit_validation_boundaries.py
           tests/test_macro_factor_campaign_identity.py
       - name: Audit tranche strict typing
         shell: bash
@@ -64,6 +65,7 @@ jobs:
         run: >-
           pytest -q
           tests/test_audit_risk_and_technical_validation.py
+          tests/test_audit_validation_boundaries.py
           tests/test_macro_factor_campaign_identity.py
           tests/test_campaign_policy.py
           tests/test_config.py
