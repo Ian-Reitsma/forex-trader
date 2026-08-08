@@ -16,6 +16,7 @@ from forex_trader.research.stance_outcomes import (
 from forex_trader.research.stance_statistical_validation import (
     BOOTSTRAP_ITERATIONS,
     FAMILYWISE_CONFIDENCE,
+    FIXED_MAX_BASELINE_DELAY_SECONDS,
     MIN_CALIBRATION_EVENTS,
     MIN_DIRECTIONAL_EVENTS,
     MIN_HOLDOUT_EVENTS,
@@ -81,6 +82,8 @@ def build_fixture_dataset(
     *,
     neutral_events: int = 0,
     excluded_events: int = 0,
+    frozen: bool = True,
+    max_baseline_delay_seconds: Decimal = FIXED_MAX_BASELINE_DELAY_SECONDS,
 ):  # type: ignore[no-untyped-def]
     versions: list[OfficialDocumentVersion] = []
     candles: list[Candle] = []
@@ -137,14 +140,14 @@ def build_fixture_dataset(
         versions.append(current)
         previous = current
 
-    as_of = BASE + timedelta(days=event_index + 1)
+    cutoff = BASE + timedelta(days=event_index + 1) if frozen else None
     return build_stance_outcome_dataset(
         versions,
         candles,
         instrument="EUR_USD",
         horizon_minutes=DEFAULT_STANCE_HORIZONS_MINUTES,
-        max_baseline_delay_seconds=Decimal("300"),
-        as_of=as_of,
+        max_baseline_delay_seconds=max_baseline_delay_seconds,
+        as_of=cutoff,
     )
 
 
@@ -170,6 +173,8 @@ def test_positive_untouched_primary_holdout_becomes_informational_candidate() ->
     assert report.bootstrap_iterations == BOOTSTRAP_ITERATIONS
     assert report.simultaneous_method == SIMULTANEOUS_METHOD
     assert report.split_policy == SPLIT_POLICY
+    assert report.source_as_of == dataset.as_of.isoformat()  # type: ignore[union-attr]
+    assert report.source_max_baseline_delay_seconds == FIXED_MAX_BASELINE_DELAY_SECONDS
     assert report.directional_event_count == 30
     assert report.nondirectional_event_count == 2
     assert report.calibration_event_count == 20
@@ -279,11 +284,26 @@ def test_source_dataset_horizon_family_cannot_be_narrowed_for_validation() -> No
         (_candle(BASE, BASE_PRICE), _candle(BASE + timedelta(minutes=60), _price_for_aligned_bps(Decimal("5")))),
         instrument="EUR_USD",
         horizon_minutes=(60,),
-        max_baseline_delay_seconds=Decimal("300"),
+        max_baseline_delay_seconds=FIXED_MAX_BASELINE_DELAY_SECONDS,
         as_of=BASE + timedelta(hours=2),
     )
     with pytest.raises(ValueError, match="fixed 5/15/60/240"):
         validate_stance_outcome_statistics(narrow_dataset)
+
+
+def test_direct_validator_rejects_unfrozen_or_tuned_preprocessing() -> None:
+    unfrozen = build_fixture_dataset(constant_returns(24), frozen=False)
+    assert unfrozen.as_of is None
+    with pytest.raises(ValueError, match="frozen as_of"):
+        validate_stance_outcome_statistics(unfrozen)
+
+    tuned_delay = build_fixture_dataset(
+        constant_returns(24),
+        max_baseline_delay_seconds=Decimal("600"),
+    )
+    assert tuned_delay.max_baseline_delay_seconds == Decimal("600")
+    with pytest.raises(ValueError, match="fixed 300-second"):
+        validate_stance_outcome_statistics(tuned_delay)
 
 
 def test_statistical_report_identity_detects_tampering() -> None:
