@@ -1,0 +1,51 @@
+name: v0.7.26 replay gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  replay-gates:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: Replay lint
+        run: >-
+          ruff check --select E4,E7,E9,F
+          src/forex_trader/research/replay_archive.py
+          scripts/validate_replay_archive.py
+          tests/test_replay_archive.py
+      - name: Replay strict typing
+        shell: bash
+        run: |
+          set +e
+          python -m mypy --strict --follow-imports=silent \
+            src/forex_trader/research/replay_archive.py \
+            scripts/validate_replay_archive.py \
+            2>&1 | tee /tmp/replay-mypy.txt
+          code=${PIPESTATUS[0]}
+          exit "$code"
+      - name: Upload replay typing diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-mypy-${{ matrix.python-version }}
+          path: /tmp/replay-mypy.txt
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Focused replay tests
+        run: pytest -q tests/test_replay_archive.py
