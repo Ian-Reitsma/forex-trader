@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
+
+import httpx
 
 from forex_trader.research.resilient_tick_history import (
     ResilientDukascopyHistoryClient,
@@ -37,3 +40,29 @@ def test_dukascopy_archive_urls_preserve_identical_hour_path() -> None:
         "https://datafeed.dukascopy.com/datafeed/EURUSD/2026/06/22/22h_ticks.bi5",
         "https://www.dukascopy.com/datafeed/EURUSD/2026/06/22/22h_ticks.bi5",
     )
+
+
+def test_fallback_404_clears_stale_primary_503(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    hour = datetime(2026, 7, 24, 21, tzinfo=UTC)
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        calls.append(url)
+        if "datafeed.dukascopy.com" in url:
+            return httpx.Response(503, request=request)
+        return httpx.Response(404, request=request)
+
+    async def exercise() -> tuple[object, ...]:
+        history = ResilientDukascopyHistoryClient(
+            cache_dir=tmp_path,
+            max_concurrency=1,
+            retries=4,
+        )
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await history._load_hour(client, asyncio.Semaphore(1), "EUR_USD", hour)
+
+    assert asyncio.run(exercise()) == ()
+    assert any("datafeed.dukascopy.com" in url for url in calls)
+    assert any("www.dukascopy.com" in url for url in calls)
