@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 from forex_trader.domain.context import CrossAssetContext, ProviderHealth
+from forex_trader.domain.decision_components import DecisionComponentPolicy, PRODUCTION_DECISION_COMPONENTS
+from forex_trader.domain.fusion import RegimeAwareSignalFusionPolicy
+from forex_trader.domain.models import FundamentalAssessment, Quote, TechnicalAssessment, TradeCandidate
 from forex_trader.ingestion.providers import (
     CrossAssetProvider,
     EconomicCalendarProvider,
@@ -175,3 +179,99 @@ class ExternalContextAggregator:
             health.append(health_fn())
         except Exception as exc:
             errors.append(f"{label}_health:{type(exc).__name__}:{str(exc)[:200]}")
+
+
+class ExternalContextFusionPolicy(RegimeAwareSignalFusionPolicy):
+    """Inject point-in-time external evidence into the production fusion contract."""
+
+    def __init__(self, external_context: ExternalContextAggregator, **policy_kwargs: Any) -> None:
+        super().__init__(**policy_kwargs)
+        self.external_context = external_context
+
+    def evaluate(
+        self,
+        technical: TechnicalAssessment,
+        fundamental: FundamentalAssessment,
+        quote: Quote,
+        *,
+        maximum_spread_pips: Decimal | None = None,
+        components: DecisionComponentPolicy = PRODUCTION_DECISION_COMPONENTS,
+    ) -> TradeCandidate:
+        context = self.external_context.snapshot(technical.instrument, as_of=quote.time)
+        candidate = super().evaluate(
+            technical,
+            fundamental,
+            quote,
+            maximum_spread_pips=maximum_spread_pips,
+            components=components,
+            cross_asset_alignment=context.cross_asset_alignment,
+            cross_asset_source_ids=tuple(sorted({item.source for item in context.cross_asset.signals})),
+            institutional_flow_pressure=context.institutional_flow_pressure,
+            institutional_flow_source=context.institutional_flow_source,
+            institutional_flow_confidence=context.institutional_flow_confidence,
+        )
+        provider_health = tuple(
+            {
+                "provider": item.provider,
+                "state": item.state.value,
+                "observed_at": item.observed_at.isoformat(),
+                "heartbeat_age_seconds": str(item.heartbeat_age_seconds),
+                "rate_limited": item.rate_limited,
+                "detail": item.detail,
+            }
+            for item in context.provider_health
+        )
+        external_evidence = {
+            "as_of": context.as_of.isoformat(),
+            "source_ids": context.source_ids,
+            "provider_health": provider_health,
+            "errors": context.errors,
+            "consensus": tuple(
+                {
+                    "indicator": item.indicator,
+                    "currency": item.currency,
+                    "available_at": item.available_at.isoformat(),
+                    "source": item.source,
+                }
+                for item in context.consensus
+            ),
+            "release_actuals": tuple(
+                {
+                    "indicator": item.indicator,
+                    "currency": item.currency,
+                    "available_at": item.available_at.isoformat(),
+                    "source": item.source,
+                }
+                for item in context.release_actuals
+            ),
+            "news": tuple(
+                {
+                    "document_id": item.document_id,
+                    "published_at": item.published_at.isoformat(),
+                    "received_at": item.received_at.isoformat(),
+                    "source": item.source,
+                }
+                for item in context.news
+            ),
+            "cross_asset": tuple(
+                {
+                    "name": item.name,
+                    "direction": str(item.direction),
+                    "confidence": str(item.confidence),
+                    "source": item.source,
+                    "observed_at": item.observed_at.isoformat(),
+                }
+                for item in context.cross_asset.signals
+            ),
+            "order_flow": None
+            if context.order_flow is None
+            else {
+                "source": context.order_flow.source,
+                "observed_at": context.order_flow.observed_at.isoformat(),
+                "directional_pressure": None
+                if context.order_flow.directional_pressure is None
+                else str(context.order_flow.directional_pressure),
+                "confidence": str(context.order_flow.confidence),
+            },
+        }
+        return replace(candidate, evidence={**candidate.evidence, "external_context": external_evidence})
