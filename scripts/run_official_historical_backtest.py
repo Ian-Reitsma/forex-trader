@@ -2,14 +2,32 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
 import json
+import sys
+from collections.abc import Callable, Coroutine
 from pathlib import Path
+from types import ModuleType
+from typing import Any, cast
 
-import scripts.run_public_historical_backtest as campaign
 from forex_trader.research.official_news_history import (
     OfficialCentralBankHistoryClient,
     official_news_observations,
 )
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+campaign: ModuleType = importlib.import_module("scripts.run_public_historical_backtest")
+setattr(campaign, "GdeltDocHistoryClient", OfficialCentralBankHistoryClient)
+setattr(campaign, "gdelt_news_observations", official_news_observations)
+_campaign_run = cast(
+    Callable[[argparse.Namespace], Coroutine[Any, Any, dict[str, object]]],
+    getattr(campaign, "run"),
+)
+_jsonable = cast(Callable[[object], object], getattr(campaign, "_jsonable"))
 
 
 def main() -> int:
@@ -30,9 +48,7 @@ def main() -> int:
     parser.add_argument("--minimum-calibration-trades", type=int, default=12)
     args = parser.parse_args()
 
-    campaign.GdeltDocHistoryClient = OfficialCentralBankHistoryClient  # type: ignore[misc]
-    campaign.gdelt_news_observations = official_news_observations  # type: ignore[misc]
-    report = asyncio.run(campaign.run(args))
+    report = asyncio.run(_campaign_run(args))
     report["data_sources"] = {
         "price": "Dukascopy public historical BI5 best bid/ask ticks",
         "news": (
@@ -47,7 +63,7 @@ def main() -> int:
         ],
     }
     report["news_source_mode"] = "official_central_bank_first_party"
-    rendered = json.dumps(campaign._jsonable(report), indent=2, sort_keys=True)  # type: ignore[attr-defined]
+    rendered = json.dumps(_jsonable(report), indent=2, sort_keys=True)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(rendered + "\n", encoding="utf-8")
