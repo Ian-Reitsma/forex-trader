@@ -14,6 +14,7 @@ from forex_trader.research.official_news_history import (
     OfficialCentralBankHistoryClient,
     official_news_observations,
 )
+from forex_trader.research.resilient_tick_history import ResilientDukascopyHistoryClient
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +24,7 @@ if str(ROOT) not in sys.path:
 campaign: ModuleType = importlib.import_module("scripts.run_public_historical_backtest")
 setattr(campaign, "GdeltDocHistoryClient", OfficialCentralBankHistoryClient)
 setattr(campaign, "gdelt_news_observations", official_news_observations)
+setattr(campaign, "DukascopyHistoryClient", ResilientDukascopyHistoryClient)
 _campaign_run = cast(
     Callable[[argparse.Namespace], Coroutine[Any, Any, dict[str, object]]],
     getattr(campaign, "run"),
@@ -41,7 +43,7 @@ def main() -> int:
     parser.add_argument("--lag-days", type=int, default=7)
     parser.add_argument("--cache-dir", default=".cache/forex-trader/public-history")
     parser.add_argument("--output", default="artifacts/public-historical-backtest.json")
-    parser.add_argument("--concurrency-per-pair", type=int, default=10)
+    parser.add_argument("--concurrency-per-pair", type=int, default=4)
     parser.add_argument("--maximum-holding-minutes", type=int, default=120)
     parser.add_argument("--entry-latency-ms", type=int, default=500)
     parser.add_argument("--slippage-pips", default="0.10")
@@ -63,6 +65,12 @@ def main() -> int:
         ],
     }
     report["news_source_mode"] = "official_central_bank_first_party"
+    report["price_source_resilience"] = {
+        "timeout_seconds": 45,
+        "maximum_parallel_hour_requests": 4,
+        "minimum_retries_per_hour": 8,
+        "missing_hour_policy": "fail_closed",
+    }
     rendered = json.dumps(_jsonable(report), indent=2, sort_keys=True)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
