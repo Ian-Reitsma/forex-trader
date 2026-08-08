@@ -8,12 +8,14 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from forex_trader.domain.macro_history import PointInTimeFundamentalBook
 from forex_trader.research.public_history import (
     DukascopyHistoryClient,
     GdeltDocHistoryClient,
+    HistoricalNewsRecord,
+    HistoricalTick,
     currencies_for_instruments,
     gdelt_news_observations,
     utc_range,
@@ -22,6 +24,7 @@ from forex_trader.research.tick_backtest import (
     NewsFilter,
     SessionFilter,
     StrategyFilter,
+    TickBacktestOpportunity,
     evaluate_frozen_filter,
     filter_opportunities,
     generate_tick_opportunities,
@@ -31,7 +34,7 @@ from forex_trader.research.tick_backtest import (
 )
 
 
-def _jsonable(value: Any) -> Any:
+def _jsonable(value: object) -> object:
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, datetime):
@@ -40,8 +43,9 @@ def _jsonable(value: Any) -> Any:
         return value.isoformat()
     if isinstance(value, Enum):
         return value.value
-    if is_dataclass(value):
-        return {key: _jsonable(item) for key, item in asdict(value).items()}
+    if is_dataclass(value) and not isinstance(value, type):
+        raw = asdict(cast(Any, value))
+        return {str(key): _jsonable(item) for key, item in raw.items()}
     if isinstance(value, dict):
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -64,10 +68,9 @@ async def _download_news(
     start: datetime,
     end: datetime,
     cache_dir: Path,
-) -> tuple[Any, ...]:
-    # Query one currency at a time to keep GDELT request concurrency polite and stable.
+) -> tuple[HistoricalNewsRecord, ...]:
     client = GdeltDocHistoryClient(cache_dir=cache_dir / "gdelt")
-    records: list[Any] = []
+    records: list[HistoricalNewsRecord] = []
     for currency in currencies:
         records.extend(await client.records((currency,), start, end))
     return tuple(records)
@@ -80,8 +83,8 @@ async def _download_ticks(
     end: datetime,
     cache_dir: Path,
     concurrency_per_pair: int,
-) -> dict[str, tuple[Any, ...]]:
-    async def load(instrument: str) -> tuple[str, tuple[Any, ...]]:
+) -> dict[str, tuple[HistoricalTick, ...]]:
+    async def load(instrument: str) -> tuple[str, tuple[HistoricalTick, ...]]:
         client = DukascopyHistoryClient(
             cache_dir=cache_dir / "dukascopy",
             max_concurrency=concurrency_per_pair,
@@ -103,7 +106,7 @@ def _baseline_filter(*, news: bool) -> StrategyFilter:
     )
 
 
-def _reports_for_risk_scenarios(opportunities: tuple[Any, ...]) -> dict[str, Any]:
+def _reports_for_risk_scenarios(opportunities: tuple[TickBacktestOpportunity, ...]) -> dict[str, object]:
     return {
         "0.15pct": _jsonable(simulate_daily_returns(opportunities, risk_fraction_per_trade=Decimal("0.0015"))),
         "0.50pct": _jsonable(simulate_daily_returns(opportunities, risk_fraction_per_trade=Decimal("0.005"))),
@@ -111,7 +114,7 @@ def _reports_for_risk_scenarios(opportunities: tuple[Any, ...]) -> dict[str, Any
     }
 
 
-async def run(args: argparse.Namespace) -> dict[str, Any]:
+async def run(args: argparse.Namespace) -> dict[str, object]:
     if args.start and args.end:
         start_date, end_date = _parse_date(args.start), _parse_date(args.end)
     elif args.start or args.end:
@@ -143,7 +146,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         cache_dir=cache_dir,
         concurrency_per_pair=args.concurrency_per_pair,
     )
-    opportunities: list[Any] = []
+    opportunities: list[TickBacktestOpportunity] = []
     per_instrument: dict[str, dict[str, int]] = {}
     for instrument in instruments:
         ticks = tick_history[instrument]
@@ -162,17 +165,20 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "opportunities": len(generated),
         }
     opportunities.sort(key=lambda item: (item.decision_time, item.instrument))
+    opportunity_tuple = tuple(opportunities)
 
     duration = end - start
     calibration_end = start + duration * 2 / 3
     baseline_technical = _baseline_filter(news=False)
     baseline_news = _baseline_filter(news=True)
-    baseline_technical_cal = filter_opportunities(opportunities, baseline_technical, start=start, end=calibration_end)
-    baseline_technical_holdout = filter_opportunities(opportunities, baseline_technical, start=calibration_end, end=end)
-    baseline_news_cal = filter_opportunities(opportunities, baseline_news, start=start, end=calibration_end)
-    baseline_news_holdout = filter_opportunities(opportunities, baseline_news, start=calibration_end, end=end)
+    baseline_technical_cal = filter_opportunities(opportunity_tuple, baseline_technical, start=start, end=calibration_end)
+    baseline_technical_holdout = filter_opportunities(
+        opportunity_tuple, baseline_technical, start=calibration_end, end=end
+    )
+    baseline_news_cal = filter_opportunities(opportunity_tuple, baseline_news, start=start, end=calibration_end)
+    baseline_news_holdout = filter_opportunities(opportunity_tuple, baseline_news, start=calibration_end, end=end)
 
-    result: dict[str, Any] = {
+    result: dict[str, object] = {
         "schema_version": "public-historical-backtest-v1",
         "data_sources": {
             "price": "Dukascopy public historical BI5 best bid/ask ticks",
@@ -226,17 +232,17 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
     try:
         robust_score, win_score = select_filters_on_calibration(
-            opportunities,
+            opportunity_tuple,
             calibration_start=start,
             calibration_end=calibration_end,
             minimum_trades=args.minimum_calibration_trades,
         )
     except ValueError as exc:
         result["selection"] = {"status": "insufficient_calibration_edge", "reason": str(exc)}
-        return _jsonable(result)
+        return result
 
     robust = evaluate_frozen_filter(
-        opportunities,
+        opportunity_tuple,
         selection=robust_score,
         calibration_start=start,
         calibration_end=calibration_end,
@@ -244,7 +250,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         objective="robust_expectancy",
     )
     win_target = evaluate_frozen_filter(
-        opportunities,
+        opportunity_tuple,
         selection=win_score,
         calibration_start=start,
         calibration_end=calibration_end,
@@ -252,14 +258,15 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         objective="win_rate_target_with_positive_expectancy",
     )
 
+    selections: dict[str, object] = {}
     for name, frozen in (("robust_expectancy", robust), ("win_rate_target", win_target)):
         holdout_selected = filter_opportunities(
-            opportunities,
+            opportunity_tuple,
             frozen.strategy_filter,
             start=calibration_end,
             end=end,
         )
-        result["selection"][name] = {
+        selections[name] = {
             "frozen": _jsonable(frozen),
             "holdout_risk_scenarios": _reports_for_risk_scenarios(holdout_selected),
             "goal_distance": {
@@ -269,7 +276,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 ),
             },
         }
-    return _jsonable(result)
+    result["selection"] = selections
+    return result
 
 
 def main() -> int:
@@ -288,7 +296,7 @@ def main() -> int:
     parser.add_argument("--minimum-calibration-trades", type=int, default=12)
     args = parser.parse_args()
     report = asyncio.run(run(args))
-    rendered = json.dumps(report, indent=2, sort_keys=True)
+    rendered = json.dumps(_jsonable(report), indent=2, sort_keys=True)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(rendered + "\n", encoding="utf-8")
