@@ -16,12 +16,10 @@ from forex_trader.research.stance_outcomes import (
     build_stance_outcome_dataset,
 )
 from forex_trader.research.stance_statistical_validation import (
+    FIXED_MAX_BASELINE_DELAY_SECONDS,
     StanceStatisticalValidationReport,
     validate_stance_outcome_statistics,
 )
-
-
-FIXED_MAX_BASELINE_DELAY_SECONDS = Decimal("300")
 
 
 def validate_stance_statistics_from_files(
