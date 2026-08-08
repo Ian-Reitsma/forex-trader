@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
@@ -26,14 +26,7 @@ _INVALID_JSON_ESCAPE = re.compile(r'\\(?!["\\/bfnrtu])')
 
 
 def parse_dirty_gdelt_json(raw: str) -> object:
-    """Parse GDELT JSON while narrowly repairing invalid backslash escapes.
-
-    Some DOC 2.0 ArticleList payloads contain publisher text with a bare backslash
-    before a character that JSON does not define as an escape. We first attempt
-    strict JSON. On that specific syntax family, only those invalid backslashes are
-    escaped and the result is parsed again. We do not eval data, remove fields, or
-    coerce an otherwise non-JSON response into an object.
-    """
+    """Parse GDELT JSON while narrowly repairing invalid backslash escapes."""
     try:
         return json.loads(raw)
     except json.JSONDecodeError as first_error:
@@ -47,20 +40,24 @@ def parse_dirty_gdelt_json(raw: str) -> object:
 
 
 class ResilientGdeltDocHistoryClient(GdeltDocHistoryClient):
-    """GDELT DOC client with bounded request concurrency and dirty-JSON handling."""
+    """GDELT history client with sequential pacing, retry-after, and dirty JSON handling."""
 
     def __init__(
         self,
         *,
         cache_dir: str | Path = ".cache/forex-trader/gdelt",
         timeout_seconds: float = 45.0,
-        retries: int = 3,
-        max_concurrency: int = 4,
+        retries: int = 6,
+        max_concurrency: int = 1,
+        min_request_interval_seconds: float = 1.0,
     ) -> None:
         super().__init__(cache_dir=cache_dir, timeout_seconds=timeout_seconds, retries=retries)
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be positive")
+        if min_request_interval_seconds < 0:
+            raise ValueError("min_request_interval_seconds cannot be negative")
         self.max_concurrency = max_concurrency
+        self.min_request_interval_seconds = min_request_interval_seconds
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
     async def records(
@@ -69,9 +66,35 @@ class ResilientGdeltDocHistoryClient(GdeltDocHistoryClient):
         start: datetime,
         end: datetime,
     ) -> tuple[HistoricalNewsRecord, ...]:
-        # Preserve the parent's validated currency/date-window and article filtering
-        # while routing actual HTTP parsing through the hardened override below.
-        return await super().records(currencies, start, end)
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("GDELT range must be timezone-aware")
+        if end <= start:
+            raise ValueError("GDELT range end must be after start")
+        normalized = tuple(sorted({currency.upper() for currency in currencies}))
+        unsupported = [currency for currency in normalized if currency not in _GDELT_CURRENCY_QUERIES]
+        if unsupported:
+            raise ValueError(f"unsupported GDELT currencies: {', '.join(unsupported)}")
+
+        timeout = httpx.Timeout(self.timeout_seconds)
+        headers = {"User-Agent": "forex-trader-research/0.7.28"}
+        records: list[HistoricalNewsRecord] = []
+        async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
+            for currency in normalized:
+                cursor = start.astimezone(UTC)
+                final = end.astimezone(UTC)
+                while cursor < final:
+                    window_end = min(cursor + timedelta(days=1), final)
+                    cache_file = self.cache_dir / currency / f"{cursor:%Y%m%d}.json"
+                    was_cached = cache_file.exists()
+                    records.extend(await self._window_records(client, currency, cursor, window_end))
+                    cursor = window_end
+                    if not was_cached and cursor < final and self.min_request_interval_seconds:
+                        await asyncio.sleep(self.min_request_interval_seconds)
+
+        unique: dict[tuple[str, str, datetime], HistoricalNewsRecord] = {}
+        for record in records:
+            unique[(record.currency, record.url or record.title, record.seen_at)] = record
+        return tuple(sorted(unique.values(), key=lambda item: (item.seen_at, item.currency, item.url, item.title)))
 
     async def _window_records(
         self,
@@ -93,8 +116,8 @@ class ResilientGdeltDocHistoryClient(GdeltDocHistoryClient):
             "format": "json",
             "maxrecords": "250",
             "sort": "datedesc",
-            "startdatetime": start.strftime("%Y%m%d%H%M%S"),
-            "enddatetime": end.strftime("%Y%m%d%H%M%S"),
+            "startdatetime": start.astimezone(UTC).strftime("%Y%m%d%H%M%S"),
+            "enddatetime": end.astimezone(UTC).strftime("%Y%m%d%H%M%S"),
         }
         response: httpx.Response | None = None
         for attempt in range(self.retries):
@@ -103,10 +126,23 @@ class ResilientGdeltDocHistoryClient(GdeltDocHistoryClient):
                     response = await client.get(_GDELT_DOC_URL, params=params)
                 response.raise_for_status()
                 break
-            except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError):
+            except httpx.HTTPStatusError as exc:
                 if attempt + 1 >= self.retries:
                     raise
-                await asyncio.sleep(0.75 * (2**attempt))
+                if exc.response.status_code == 429:
+                    retry_after_raw = exc.response.headers.get("Retry-After", "")
+                    try:
+                        retry_after = float(retry_after_raw)
+                    except ValueError:
+                        retry_after = 0.0
+                    delay = max(retry_after, self.min_request_interval_seconds * (2**attempt), 1.0)
+                else:
+                    delay = 0.75 * (2**attempt)
+                await asyncio.sleep(min(delay, 60.0))
+            except (httpx.TimeoutException, httpx.NetworkError):
+                if attempt + 1 >= self.retries:
+                    raise
+                await asyncio.sleep(min(0.75 * (2**attempt), 30.0))
         if response is None:
             return ()
         payload = parse_dirty_gdelt_json(response.text)
