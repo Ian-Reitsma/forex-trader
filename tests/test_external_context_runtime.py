@@ -92,6 +92,26 @@ def test_file_backed_external_context_is_point_in_time(tmp_path) -> None:  # typ
                 "metadata": [
                     {"indicator": "CPI", "currency": "USD", "directionality": "1", "unit": "%"}
                 ],
+                "scheduled": [
+                    {
+                        "event_id": "usd-cpi-known",
+                        "currency": "USD",
+                        "name": "CPI",
+                        "scheduled_at": "2026-08-08T14:05:00Z",
+                        "available_at": "2026-08-08T13:00:00Z",
+                        "importance": "high",
+                        "source": "licensed_calendar",
+                    },
+                    {
+                        "event_id": "usd-cpi-future-revision",
+                        "currency": "USD",
+                        "name": "CPI revised schedule",
+                        "scheduled_at": "2026-08-08T14:10:00Z",
+                        "available_at": "2026-08-08T14:01:00Z",
+                        "importance": "high",
+                        "source": "licensed_calendar",
+                    },
+                ],
                 "consensus": [
                     {
                         "indicator": "CPI",
@@ -211,6 +231,13 @@ def test_file_backed_external_context_is_point_in_time(tmp_path) -> None:  # typ
     )
     snapshot = aggregator.snapshot("EUR_USD", as_of=NOW)
 
+    calendar = JsonEconomicCalendarProvider(calendar_path)
+    scheduled = calendar.scheduled_events(
+        start=NOW,
+        end=datetime(2026, 8, 8, 14, 30, tzinfo=UTC),
+        as_of=NOW,
+    )
+    assert [item.name for item in scheduled] == ["CPI"]
     assert [item.consensus for item in snapshot.consensus] == [Decimal("2.7")]
     assert not snapshot.release_actuals
     assert [item.document_id for item in snapshot.news] == ["n1"]
