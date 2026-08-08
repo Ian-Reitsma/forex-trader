@@ -15,16 +15,9 @@ from forex_trader.infrastructure.repository import SqliteDecisionRepository
 
 
 def _sqlite_datetime(value: str) -> str:
-    """Preserve SQLite datetime('now') semantics with microsecond resolution.
-
-    SQLite's built-in datetime('now') is second-resolution. Operational readiness
-    and halt mutations can legitimately occur multiple times inside one second, so
-    second-resolution timestamps cause distinct transitions to share an event ID.
-    Registering only the one-argument datetime() overload keeps other SQLite date
-    functions untouched while giving this runtime collision-resistant timestamps.
-    """
+    """Preserve SQLite datetime('now') semantics with offset-aware microsecond UTC."""
     if value == "now":
-        return datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
+        return datetime.now(UTC).isoformat(timespec="microseconds")
     return value
 
 
