@@ -33,7 +33,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .cache/forex-trader/public-history
-          key: public-fx-history-${{ runner.os }}-v4-${{ github.sha }}
+          key: public-fx-history-${{ runner.os }}-v4-${{ github.sha }}-attempt-${{ github.run_attempt }}
           restore-keys: |
             public-fx-history-${{ runner.os }}-v4-
       - name: Install
@@ -55,7 +55,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .cache/forex-trader/public-history
-          key: public-fx-history-${{ runner.os }}-v4-${{ github.sha }}
+          key: public-fx-history-${{ runner.os }}-v4-${{ github.sha }}-attempt-${{ github.run_attempt }}
       - name: Summarize backtest
         shell: bash
         run: |
