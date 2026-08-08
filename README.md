@@ -4,7 +4,7 @@ A Practice-only FX research and execution platform built around market location,
 
 The project is **not** a promise of profitability and is **not** approved for live-money trading. OANDA integration is locked to fxTrade Practice endpoints.
 
-## Current release: v0.7.15
+## Current release: v0.7.16
 
 The deployable decision path remains structure-first:
 
@@ -29,6 +29,35 @@ reconciliation + protection verification + persistent uncertainty halt
 ```
 
 EMA, RSI and ATR remain secondary diagnostics rather than substitutes for location, liquidity, and structure. Spot broker tick activity is explicitly treated as a low-confidence activity proxy, not centralized institutional footprint/delta data.
+
+## v0.7.16: point-in-time central-bank stance outcomes
+
+v0.7.16 adds a research-only market-reaction dataset on top of the v0.7.15 source-backed stance artifact. It does **not** feed deployable fundamentals or grant execution authority.
+
+Each comparable official document version is anchored to its conservative `available_at`. The baseline is the first completed archived midpoint-candle open at or after that instant, with baseline delay recorded and capped. The default outcome family is 5, 15, 60, and 240 minutes.
+
+Every observed event must contain the complete requested horizon panel. If even one horizon is unavailable, the whole event is retained as an explicit exclusion rather than allowing different horizons to use different hidden denominators.
+
+Raw pair return is preserved. `stance_aligned_return_bps` then applies both stance direction and pair-leg polarity, so positive always means the pair moved in the direction implied by the stance artifact for the policy currency. Contradictory, neutral, ambiguous, and abstained stance events remain in the dataset; non-directional artifacts simply have no aligned-return value.
+
+The price contract is explicitly `completed_midpoint_candle_open_proxy_not_execution`. These outcomes measure informational reaction, not executable P/L: they do not include spread, slippage, depth, latency, commissions, financing, stop/target geometry, or management.
+
+Reproduce the dataset offline from persisted document lineage plus an immutable candle archive:
+
+```bash
+python scripts/analyze_central_bank_stance_outcomes.py \
+  <official-document-database> \
+  <candle-archive.jsonl> \
+  --family-id fed_fomc_statement \
+  --instrument EUR_USD \
+  --horizon-minutes 5,15,60,240 \
+  --max-baseline-delay-seconds 300 \
+  --output stance-outcomes.json
+```
+
+A favorable market reaction does not validate that the stance extractor was semantically correct, and predictive midpoint direction does not establish executable expectancy. Semantic ground-truth validation and chronological statistical validation remain independent requirements before runtime use can even be considered.
+
+See `docs/42_V0_7_16_CENTRAL_BANK_STANCE_OUTCOMES.md`.
 
 ## v0.7.15: research-only central-bank stance evidence
 
@@ -206,9 +235,9 @@ Research promotion is fail-closed and non-executable. Missing/statistically unre
 
 ## Validation boundary
 
-CI validates editable installation/compilation, dependency integrity, secret scanning, explicit Ruff checks, strict mypy on deterministic production/research/provider/document/stance paths, the full branch-aware pytest suite with an enforced 85% floor, and an executed protected simulation paper-order smoke on Python 3.11 and 3.13.
+CI validates editable installation/compilation, dependency integrity, secret scanning, explicit Ruff checks, strict mypy on deterministic production/research/provider/document/stance/outcome paths, the full branch-aware pytest suite with an enforced 85% floor, and an executed protected simulation paper-order smoke on Python 3.11 and 3.13.
 
-Software CI does **not** prove authenticated broker behavior, public-provider/feed availability, stance-model validity, or profitability. No authenticated OANDA Practice success is claimed until the separately configured staged validation is run and reviewed.
+Software CI does **not** prove authenticated broker behavior, public-provider/feed availability, stance-model semantic validity, causal event impact, executable stance expectancy, or profitability. No authenticated OANDA Practice success is claimed until the separately configured staged validation is run and reviewed.
 
 ## Deliberate boundaries
 
@@ -222,9 +251,10 @@ The repository does not:
 - trust external/mirror links because they appear in an official feed;
 - infer same-document-family identity from title/text similarity;
 - treat central-bank stance evidence quality as calibrated probability;
-- feed v0.7.15 stance research into deployable signal fusion;
+- feed v0.7.15/v0.7.16 stance research into deployable signal fusion;
+- treat favorable post-document midpoint direction as semantic validation or executable profit;
 - claim midpoint candle backtests equal executable quote history;
 - allow offline research promotion to grant Practice authority;
 - allow paired research ablations to submit broker orders.
 
-The next central-bank research milestone is an immutable human-reviewed evaluation corpus tied to exact document-diff/version IDs. Coverage, abstention, false-direction rates, contradiction handling, dimension confusion, and institution/document-family cohorts should determine whether the conservative rules are expanded or replaced by a versioned NLP/LLM model. Runtime integration should occur only after empirical evaluation and calibration support it. A real licensed consensus/calendar adapter is still required once a licensed provider is selected outside Git.
+The next central-bank research requirements are independent semantic and statistical validation. A human-reviewed corpus tied to exact document-diff/version IDs must measure coverage, abstention, false-direction rates, contradiction handling, dimension confusion, and institution/document-family cohorts. Separately, stance-aligned market outcomes need chronological holdout evidence, minimum sample requirements, uncertainty bounds, and simultaneous treatment of the declared horizon family. Only after both survive should after-cost execution research be considered. A real licensed consensus/calendar adapter is still required once a licensed provider is selected outside Git.

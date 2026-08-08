@@ -110,6 +110,21 @@ class OfficialDocumentRepository:
         row = self._latest_row(family_id)
         return self._from_row(row) if row is not None else None
 
+    def family_versions(self, family_id: str) -> tuple[OfficialDocumentVersion, ...]:
+        """Return one explicit family in deterministic point-in-time order."""
+        requested = family_id.strip()
+        if not requested:
+            raise ValueError("family_id is required")
+        rows = self._connection.execute(
+            """
+            SELECT * FROM official_document_versions
+            WHERE family_id = ?
+            ORDER BY available_at ASC, version_id ASC
+            """,
+            (requested,),
+        ).fetchall()
+        return tuple(self._from_row(row) for row in rows)
+
     def as_of(self, family_id: str, instant: datetime) -> OfficialDocumentVersion | None:
         if instant.tzinfo is None:
             raise ValueError("document as_of instant must be timezone-aware")
