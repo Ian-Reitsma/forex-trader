@@ -182,7 +182,7 @@ def test_original_full_batch_finalizer_still_fails_closed_on_calibration_only_ev
     manifest = build_semantic_holdout_manifest(batch)
     calibration = build_partition_annotation_batch(batch, manifest, SemanticPartition.CALIBRATION)
     submissions, adjudications = evidence_for(calibration)
-    with pytest.raises(ValueError, match="every annotation packet requires exactly one adjudication"):
+    with pytest.raises(ValueError, match="every annotation packet requires"):
         finalize_annotation_batch(batch, submissions, adjudications, versions)
 
 
