@@ -1,0 +1,140 @@
+{
+  "schema_version": "1.0",
+  "release": "0.7.24",
+  "base_release": "0.7.23",
+  "principle": "Implemented software, connected data, independent validation, and execution authority are separate states.",
+  "requirements": [
+    {
+      "requirement": "multi_timeframe_structure",
+      "status": "implemented_existing",
+      "authority_effect": "none"
+    },
+    {
+      "requirement": "economic_calendar_point_in_time_consensus",
+      "status": "runtime_adapter_complete_vendor_data_external",
+      "implementation": [
+        "src/forex_trader/ingestion/file_providers.py",
+        "src/forex_trader/application/external_context.py"
+      ],
+      "remaining": "Supply and monitor a licensed multi-country point-in-time calendar/consensus feed."
+    },
+    {
+      "requirement": "scheduled_macro_event_runtime_gate",
+      "status": "implemented",
+      "implementation": [
+        "src/forex_trader/ingestion/file_providers.py",
+        "src/forex_trader/application/fx_engine.py"
+      ],
+      "remaining": "Collect prospective evidence with a real point-in-time calendar source."
+    },
+    {
+      "requirement": "real_time_news",
+      "status": "runtime_adapter_complete_vendor_data_external",
+      "implementation": [
+        "src/forex_trader/ingestion/file_providers.py",
+        "src/forex_trader/application/external_context.py"
+      ],
+      "remaining": "Supply licensed operational news and validate event classification/novelty on prospective data."
+    },
+    {
+      "requirement": "cross_asset_repricing",
+      "status": "runtime_adapter_complete_vendor_data_external",
+      "implementation": [
+        "src/forex_trader/ingestion/file_providers.py",
+        "src/forex_trader/application/external_context.py",
+        "src/forex_trader/domain/component_confirmation.py"
+      ],
+      "remaining": "Supply rates, rate-futures, risk, volatility, commodity, broad-dollar and carry inputs and validate orientation."
+    },
+    {
+      "requirement": "institutional_order_flow",
+      "status": "runtime_adapter_complete_vendor_data_external",
+      "implementation": [
+        "src/forex_trader/ingestion/file_providers.py",
+        "src/forex_trader/ingestion/providers.py",
+        "src/forex_trader/domain/component_confirmation.py"
+      ],
+      "remaining": "Supply CME/equivalent centralized data, contract-roll/orientation mapping and validate derived features."
+    },
+    {
+      "requirement": "broker_tick_proxy_not_institutional",
+      "status": "implemented",
+      "implementation": [
+        "src/forex_trader/domain/component_confirmation.py"
+      ],
+      "remaining": "none"
+    },
+    {
+      "requirement": "flow_divergence_strategy",
+      "status": "research_state_machine_complete_data_and_validation_external",
+      "implementation": [
+        "src/forex_trader/domain/policy_registry.py",
+        "src/forex_trader/research/flow_strategies.py",
+        "config/system-policy-v0.7.json"
+      ],
+      "authority": "research_only",
+      "remaining": "Acquire centralized flow, replay historically, collect prospective shadow evidence and pass promotion gates."
+    },
+    {
+      "requirement": "vwap_repositioning_strategy",
+      "status": "research_state_machine_complete_data_and_validation_external",
+      "implementation": [
+        "src/forex_trader/domain/policy_registry.py",
+        "src/forex_trader/research/flow_strategies.py",
+        "config/system-policy-v0.7.json"
+      ],
+      "authority": "research_only",
+      "remaining": "Acquire centralized VWAP/flow, replay historically, collect prospective shadow evidence and pass promotion gates."
+    },
+    {
+      "requirement": "event_concentration_and_macro_factor_risk",
+      "status": "implemented_initial_policy",
+      "implementation": [
+        "src/forex_trader/domain/macro_factor_risk.py",
+        "src/forex_trader/domain/risk_advanced.py",
+        "src/forex_trader/config.py",
+        "config/macro-factor-clusters-v1.json"
+      ],
+      "authority_effect": "independent_risk_veto",
+      "remaining": "Empirically validate factor taxonomy and capital-relative ceilings using historical executable and sustained Practice evidence."
+    },
+    {
+      "requirement": "technical_human_ground_truth",
+      "status": "blinded_workflow_complete_labels_external",
+      "implementation": [
+        "src/forex_trader/research/technical_annotation.py",
+        "scripts/create_technical_annotation_batch.py",
+        "scripts/finalize_technical_annotations.py"
+      ],
+      "remaining": "Collect at least two independent expert labels per frozen packet, adjudicate disagreements, freeze calibration criteria and evaluate holdout once."
+    },
+    {
+      "requirement": "campaign_policy_identity_covers_advanced_risk",
+      "status": "implemented",
+      "implementation": [
+        "src/forex_trader/application/campaign_policy.py"
+      ],
+      "remaining": "none"
+    },
+    {
+      "requirement": "central_bank_human_validation",
+      "status": "methodology_implemented_labels_external",
+      "remaining": "Collect independent calibration labels, freeze acceptance criteria, then evaluate sealed holdout once."
+    },
+    {
+      "requirement": "historical_executable_data",
+      "status": "external_data_gap",
+      "remaining": "Acquire historical bid/ask/tick plus point-in-time macro/news/cross-asset/flow archives."
+    },
+    {
+      "requirement": "authenticated_oanda_practice_campaign",
+      "status": "evidence_gate",
+      "remaining": "Run read-only, reconciliation, all-pair shadow, protected minimum-size round trip and sustained capped Practice campaign when market/network access permits."
+    },
+    {
+      "requirement": "operations_telemetry_event_backbone",
+      "status": "partial_pending",
+      "remaining": "Add full provider/strategy/execution/risk dashboards, alerts, durable event infrastructure and deployment controls before scaled operation."
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "policy_version": "macro-factor-clusters-v1",
+  "description": "Gross-notional policy clusters for event/macro concentration risk. These are deterministic policy tags, not estimated factor betas.",
+  "maximum_factor_exposure_fraction": "2.5",
+  "require_classification": true,
+  "instrument_factors": {
+    "EUR_USD": ["usd_macro", "usd_rates", "eur_macro", "eur_rates"],
+    "GBP_USD": ["usd_macro", "usd_rates", "gbp_macro", "gbp_rates"],
+    "USD_JPY": ["usd_macro", "usd_rates", "jpy_macro", "jpy_rates"],
+    "USD_CHF": ["usd_macro", "usd_rates", "chf_macro", "chf_rates"],
+    "AUD_USD": ["usd_macro", "usd_rates", "aud_macro", "aud_rates", "commodity_cycle"],
+    "USD_CAD": ["usd_macro", "usd_rates", "cad_macro", "cad_rates", "commodity_cycle"],
+    "NZD_USD": ["usd_macro", "usd_rates", "nzd_macro", "nzd_rates", "commodity_cycle"],
+    "EUR_GBP": ["eur_macro", "eur_rates", "gbp_macro", "gbp_rates"],
+    "EUR_JPY": ["eur_macro", "eur_rates", "jpy_macro", "jpy_rates"],
+    "GBP_JPY": ["gbp_macro", "gbp_rates", "jpy_macro", "jpy_rates"]
+  }
+}

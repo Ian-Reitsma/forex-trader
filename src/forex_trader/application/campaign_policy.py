@@ -29,16 +29,17 @@ def campaign_policy_context(engine: TradingEngine) -> dict[str, object]:
     fusion = engine.fusion_policy
     risk = engine.risk_policy
     correlation = getattr(risk, "correlation_guard", None)
+    macro_factor = getattr(risk, "macro_factor_guard", None)
     market_data = engine.market_data
     cost_model = engine.cost_model
     raw: dict[str, object] = {
-        "schema": "campaign-policy-v1",
+        "schema": "campaign-policy-v2",
         "implementation": {
             "version": __version__,
             "build_revision": _build_revision(),
         },
-        "strategy_version": "zone-liquidity-structure-v0.6",
-        "risk_version": "practice-risk-v0.6",
+        "strategy_version": "zone-liquidity-structure-v0.7",
+        "risk_version": getattr(risk, "risk_policy_version", "practice-risk-v0.7"),
         "engine_class": type(engine).__name__,
         "broker_class": type(engine.broker).__name__,
         "mode": getattr(engine.mode, "value", str(engine.mode)),
@@ -72,6 +73,10 @@ def campaign_policy_context(engine: TradingEngine) -> dict[str, object]:
             "max_currency_exposure_fraction": risk.max_currency_exposure_fraction,
             "margin_buffer_fraction": risk.margin_buffer_fraction,
             "authorization_ttl_seconds": risk.authorization_ttl_seconds,
+            "max_drawdown_fraction": getattr(risk, "max_drawdown_fraction", None),
+            "max_loss_streak": getattr(risk, "max_loss_streak", None),
+            "max_reserved_risk_fraction": getattr(risk, "max_reserved_risk_fraction", None),
+            "gap_stress_multiplier": getattr(risk, "gap_stress_multiplier", None),
         },
         "correlation": None
         if correlation is None
@@ -81,6 +86,16 @@ def campaign_policy_context(engine: TradingEngine) -> dict[str, object]:
             "minimum_observations": correlation.minimum_observations,
             "maximum_signed_correlation": correlation.maximum_signed_correlation,
             "fail_closed": correlation.fail_closed,
+        },
+        "macro_factor": None
+        if macro_factor is None
+        else {
+            "maximum_factor_exposure_fraction": macro_factor.maximum_factor_exposure_fraction,
+            "require_classification": macro_factor.require_classification,
+            "instrument_factors": {
+                instrument: tuple(sorted(factors))
+                for instrument, factors in sorted(macro_factor.factor_map.items())
+            },
         },
         "cost_model": {
             "class": type(cost_model).__name__,
