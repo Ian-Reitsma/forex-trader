@@ -98,7 +98,7 @@ class EnhancedRiskPolicy(RiskPolicy):
         if self.state_provider is not None and capital_base > 0:
             state = self.state_provider(account.account_id, account.nav)
             drawdown = Decimal(str(state.get("drawdown_fraction", "0")))
-            loss_streak = int(state.get("loss_streak", 0))
+            loss_streak = int(str(state.get("loss_streak", "0")))
             reserved = Decimal(str(state.get("reserved_risk", "0")))
             pending = Decimal(str(state.get("pending_risk", "0")))
             if drawdown >= self.max_drawdown_fraction:
