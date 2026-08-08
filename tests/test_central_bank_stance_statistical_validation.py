@@ -125,7 +125,7 @@ def build_fixture_dataset(
             candles.append(_candle(available_at + timedelta(minutes=horizon), BASE_PRICE))
         previous = current
 
-    for excluded_index in range(excluded_events):
+    for _ in range(excluded_events):
         event_index += 1
         current_text = current_text + "\nInflation remains elevated."
         current = _version(
@@ -202,7 +202,6 @@ def test_predeclared_60_minute_primary_rejects_despite_strong_other_horizons() -
 
 def test_interval_crossing_zero_is_insufficient_not_optimized_to_best_horizon() -> None:
     rows = list(constant_returns(30, ("10", "8", "1", "6")))
-    # The final one-third is the untouched holdout. Give its 60-minute values symmetric noise.
     for index in range(20, 30):
         five, fifteen, _, twoforty = rows[index]
         rows[index] = (five, fifteen, Decimal("8") if index % 2 else Decimal("-8"), twoforty)
@@ -263,10 +262,28 @@ def test_joint_bootstrap_is_deterministic_and_uses_one_width_across_family() -> 
 
 
 def test_source_dataset_horizon_family_cannot_be_narrowed_for_validation() -> None:
-    dataset = build_fixture_dataset(constant_returns(30))
-    narrowed = replace(dataset, horizon_minutes=(60,))
+    previous = _version(
+        index=900,
+        text="The Committee met today.",
+        available_at=BASE - timedelta(days=1),
+        predecessor_version_id=None,
+    )
+    current = _version(
+        index=901,
+        text="The Committee met today.\nInflation remains elevated.",
+        available_at=BASE,
+        predecessor_version_id=previous.version_id,
+    )
+    narrow_dataset = build_stance_outcome_dataset(
+        (previous, current),
+        (_candle(BASE, BASE_PRICE), _candle(BASE + timedelta(minutes=60), _price_for_aligned_bps(Decimal("5")))),
+        instrument="EUR_USD",
+        horizon_minutes=(60,),
+        max_baseline_delay_seconds=Decimal("300"),
+        as_of=BASE + timedelta(hours=2),
+    )
     with pytest.raises(ValueError, match="fixed 5/15/60/240"):
-        validate_stance_outcome_statistics(narrowed)
+        validate_stance_outcome_statistics(narrow_dataset)
 
 
 def test_statistical_report_identity_detects_tampering() -> None:
