@@ -15,14 +15,31 @@ from forex_trader.research.public_history import (
 )
 
 
+_DUKASCOPY_ARCHIVE_HOSTS = (
+    "https://datafeed.dukascopy.com/datafeed/",
+    "https://www.dukascopy.com/datafeed/",
+)
+
+
+def dukascopy_archive_urls(instrument: str, hour_start: datetime) -> tuple[str, ...]:
+    """Return equivalent first-party Dukascopy BI5 archive locations for one hour."""
+    primary = dukascopy_hour_url(instrument, hour_start)
+    marker = "/datafeed/"
+    if marker not in primary:
+        return (primary,)
+    relative = primary.split(marker, maxsplit=1)[1]
+    return tuple(f"{host}{relative}" for host in _DUKASCOPY_ARCHIVE_HOSTS)
+
+
 class ResilientDukascopyHistoryClient(DukascopyHistoryClient):
     """Dukascopy history client tuned for multi-week research campaigns.
 
     Historical hourly files occasionally return transient 5xx responses or drop
     connections. Preserve fail-closed source completeness, but reuse the HTTP
-    connection pool, allow bounded parallel acquisition, and retry the entire
-    transport-error family with capped exponential backoff before declaring the
-    historical archive unavailable.
+    connection pool, allow bounded parallel acquisition, retry transport failures,
+    and fall back to Dukascopy's own alternate archive host before declaring an
+    hourly file unavailable. Cached bytes must still decode as the expected BI5
+    hour before the campaign can continue.
     """
 
     def __init__(
@@ -63,23 +80,35 @@ class ResilientDukascopyHistoryClient(DukascopyHistoryClient):
                 hour_start=hour_start,
             )
 
-        url = dukascopy_hour_url(instrument, hour_start)
+        urls = dukascopy_archive_urls(instrument, hour_start)
         response: httpx.Response | None = None
-        for attempt in range(self.retries):
-            try:
-                async with semaphore:
-                    response = await client.get(url)
-                if response.status_code in {204, 404}:
-                    return ()
-                response.raise_for_status()
+        last_error: Exception | None = None
+        attempts_per_host = max(2, self.retries // len(urls))
+        for url in urls:
+            for attempt in range(attempts_per_host):
+                try:
+                    async with semaphore:
+                        response = await client.get(url)
+                    if response.status_code in {204, 404}:
+                        break
+                    response.raise_for_status()
+                    last_error = None
+                    break
+                except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                    response = None
+                    last_error = exc
+                    if attempt + 1 < attempts_per_host:
+                        await asyncio.sleep(min(0.5 * (2**attempt), 8.0))
+            if response is not None and response.status_code in {204, 404}:
+                continue
+            if response is not None and response.is_success:
                 break
-            except (httpx.TransportError, httpx.HTTPStatusError):
-                response = None
-                if attempt + 1 >= self.retries:
-                    raise
-                await asyncio.sleep(min(0.5 * (2**attempt), 8.0))
 
-        if response is None or not response.content:
+        if response is None or not response.is_success:
+            if last_error is not None:
+                raise last_error
+            return ()
+        if not response.content:
             return ()
         ticks = decode_dukascopy_bi5(
             response.content,
