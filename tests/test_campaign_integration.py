@@ -37,7 +37,7 @@ def test_real_engine_campaign_executes_one_simulated_order_and_keeps_scanning(tm
     assert report.errors == 0
     assert report.campaign_id == "integration-campaign"
     assert report.policy_fingerprint == runner.policy_fingerprint
-    assert report.policy_context["schema"] == "campaign-policy-v1"
+    assert report.policy_context["schema"] == "campaign-policy-v2"
     assert report.policy_context["fusion"]["minimum_score"] == "0.66"  # type: ignore[index]
 
     lines = evidence.read_text(encoding="utf-8").splitlines()
@@ -46,7 +46,7 @@ def test_real_engine_campaign_executes_one_simulated_order_and_keeps_scanning(tm
     assert persisted["cycle"] == 1
     assert persisted["campaign_id"] == "integration-campaign"
     assert persisted["policy_fingerprint"] == runner.policy_fingerprint
-    assert persisted["policy_context"]["schema"] == "campaign-policy-v1"
+    assert persisted["policy_context"]["schema"] == "campaign-policy-v2"
     assert persisted["instruments_evaluated"] == 3
     assert persisted["orders_submitted"] == 1
     assert persisted["orders_unknown"] == 0
