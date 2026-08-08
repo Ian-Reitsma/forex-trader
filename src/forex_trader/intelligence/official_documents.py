@@ -290,9 +290,8 @@ class _VisibleTextParser(HTMLParser):
 
 def _extract_html(body: bytes) -> str:
     text = _decode_utf8(body)
-    upper = text.upper()
-    if "<!DOCTYPE" in upper or "<!ENTITY" in upper:
-        raise ValueError("official HTML document cannot contain DTD or entity declarations")
+    if "<!ENTITY" in text.upper():
+        raise ValueError("official HTML document cannot contain entity declarations")
     parser = _VisibleTextParser()
     try:
         parser.feed(text)
