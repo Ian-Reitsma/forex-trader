@@ -84,6 +84,7 @@ jobs:
           src/forex_trader/research/promotion_evidence.py
           src/forex_trader/research/stance_outcomes.py
           src/forex_trader/research/stance_semantic_validation.py
+          src/forex_trader/research/stance_statistical_validation.py
           scripts/analyze_central_bank_stance.py
           scripts/analyze_central_bank_stance_outcomes.py
           scripts/analyze_phase_d_paths.py
@@ -94,6 +95,7 @@ jobs:
           scripts/label_ablation_decisions.py
           scripts/label_decision_evidence.py
           scripts/run_practice_campaign.py
+          scripts/validate_central_bank_stance_statistics.py
           tests/test_ablation_outcome_maturity.py
           tests/test_ablation_promotion_cli_uncertainty.py
           tests/test_campaign_decision_evidence.py
@@ -103,6 +105,8 @@ jobs:
           tests/test_central_bank_stance_evidence.py
           tests/test_central_bank_stance_outcome_cli.py
           tests/test_central_bank_stance_outcomes.py
+          tests/test_central_bank_stance_statistical_validation.py
+          tests/test_central_bank_stance_statistical_validation_cli.py
           tests/test_macro_source_orchestration.py
           tests/test_official_bls_adapter.py
           tests/test_official_document_discovery.py
@@ -169,12 +173,14 @@ jobs:
           src/forex_trader/research/promotion_evidence.py
           src/forex_trader/research/stance_outcomes.py
           src/forex_trader/research/stance_semantic_validation.py
+          src/forex_trader/research/stance_statistical_validation.py
           scripts/analyze_central_bank_stance.py
           scripts/analyze_central_bank_stance_outcomes.py
           scripts/assemble_paired_ablations.py
           scripts/assess_research_promotion.py
           scripts/evaluate_central_bank_stance_semantics.py
           scripts/label_ablation_decisions.py
+          scripts/validate_central_bank_stance_statistics.py
       - name: Test and coverage
         id: pytest
         continue-on-error: true
