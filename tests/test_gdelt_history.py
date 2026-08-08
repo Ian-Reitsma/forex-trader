@@ -8,11 +8,11 @@ from forex_trader.research.gdelt_history import parse_dirty_gdelt_json
 
 
 def test_dirty_gdelt_json_repairs_only_invalid_backslash_escape() -> None:
-    raw = r'{"articles":[{"title":"Fed rate path C:\markets\fx","url":"https://example.com"}]}'
+    raw = r'{"articles":[{"title":"Fed rate path C:\markets\quotes","url":"https://example.com"}]}'
     parsed = parse_dirty_gdelt_json(raw)
     assert isinstance(parsed, dict)
     articles = parsed["articles"]
-    assert articles[0]["title"] == r"Fed rate path C:\markets\fx"
+    assert articles[0]["title"] == r"Fed rate path C:\markets\quotes"
 
 
 def test_dirty_gdelt_json_keeps_valid_json_unchanged() -> None:
