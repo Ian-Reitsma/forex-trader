@@ -37,10 +37,10 @@ class ResilientDukascopyHistoryClient(DukascopyHistoryClient):
     Historical hourly files occasionally return transient 5xx responses or drop
     connections. Preserve fail-closed source completeness, but reuse the HTTP
     connection pool, allow bounded parallel acquisition, retry transport failures,
-    and fall back to Dukascopy's own alternate archive host before declaring an
-    hourly file unavailable. A 204/404 from either first-party archive host is
-    treated the same way as the base Dukascopy client: that market hour has no BI5
-    archive. Cached bytes must still decode as the requested BI5 hour.
+    and repeat the bulk sweep so successful hourly downloads are reused from disk
+    while only remaining source holes are retried. A 204/404 from either first-party
+    archive host is treated the same way as the base Dukascopy client: that market
+    hour has no BI5 archive. Cached bytes must still decode as the requested BI5 hour.
     """
 
     def __init__(
@@ -50,13 +50,39 @@ class ResilientDukascopyHistoryClient(DukascopyHistoryClient):
         timeout_seconds: float = 45.0,
         max_concurrency: int = 12,
         retries: int = 12,
+        recovery_sweeps: int = 4,
     ) -> None:
+        if recovery_sweeps < 1:
+            raise ValueError("recovery_sweeps must be positive")
         super().__init__(
             cache_dir=cache_dir,
             timeout_seconds=max(timeout_seconds, 45.0),
             max_concurrency=min(max_concurrency, 16),
             retries=max(retries, 12),
         )
+        self.recovery_sweeps = recovery_sweeps
+
+    async def ticks(
+        self,
+        instrument: str,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[HistoricalTick, ...]:
+        """Complete the requested range or fail after repeated cache-aware sweeps."""
+        last_error: Exception | None = None
+        for sweep in range(self.recovery_sweeps):
+            try:
+                return await super().ticks(instrument, start, end)
+            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                last_error = exc
+                if sweep + 1 >= self.recovery_sweeps:
+                    raise
+                # Successful hourly files from the failed sweep are already cached,
+                # so the next pass concentrates requests on the remaining holes.
+                await asyncio.sleep(min(1.0 * (2**sweep), 8.0))
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("historical range recovery exited unexpectedly")
 
     async def _load_hour(
         self,
