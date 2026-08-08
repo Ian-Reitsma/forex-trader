@@ -214,7 +214,7 @@ def test_technical_payload_validation_detects_tampering() -> None:
     packet = dict(raw_packets[0])
     candles = list(packet["candles"])
     first = dict(candles[0])
-    first["close"] = "9.9999"
+    first["close"] = "1.1002"
     candles[0] = first
     packet["candles"] = candles
     with pytest.raises(ValueError, match="hash mismatch"):
