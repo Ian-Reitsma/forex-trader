@@ -5,6 +5,8 @@ from decimal import Decimal
 
 from forex_trader.domain.component_confirmation import confirmation_evidence_for_components
 from forex_trader.domain.context import (
+    ConfirmationCategory,
+    FlowRequirement,
     PolicyAuthority,
     StrategyPolicyRegistry,
     classify_regime,
@@ -75,6 +77,11 @@ class RegimeAwareSignalFusionPolicy(SignalFusionPolicy):
         *,
         maximum_spread_pips: Decimal | None = None,
         components: DecisionComponentPolicy = PRODUCTION_DECISION_COMPONENTS,
+        cross_asset_alignment: Decimal = Decimal("0"),
+        cross_asset_source_ids: tuple[str, ...] = (),
+        institutional_flow_pressure: Decimal | None = None,
+        institutional_flow_source: str | None = None,
+        institutional_flow_confidence: Decimal = Decimal("0"),
     ) -> TradeCandidate:
         candidate = super().evaluate(
             technical,
@@ -93,6 +100,11 @@ class RegimeAwareSignalFusionPolicy(SignalFusionPolicy):
             spread_limit_pips=spread_limit,
             pip_size=pip_size_for(technical.instrument),
             components=components,
+            cross_asset_alignment=cross_asset_alignment,
+            cross_asset_source_ids=cross_asset_source_ids,
+            institutional_flow_pressure=institutional_flow_pressure,
+            institutional_flow_source=institutional_flow_source,
+            institutional_flow_confidence=institutional_flow_confidence,
         )
         evidence = {
             **candidate.evidence,
@@ -102,6 +114,10 @@ class RegimeAwareSignalFusionPolicy(SignalFusionPolicy):
             "selected_policy": None if policy is None else f"{policy.name}:{policy.version}",
             "policy_authority": None if policy is None else policy.authority.value,
             "flow_requirement": None if policy is None else policy.flow_requirement.value,
+            "cross_asset_alignment": cross_asset_alignment,
+            "institutional_flow_source": institutional_flow_source,
+            "institutional_flow_pressure": institutional_flow_pressure,
+            "institutional_flow_confidence": institutional_flow_confidence,
             "confirmation_categories": tuple(sorted(item.value for item in confirmations.categories)),
             "confirmation_source_ids": tuple(sorted(confirmations.source_ids)),
             "independent_confirmation_count": confirmations.independent_confirmation_count,
@@ -122,6 +138,19 @@ class RegimeAwareSignalFusionPolicy(SignalFusionPolicy):
                 stop_loss=None,
                 take_profit=None,
                 reasons=(*candidate.reasons, f"REGIME_NO_PRACTICE_POLICY: regime={regime.regime.value}"),
+            )
+        if policy.flow_requirement is FlowRequirement.REQUIRED and ConfirmationCategory.FLOW not in confirmations.categories:
+            return replace(
+                candidate,
+                disposition=DecisionDisposition.ABSTAIN,
+                rejection_code="INSTITUTIONAL_FLOW_REQUIRED",
+                entry_price=None,
+                stop_loss=None,
+                take_profit=None,
+                reasons=(
+                    *candidate.reasons,
+                    f"INSTITUTIONAL_FLOW_REQUIRED: {policy.name}:{policy.version} requires healthy independent flow",
+                ),
             )
         if policy.name != "sweep_reclaim":
             return replace(
