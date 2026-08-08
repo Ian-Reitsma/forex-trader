@@ -129,6 +129,9 @@ class OfficialFeedDiscovery:
 def parse_official_feed(definition: OfficialFeedDefinition, payload: RawSourcePayload) -> FeedDiscoveryResult:
     if payload.source_id != definition.source_id:
         raise ValueError("feed payload source does not match feed definition")
+    upper_body = payload.body.upper()
+    if b"<!DOCTYPE" in upper_body or b"<!ENTITY" in upper_body:
+        raise ValueError("official feed XML cannot contain DTD or entity declarations")
     try:
         root = ElementTree.fromstring(payload.body)
     except ElementTree.ParseError as exc:
