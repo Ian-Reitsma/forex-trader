@@ -96,7 +96,10 @@ def main() -> None:
         frozen_as_of=batch.frozen_as_of.isoformat(),
     )
     key = "calibration_packet_ids" if args.partition == "calibration" else "holdout_packet_ids"
-    required = tuple(str(item) for item in manifest_payload[key])  # type: ignore[index]
+    raw_required = manifest_payload.get(key)
+    if not isinstance(raw_required, list):
+        raise ValueError(f"technical holdout manifest {key} must be a list")
+    required = tuple(str(item) for item in raw_required)
 
     submissions = tuple(
         TechnicalReviewerSubmission(
