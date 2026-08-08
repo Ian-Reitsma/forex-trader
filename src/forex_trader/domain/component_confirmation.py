@@ -2,10 +2,21 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from forex_trader.domain.context import ConfirmationCategory, ConfirmationEvidence, confirmation_evidence
+from forex_trader.domain.context import ConfirmationCategory, ConfirmationEvidence
 from forex_trader.domain.decision_components import DecisionComponentPolicy, PRODUCTION_DECISION_COMPONENTS
 from forex_trader.domain.enums import Direction
 from forex_trader.domain.models import FundamentalAssessment, Quote, TechnicalAssessment
+
+
+_NON_INSTITUTIONAL_FLOW_SOURCES = frozenset({"", "none", "broker_tick_proxy"})
+
+
+def _pressure_aligns(direction: Direction, pressure: Decimal) -> bool:
+    if direction is Direction.LONG:
+        return pressure >= Decimal("0.20")
+    if direction is Direction.SHORT:
+        return pressure <= Decimal("-0.20")
+    return False
 
 
 def confirmation_evidence_for_components(
@@ -17,21 +28,17 @@ def confirmation_evidence_for_components(
     pip_size: Decimal,
     components: DecisionComponentPolicy = PRODUCTION_DECISION_COMPONENTS,
     cross_asset_alignment: Decimal = Decimal("0"),
+    cross_asset_source_ids: tuple[str, ...] = (),
+    institutional_flow_pressure: Decimal | None = None,
+    institutional_flow_source: str | None = None,
+    institutional_flow_confidence: Decimal = Decimal("0"),
 ) -> ConfirmationEvidence:
-    """Return production confirmation evidence with optional component removal.
+    """Build independent confirmation evidence without double-counting local proxies.
 
-    The all-on path delegates to the established production helper exactly. Masked paths
-    reconstruct the same category rules while omitting only disabled evidence families.
+    Broker tick activity can remain a technical feature, but it is not an independent
+    institutional-flow source. An external flow snapshot counts only when its normalized
+    pressure agrees with the trade direction and the provider confidence is sufficient.
     """
-    if components.is_production_default:
-        return confirmation_evidence(
-            technical,
-            fundamental,
-            quote,
-            spread_limit_pips=spread_limit_pips,
-            pip_size=pip_size,
-            cross_asset_alignment=cross_asset_alignment,
-        )
 
     categories: set[ConfirmationCategory] = set()
     sources: set[str] = set()
@@ -45,10 +52,32 @@ def confirmation_evidence_for_components(
             if components.retest
             else "price structure shift confirmed without retest requirement"
         )
-    if components.flow and technical.flow_source not in {"", "none"} and abs(technical.flow_pressure) >= Decimal("0.20"):
+
+    technical_flow_source = technical.flow_source.strip().lower()
+    if (
+        components.flow
+        and technical_flow_source not in _NON_INSTITUTIONAL_FLOW_SOURCES
+        and _pressure_aligns(technical.direction, technical.flow_pressure)
+    ):
         categories.add(ConfirmationCategory.FLOW)
         sources.add(technical.flow_source)
-        reasons.append(f"flow pressure={technical.flow_pressure}")
+        reasons.append(f"institutional technical flow pressure={technical.flow_pressure}")
+
+    if (
+        components.flow
+        and institutional_flow_source
+        and institutional_flow_source.strip().lower() not in _NON_INSTITUTIONAL_FLOW_SOURCES
+        and institutional_flow_pressure is not None
+        and institutional_flow_confidence >= Decimal("0.50")
+        and _pressure_aligns(technical.direction, institutional_flow_pressure)
+    ):
+        categories.add(ConfirmationCategory.FLOW)
+        sources.add(institutional_flow_source)
+        reasons.append(
+            "external institutional flow "
+            f"pressure={institutional_flow_pressure} confidence={institutional_flow_confidence}"
+        )
+
     directional = (
         fundamental.differential
         if technical.direction is Direction.LONG
@@ -60,10 +89,22 @@ def confirmation_evidence_for_components(
         categories.add(ConfirmationCategory.FUNDAMENTAL)
         sources.add("macro")
         reasons.append("fundamental context is non-conflicting with sufficient confidence")
-    if cross_asset_alignment >= Decimal("0.25"):
+
+    cross_asset_directional = (
+        cross_asset_alignment
+        if technical.direction is Direction.LONG
+        else -cross_asset_alignment
+        if technical.direction is Direction.SHORT
+        else Decimal("0")
+    )
+    if cross_asset_directional >= Decimal("0.25"):
         categories.add(ConfirmationCategory.CROSS_ASSET)
-        sources.add("cross_asset")
+        if cross_asset_source_ids:
+            sources.update(cross_asset_source_ids)
+        else:
+            sources.add("cross_asset")
         reasons.append(f"cross-asset alignment={cross_asset_alignment}")
+
     spread_pips = quote.spread / pip_size
     if spread_pips <= spread_limit_pips:
         categories.add(ConfirmationCategory.EXECUTION)

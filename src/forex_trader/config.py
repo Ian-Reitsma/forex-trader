@@ -14,6 +14,7 @@ from forex_trader.adapters.simulator import SimulatedPaperBroker
 from forex_trader.adapters.synthetic import SyntheticMarketData
 from forex_trader.adapters.timeframe import TimeframeMappedMarketData
 from forex_trader.application.engine import TradingEngine
+from forex_trader.application.external_context import ExternalContextAggregator, ExternalContextFusionPolicy
 from forex_trader.application.fx_engine import FxTradingEngine
 from forex_trader.domain.correlation_risk import CorrelationRiskGuard
 from forex_trader.domain.costs import SessionCostModel
@@ -25,6 +26,12 @@ from forex_trader.domain.models import CurrencyFundamentals
 from forex_trader.domain.risk_advanced import EnhancedRiskPolicy
 from forex_trader.domain.timeframes import validate_timeframe_pair
 from forex_trader.infrastructure.advanced_repository import AdvancedTradingRepository
+from forex_trader.ingestion.file_providers import (
+    JsonCrossAssetProvider,
+    JsonEconomicCalendarProvider,
+    JsonNewsProvider,
+    JsonOrderFlowProvider,
+)
 
 
 def _bool(value: str | None, default: bool = False) -> bool:
@@ -38,6 +45,11 @@ def _decimal_env(name: str, default: str) -> Decimal:
         return Decimal(os.getenv(name, default))
     except Exception as exc:
         raise ValueError(f"{name} must be a decimal number") from exc
+
+
+def _optional_env(name: str) -> str | None:
+    value = os.getenv(name)
+    return value.strip() if value and value.strip() else None
 
 
 def load_dotenv(path: str | Path = ".env") -> None:
@@ -80,6 +92,11 @@ class AppConfig:
     max_signed_correlation: float = 0.85
     correlation_minimum_observations: int = 40
     auto_discover_currency_instruments: bool = False
+    economic_calendar_path: str | None = None
+    news_path: str | None = None
+    cross_asset_path: str | None = None
+    order_flow_path: str | None = None
+    order_flow_max_age_seconds: Decimal = Decimal("60")
     api_token: str | None = field(default=None, repr=False)
     oanda_token: str | None = field(default=None, repr=False)
     oanda_account_id: str | None = None
@@ -122,6 +139,11 @@ class AppConfig:
             max_signed_correlation=float(os.getenv("FOREX_MAX_SIGNED_CORRELATION", "0.85")),
             correlation_minimum_observations=int(os.getenv("FOREX_CORRELATION_MINIMUM_OBSERVATIONS", "40")),
             auto_discover_currency_instruments=_bool(os.getenv("FOREX_AUTO_DISCOVER_CURRENCY_INSTRUMENTS"), False),
+            economic_calendar_path=_optional_env("FOREX_ECONOMIC_CALENDAR_PATH"),
+            news_path=_optional_env("FOREX_NEWS_PATH"),
+            cross_asset_path=_optional_env("FOREX_CROSS_ASSET_PATH"),
+            order_flow_path=_optional_env("FOREX_ORDER_FLOW_PATH"),
+            order_flow_max_age_seconds=_decimal_env("FOREX_ORDER_FLOW_MAX_AGE_SECONDS", "60"),
             api_token=os.getenv("FOREX_API_TOKEN") or None,
             oanda_token=os.getenv("OANDA_API_TOKEN") or None,
             oanda_account_id=os.getenv("OANDA_ACCOUNT_ID") or None,
@@ -179,6 +201,16 @@ class AppConfig:
             errors.append("FOREX_MAX_SIGNED_CORRELATION must be in (0, 1]")
         if self.correlation_minimum_observations < 10:
             errors.append("FOREX_CORRELATION_MINIMUM_OBSERVATIONS must be at least 10")
+        if self.order_flow_max_age_seconds <= 0:
+            errors.append("FOREX_ORDER_FLOW_MAX_AGE_SECONDS must be positive")
+        for env_name, path in (
+            ("FOREX_ECONOMIC_CALENDAR_PATH", self.economic_calendar_path),
+            ("FOREX_NEWS_PATH", self.news_path),
+            ("FOREX_CROSS_ASSET_PATH", self.cross_asset_path),
+            ("FOREX_ORDER_FLOW_PATH", self.order_flow_path),
+        ):
+            if path is not None and not Path(path).is_file():
+                errors.append(f"{env_name} does not exist or is not a file: {path}")
         return errors
 
 
@@ -216,6 +248,22 @@ def load_macro_file(
         for currency, values in data.items()
     ]
     return FundamentalBook(snapshots)
+
+
+def _external_context(config: AppConfig) -> ExternalContextAggregator:
+    return ExternalContextAggregator(
+        economic_calendar=None
+        if config.economic_calendar_path is None
+        else JsonEconomicCalendarProvider(config.economic_calendar_path),
+        news=None if config.news_path is None else JsonNewsProvider(config.news_path),
+        cross_asset=None if config.cross_asset_path is None else JsonCrossAssetProvider(config.cross_asset_path),
+        order_flow=None
+        if config.order_flow_path is None
+        else JsonOrderFlowProvider(
+            config.order_flow_path,
+            maximum_snapshot_age_seconds=config.order_flow_max_age_seconds,
+        ),
+    )
 
 
 def build_engine(config: AppConfig, *, macro_file: str | None = None) -> TradingEngine:
@@ -262,18 +310,25 @@ def build_engine(config: AppConfig, *, macro_file: str | None = None) -> Trading
         minimum_observations=config.correlation_minimum_observations,
         maximum_signed_correlation=config.max_signed_correlation,
     )
+    external_context = _external_context(config)
+    fusion_kwargs = {
+        "minimum_score": config.minimum_score,
+        "maximum_spread_pips": config.maximum_spread_pips,
+        "require_fundamentals": config.require_fundamentals,
+        "minimum_independent_confirmations": config.minimum_independent_confirmations,
+        "minimum_independent_sources": config.minimum_independent_sources,
+    }
+    fusion_policy = (
+        ExternalContextFusionPolicy(external_context, **fusion_kwargs)
+        if external_context.configured
+        else RegimeAwareSignalFusionPolicy(**fusion_kwargs)
+    )
     return FxTradingEngine(
         market_data=market_data,
         broker=broker,
         repository=repository,
         fundamentals=fundamentals,
-        fusion_policy=RegimeAwareSignalFusionPolicy(
-            minimum_score=config.minimum_score,
-            maximum_spread_pips=config.maximum_spread_pips,
-            require_fundamentals=config.require_fundamentals,
-            minimum_independent_confirmations=config.minimum_independent_confirmations,
-            minimum_independent_sources=config.minimum_independent_sources,
-        ),
+        fusion_policy=fusion_policy,
         risk_policy=EnhancedRiskPolicy(
             risk_fraction=config.risk_fraction,
             max_daily_loss_fraction=config.max_daily_loss_fraction,

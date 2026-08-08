@@ -1,0 +1,121 @@
+{
+  "schema_version": "1.0",
+  "release": "0.7.23",
+  "audit_target_main_sha": "435801c5b2ff5bc33738803b6eab0db34eaa960b",
+  "principle": "An implemented interface or adapter is not equivalent to a connected licensed feed or validated trading edge.",
+  "requirements": [
+    {
+      "requirement": "multi_timeframe_structure",
+      "status": "implemented_existing",
+      "authority_effect": "none"
+    },
+    {
+      "requirement": "economic_calendar_point_in_time_consensus",
+      "status": "runtime_adapter_complete_vendor_data_external",
+      "implementation": [
+        "src/forex_trader/ingestion/file_providers.py",
+        "src/forex_trader/application/external_context.py"
+      ],
+      "remaining": "Supply and monitor a licensed multi-country point-in-time calendar/consensus feed."
+    },
+    {
+      "requirement": "scheduled_macro_event_runtime_gate",
+      "status": "implemented",
+      "implementation": [
+        "src/forex_trader/ingestion/file_providers.py",
+        "src/forex_trader/application/fx_engine.py"
+      ],
+      "remaining": "Operational evidence with a real calendar feed."
+    },
+    {
+      "requirement": "real_time_news",
+      "status": "runtime_adapter_complete_vendor_data_external",
+      "implementation": [
+        "src/forex_trader/ingestion/file_providers.py",
+        "src/forex_trader/application/external_context.py"
+      ],
+      "remaining": "Supply a licensed/operational news source and event-classification pipeline evidence."
+    },
+    {
+      "requirement": "cross_asset_repricing",
+      "status": "runtime_adapter_complete_vendor_data_external",
+      "implementation": [
+        "src/forex_trader/ingestion/file_providers.py",
+        "src/forex_trader/application/external_context.py",
+        "src/forex_trader/domain/component_confirmation.py"
+      ],
+      "remaining": "Supply rates/rate-futures/risk/commodity/USD/carry inputs and validate normalization."
+    },
+    {
+      "requirement": "institutional_order_flow",
+      "status": "runtime_adapter_complete_vendor_data_external",
+      "implementation": [
+        "src/forex_trader/ingestion/file_providers.py",
+        "src/forex_trader/ingestion/providers.py",
+        "src/forex_trader/domain/component_confirmation.py"
+      ],
+      "remaining": "Supply CME/equivalent centralized data, contract-roll/orientation mapping, and validate derived features."
+    },
+    {
+      "requirement": "broker_tick_proxy_not_institutional",
+      "status": "implemented",
+      "implementation": [
+        "src/forex_trader/domain/component_confirmation.py"
+      ],
+      "remaining": "none"
+    },
+    {
+      "requirement": "flow_divergence_strategy",
+      "status": "research_policy_registered_signal_policy_pending",
+      "implementation": [
+        "src/forex_trader/domain/policy_registry.py",
+        "config/system-policy-v0.7.json"
+      ],
+      "remaining": "Implement and validate the research state machine after real centralized flow exists."
+    },
+    {
+      "requirement": "vwap_repositioning_strategy",
+      "status": "research_policy_registered_signal_policy_pending",
+      "implementation": [
+        "src/forex_trader/domain/policy_registry.py",
+        "config/system-policy-v0.7.json"
+      ],
+      "remaining": "Implement and validate the research state machine after real volume/VWAP evidence exists."
+    },
+    {
+      "requirement": "event_concentration_and_macro_factor_risk",
+      "status": "partially_implemented",
+      "implementation": [
+        "src/forex_trader/domain/events.py",
+        "src/forex_trader/domain/risk.py",
+        "src/forex_trader/domain/risk_advanced.py"
+      ],
+      "remaining": "Add explicit portfolio macro-factor cluster exposure limits beyond event blackout, currency exposure, and signed correlation."
+    },
+    {
+      "requirement": "technical_human_ground_truth",
+      "status": "pending",
+      "remaining": "Build blinded zone/sweep/structure chart annotation corpus and calibration/holdout workflow."
+    },
+    {
+      "requirement": "central_bank_human_validation",
+      "status": "methodology_implemented_labels_external",
+      "remaining": "Collect independent calibration labels, freeze acceptance criteria, then evaluate sealed holdout once."
+    },
+    {
+      "requirement": "historical_executable_data",
+      "status": "external_data_gap",
+      "remaining": "Acquire historical bid/ask/tick plus point-in-time macro/news/cross-asset/flow archives."
+    },
+    {
+      "requirement": "authenticated_oanda_practice_campaign",
+      "status": "evidence_gate",
+      "remaining": "Run read-only, protected round-trip, and sustained capped Practice campaign when markets and deployment credentials permit."
+    },
+    {
+      "requirement": "operations_telemetry_event_backbone",
+      "status": "partial_pending",
+      "remaining": "Add full provider/strategy/execution/risk dashboards, alerts, durable event infrastructure, and deployment controls before scaled operation."
+    }
+  ]
+}

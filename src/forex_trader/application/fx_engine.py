@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from forex_trader.application.engine import TradingEngine
 from forex_trader.application.signal_capture import SignalEvaluationInputs
-from forex_trader.domain.events import pair_event_blackout
+from forex_trader.domain.events import ScheduledMacroEvent, pair_event_blackout
 from forex_trader.domain.models import DecisionTrace
 from forex_trader.domain.risk_day import fx_risk_day_key
 from forex_trader.domain.sessions import SessionPhase, classify_phase
@@ -98,6 +98,33 @@ class FxTradingEngine(TradingEngine):
                 rollover_blackout=classify_phase(quote.time) is SessionPhase.ROLLOVER,
             )
         return trace, captured
+
+    def _scheduled_events_near(self, instant: datetime) -> list[ScheduledMacroEvent]:
+        """Merge durable/manual events with point-in-time configured calendar events.
+
+        A configured calendar is part of the risk boundary. If its scheduled-event query
+        fails, evaluation fails closed instead of treating an unavailable calendar as proof
+        that no event risk exists.
+        """
+        events = super()._scheduled_events_near(instant)
+        external_context = getattr(self.fusion_policy, "external_context", None)
+        calendar = getattr(external_context, "economic_calendar", None)
+        scheduled_events = getattr(calendar, "scheduled_events", None)
+        if not callable(scheduled_events):
+            return events
+        try:
+            external_events = scheduled_events(
+                start=instant - timedelta(hours=1),
+                end=instant + timedelta(hours=1),
+                as_of=instant,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"configured economic calendar scheduled-event query failed: {type(exc).__name__}: {str(exc)[:200]}"
+            ) from exc
+        deduplicated = {event.event_id: event for event in events}
+        deduplicated.update({event.event_id: event for event in external_events})
+        return sorted(deduplicated.values(), key=lambda event: (event.scheduled_at, str(event.event_id)))
 
     def _observe_latched_loss(self, account, signal_time: datetime, capital_base: Decimal) -> bool:  # type: ignore[no-untyped-def]
         observe = getattr(self.repository, "observe_risk_day", None)
