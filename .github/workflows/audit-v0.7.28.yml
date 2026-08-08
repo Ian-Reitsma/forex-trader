@@ -27,6 +27,7 @@ jobs:
         run: >-
           ruff check --select E4,E7,E9,F
           src/forex_trader/research/public_history.py
+          src/forex_trader/research/resilient_tick_history.py
           src/forex_trader/research/gdelt_history.py
           src/forex_trader/research/official_news_history.py
           src/forex_trader/research/tick_backtest.py
@@ -35,6 +36,7 @@ jobs:
           scripts/run_official_historical_backtest.py
           tests/test_public_history.py
           tests/test_public_history_edges.py
+          tests/test_resilient_tick_history.py
           tests/test_gdelt_history.py
           tests/test_official_news_history.py
           tests/test_tick_backtest.py
@@ -43,6 +45,7 @@ jobs:
         run: >-
           python -m mypy --strict --follow-imports=silent
           src/forex_trader/research/public_history.py
+          src/forex_trader/research/resilient_tick_history.py
           src/forex_trader/research/gdelt_history.py
           src/forex_trader/research/official_news_history.py
           src/forex_trader/research/tick_backtest.py
@@ -54,6 +57,7 @@ jobs:
           pytest -q
           tests/test_public_history.py
           tests/test_public_history_edges.py
+          tests/test_resilient_tick_history.py
           tests/test_gdelt_history.py
           tests/test_official_news_history.py
           tests/test_tick_backtest.py
