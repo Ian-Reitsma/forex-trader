@@ -14,6 +14,24 @@ import httpx
 from forex_trader.intelligence.events import ConsensusSnapshot, ReleaseActual, ReleaseMetadata, ReleaseSurprise, calculate_release_surprise
 
 
+def _normalize_host(host: str) -> str:
+    normalized = host.strip().lower().rstrip(".")
+    if normalized.startswith("www."):
+        normalized = normalized[4:]
+    if not normalized or "/" in normalized or ":" in normalized:
+        raise ValueError(f"invalid source host: {host!r}")
+    return normalized
+
+
+def _validate_sha256(value: str, name: str) -> None:
+    if len(value) != 64:
+        raise ValueError(f"{name} must be a SHA-256 hex digest")
+    try:
+        int(value, 16)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a SHA-256 hex digest") from exc
+
+
 class SourceAuthority(StrEnum):
     OFFICIAL = "official"
     LICENSED = "licensed"
@@ -335,21 +353,3 @@ def validate_and_calculate_release(
         official.actual,
         historical_raw_surprises=historical_raw_surprises,
     )
-
-
-def _normalize_host(host: str) -> str:
-    normalized = host.strip().lower().rstrip(".")
-    if normalized.startswith("www."):
-        normalized = normalized[4:]
-    if not normalized or "/" in normalized or ":" in normalized:
-        raise ValueError(f"invalid source host: {host!r}")
-    return normalized
-
-
-def _validate_sha256(value: str, name: str) -> None:
-    if len(value) != 64:
-        raise ValueError(f"{name} must be a SHA-256 hex digest")
-    try:
-        int(value, 16)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be a SHA-256 hex digest") from exc
