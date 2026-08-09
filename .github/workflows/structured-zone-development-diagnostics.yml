@@ -1,17 +1,13 @@
 name: Structured-zone development diagnostics
 
 on:
-  pull_request:
-    paths:
-      - "scripts/diagnose_structured_zone_development.py"
-      - ".github/workflows/structured-zone-development-diagnostics.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: structured-zone-diagnostics-${{ github.event.pull_request.number || github.ref }}
+  group: structured-zone-diagnostics-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -50,12 +46,12 @@ jobs:
           --maximum-holding-minutes 120
           --entry-latency-ms 500
           --slippage-pips 0.10
-          --output artifacts/structured-zone-development-diagnostics-v1.json
+          --output artifacts/structured-zone-development-diagnostics-v2.json
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: structured-zone-development-diagnostics-v1
-          path: artifacts/structured-zone-development-diagnostics-v1.json
+          name: structured-zone-development-diagnostics-v2
+          path: artifacts/structured-zone-development-diagnostics-v2.json
           if-no-files-found: warn
           retention-days: 30
