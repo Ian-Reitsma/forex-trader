@@ -27,16 +27,38 @@ class ReplayEvent:
 
 
 class EventReplayScheduler:
+    """Deterministic point-in-time replay cursor.
+
+    Events are immutable and globally ordered by availability, provider sequence,
+    then event ID. `pop_until` advances a cursor without re-emitting previously
+    consumed evidence; `run` consumes only the remaining tail.
+    """
+
     def __init__(self, events: Iterable[ReplayEvent]) -> None:
         self._events = tuple(sorted(events, key=lambda item: (item.available_at, item.provider_sequence, item.event_id)))
+        self._cursor = 0
 
     def events(self) -> tuple[ReplayEvent, ...]:
         return self._events
 
+    @property
+    def remaining(self) -> int:
+        return len(self._events) - self._cursor
+
+    def pop_until(self, as_of: datetime) -> tuple[ReplayEvent, ...]:
+        if as_of.tzinfo is None:
+            raise ValueError("replay cutoff must be timezone-aware")
+        start = self._cursor
+        while self._cursor < len(self._events) and self._events[self._cursor].available_at <= as_of:
+            self._cursor += 1
+        return self._events[start : self._cursor]
+
     def run(self, consumer: Callable[[ReplayEvent], None]) -> int:
-        for event in self._events:
-            consumer(event)
-        return len(self._events)
+        start = self._cursor
+        while self._cursor < len(self._events):
+            consumer(self._events[self._cursor])
+            self._cursor += 1
+        return self._cursor - start
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,8 +208,6 @@ class EmpiricalOutcomeModel:
         losses = sum(trade.status is OutcomeStatus.LOSS for trade in sample)
         timeouts = sum(trade.status is OutcomeStatus.TIMEOUT for trade in sample)
         if count == 0:
-            # Preserve the established uninformed prior: before any observations, the
-            # model is neutral between target and stop and does not invent a timeout rate.
             p_target = Decimal("0.5")
             p_stop = Decimal("0.5")
             p_timeout = Decimal("0")

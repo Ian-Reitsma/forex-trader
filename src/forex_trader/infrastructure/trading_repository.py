@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
@@ -14,11 +14,19 @@ from forex_trader.domain.models import jsonable
 from forex_trader.infrastructure.repository import SqliteDecisionRepository
 
 
+def _sqlite_datetime(value: str) -> str:
+    """Preserve SQLite datetime('now') semantics with offset-aware microsecond UTC."""
+    if value == "now":
+        return datetime.now(UTC).isoformat(timespec="microseconds")
+    return value
+
+
 class TradingRepository(SqliteDecisionRepository):
     """Safety-oriented repository used by the runtime control/execution path."""
 
     def __init__(self, path: str | Path = ":memory:") -> None:
         super().__init__(path)
+        self._connection.create_function("datetime", 1, _sqlite_datetime)
         self._migrate_trading_state()
 
     def _migrate_trading_state(self) -> None:
