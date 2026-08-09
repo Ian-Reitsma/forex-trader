@@ -9,6 +9,7 @@ from forex_trader.domain.models import TradeCandidate
 from forex_trader.research.backtest import OutcomeStatus
 from forex_trader.research.partial_runner_backtest import PartialRunnerProfile
 from forex_trader.research.partial_runner_exact import evaluate_exact_partial_runner
+from forex_trader.research.partial_runner_exact_multi import evaluate_exact_partial_runners
 from forex_trader.research.public_history import HistoricalTick
 
 
@@ -110,3 +111,35 @@ def test_structural_stop_before_partial_is_full_loss() -> None:
     assert result.exit_time == ticks[1].time
     assert result.trade.status is OutcomeStatus.LOSS
     assert result.trade.r_multiple <= Decimal("-1")
+
+
+def test_batch_evaluator_matches_independent_exact_replays() -> None:
+    profiles = (
+        PartialRunnerProfile(Decimal("0.25"), Decimal("0.50"), Decimal("1.00")),
+        PartialRunnerProfile(Decimal("0.35"), Decimal("0.67"), Decimal("1.50")),
+        PartialRunnerProfile(Decimal("0.50"), Decimal("0.50"), Decimal("1.50")),
+    )
+    ticks = (
+        HistoricalTick("EUR_USD", NOW, Decimal("1.1000"), Decimal("1.1001")),
+        HistoricalTick("EUR_USD", NOW + timedelta(seconds=3), Decimal("1.1004"), Decimal("1.1005")),
+        HistoricalTick("EUR_USD", NOW + timedelta(seconds=7), Decimal("1.1007"), Decimal("1.1008")),
+        HistoricalTick("EUR_USD", NOW + timedelta(seconds=11), Decimal("1.1002"), Decimal("1.1003")),
+        HistoricalTick("EUR_USD", NOW + timedelta(seconds=15), Decimal("1.1017"), Decimal("1.1018")),
+    )
+    candidate = _candidate(Direction.LONG)
+    batch = evaluate_exact_partial_runners(
+        candidate,
+        ticks,
+        entry_index=0,
+        profiles=profiles,
+        adverse_slippage_pips=Decimal("0"),
+    )
+    for profile in profiles:
+        independent = evaluate_exact_partial_runner(
+            candidate,
+            ticks,
+            entry_index=0,
+            profile=profile,
+            adverse_slippage_pips=Decimal("0"),
+        )
+        assert batch[profile] == independent
