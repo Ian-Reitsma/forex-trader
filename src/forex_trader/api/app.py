@@ -3,10 +3,12 @@ from __future__ import annotations
 import hmac
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import cast
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
-from fastapi.responses import PlainTextResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from forex_trader import __version__
@@ -63,7 +65,7 @@ def create_app(
     api_token: str | None = None,
     allow_unsafe_local_mutations: bool = False,
 ) -> FastAPI:
-    """Create the operator API.
+    """Create the operator API and observational trading cockpit.
 
     Production/exposed deployments must provide a bearer token. The explicit
     `allow_unsafe_local_mutations` escape hatch exists only for local tests and
@@ -124,6 +126,33 @@ def create_app(
     def system_status() -> dict[str, object]:
         return engine.status()
 
+    @app.get("/v1/account", dependencies=protected)
+    def account() -> dict[str, object]:
+        return jsonable(engine.broker.account())
+
+    @app.get("/v1/positions", dependencies=protected)
+    def positions() -> list[dict[str, object]]:
+        return [jsonable(position) for position in engine.broker.positions()]
+
+    @app.get("/v1/market/{instrument}/quote", dependencies=protected)
+    def market_quote(instrument: str) -> dict[str, object]:
+        try:
+            return jsonable(engine.market_data.quote(instrument.upper()))
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/v1/market/{instrument}/candles", dependencies=protected)
+    def market_candles(
+        instrument: str,
+        granularity: str = "M5",
+        count: int = Query(default=200, ge=20, le=500),
+    ) -> list[dict[str, object]]:
+        try:
+            candles = engine.market_data.candles(instrument.upper(), granularity.upper(), count)
+            return [jsonable(candle) for candle in candles]
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/v1/readiness/{instrument}", dependencies=protected)
     def runtime_readiness(instrument: str) -> dict[str, object]:
         snapshot, providers, readiness = assess_engine_readiness(engine, instrument)
@@ -180,14 +209,24 @@ def create_app(
         return engine.promotion_status()
 
     @app.get("/v1/decisions", dependencies=protected)
-    def decisions(limit: int = 20) -> list[dict[str, object]]:
+    def decisions(limit: int = Query(default=20, ge=1, le=250)) -> list[dict[str, object]]:
         return engine.repository.recent_traces(limit)
+
+    @app.get("/v1/fundamentals/snapshots", dependencies=protected)
+    def fundamental_snapshots() -> list[dict[str, object]]:
+        return [jsonable(item) for item in engine.fundamentals.snapshots()]
 
     @app.get("/v1/fundamentals/history", dependencies=protected)
     def fundamental_history() -> list[dict[str, object]]:
         if not hasattr(engine.repository, "macro_observations"):
             return []
         return [jsonable(item) for item in engine.repository.macro_observations()]  # type: ignore[attr-defined]
+
+    @app.get("/v1/events/scheduled", dependencies=protected)
+    def scheduled_events() -> list[dict[str, object]]:
+        if not hasattr(engine.repository, "scheduled_events"):
+            return []
+        return [jsonable(item) for item in engine.repository.scheduled_events()]  # type: ignore[attr-defined]
 
     @app.post("/v1/fundamentals/releases", dependencies=protected)
     def ingest_release(payload: ReleaseInput) -> dict[str, object]:
@@ -221,4 +260,22 @@ def create_app(
         engine.clear_halt(name)
         return {"status": "cleared", "name": name}
 
+    _mount_frontend(app)
     return app
+
+
+def _mount_frontend(app: FastAPI) -> None:
+    frontend = Path(__file__).resolve().parents[1] / "frontend"
+    index = frontend / "index.html"
+    if not index.is_file():
+        return
+
+    app.mount("/assets", StaticFiles(directory=frontend), name="frontend-assets")
+
+    @app.get("/", include_in_schema=False)
+    def trading_cockpit() -> FileResponse:
+        return FileResponse(index)
+
+    @app.get("/news", include_in_schema=False)
+    def news_intelligence() -> FileResponse:
+        return FileResponse(index)

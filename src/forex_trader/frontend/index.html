@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080b0d">
+  <title>Vector // FX Command</title>
+  <link rel="preconnect" href="https://s3.tradingview.com">
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div class="ambient-grid" aria-hidden="true"></div>
+  <div class="signal-wash" aria-hidden="true"></div>
+
+  <div class="shell">
+    <aside class="rail" aria-label="Primary navigation">
+      <a class="brand" href="/" data-route="desk" aria-label="Trading desk">
+        <span class="brand-mark"><i></i><i></i><i></i></span>
+        <span class="brand-copy"><strong>VECTOR</strong><small>FX / CONTROL</small></span>
+      </a>
+
+      <nav class="rail-nav">
+        <a href="/" data-route="desk" class="nav-item active">
+          <span class="nav-index">01</span><span class="nav-label">Trading Desk</span>
+        </a>
+        <a href="/news" data-route="news" class="nav-item">
+          <span class="nav-index">02</span><span class="nav-label">News Intelligence</span>
+        </a>
+        <a href="#backtest" data-scroll="backtest" class="nav-item desk-only">
+          <span class="nav-index">03</span><span class="nav-label">Replay Lab</span>
+        </a>
+      </nav>
+
+      <div class="rail-footer">
+        <div class="runtime-orbit" id="runtimeOrbit"><span></span></div>
+        <div><small>RUNTIME</small><strong id="runtimeState">OFFLINE</strong></div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="command-bar">
+        <div class="command-context">
+          <p class="eyebrow" id="viewEyebrow">LIVE DECISION SURFACE</p>
+          <div class="symbol-command desk-only">
+            <button class="symbol-button" id="symbolButton" type="button">
+              <span id="symbolDisplay">EUR / USD</span><small>▾</small>
+            </button>
+            <div class="symbol-menu" id="symbolMenu" hidden></div>
+            <div class="micro-quote">
+              <span id="quoteMid">—</span>
+              <small id="quoteSpread">SPREAD —</small>
+            </div>
+          </div>
+          <h1 class="news-title news-only">News Intelligence</h1>
+        </div>
+
+        <div class="command-status">
+          <div class="status-pill" id="modePill"><span></span><div><small>MODE</small><strong id="modeValue">—</strong></div></div>
+          <div class="status-pill" id="readinessPill"><span></span><div><small>READINESS</small><strong id="readinessValue">—</strong></div></div>
+          <button class="sync-button" id="refreshButton" type="button" title="Refresh runtime data"><span id="refreshGlyph">↻</span><small id="lastSync">NOT SYNCED</small></button>
+          <button class="connect-button" id="connectButton" type="button"><span class="connection-dot"></span><span id="connectionLabel">CONNECT</span></button>
+        </div>
+      </header>
+
+      <main>
+        <section id="deskView" class="view active">
+          <div class="desk-grid">
+            <aside class="focus-column panel surface-cut">
+              <div class="panel-heading compact">
+                <div><p class="eyebrow">PAIR MATRIX</p><h2>Focus lanes</h2></div>
+                <span class="tiny-state" id="decisionCount">0 traces</span>
+              </div>
+              <div class="pair-list" id="pairList"></div>
+              <div class="panel-rule"></div>
+              <div class="account-mini">
+                <div class="mini-label"><span>Capital telemetry</span><small id="accountCurrency">—</small></div>
+                <div class="account-nav"><small>NAV</small><strong id="accountNav">—</strong></div>
+                <div class="account-split">
+                  <div><small>BALANCE</small><strong id="accountBalance">—</strong></div>
+                  <div><small>UNREAL. P/L</small><strong id="accountUPL">—</strong></div>
+                </div>
+                <div class="margin-meter"><div id="marginBar"></div></div>
+                <div class="meter-label"><span>Margin utilization</span><strong id="marginUsedPct">—</strong></div>
+              </div>
+              <div class="panel-rule"></div>
+              <div class="guard-stack">
+                <div class="mini-label"><span>Authority envelope</span><small>FAIL CLOSED</small></div>
+                <div class="guard-row"><span>Paper orders</span><strong id="paperAuthority">—</strong></div>
+                <div class="guard-row"><span>Promotion</span><strong id="promotionState">—</strong></div>
+                <div class="guard-row"><span>Open risk</span><strong id="openRiskCount">0 POS</strong></div>
+              </div>
+            </aside>
+
+            <section class="market-column">
+              <article class="chart-panel panel surface-cut">
+                <div class="chart-head">
+                  <div>
+                    <p class="eyebrow">EXECUTION CANVAS</p>
+                    <h2 id="chartTitle">EUR/USD <span>· 5M</span></h2>
+                  </div>
+                  <div class="chart-head-meta">
+                    <div><small>BID</small><strong id="bidPrice">—</strong></div>
+                    <div><small>ASK</small><strong id="askPrice">—</strong></div>
+                    <div><small>SESSION</small><strong id="sessionPhase">—</strong></div>
+                  </div>
+                </div>
+                <div id="tradingviewChart" class="tradingview-host">
+                  <div class="chart-loader"><span></span><p>INITIALIZING MARKET CANVAS</p></div>
+                </div>
+              </article>
+
+              <article class="positions-panel panel surface-cut">
+                <div class="panel-heading positions-heading">
+                  <div><p class="eyebrow">TRADING PANEL</p><h2>Current open positions</h2></div>
+                  <div class="position-summary">
+                    <div><small>OPEN</small><strong id="positionCount">0</strong></div>
+                    <div><small>UNREALIZED</small><strong id="positionPnl">—</strong></div>
+                    <div><small>MARGIN AVAIL.</small><strong id="marginAvailable">—</strong></div>
+                  </div>
+                </div>
+                <div class="table-wrap">
+                  <table class="data-table positions-table">
+                    <thead><tr><th>Instrument</th><th>Side</th><th>Units</th><th>Avg entry</th><th>Mark</th><th>uP/L</th><th>Exposure state</th></tr></thead>
+                    <tbody id="positionsBody"><tr class="empty-row"><td colspan="7">Connect to the control API to stream broker positions.</td></tr></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <aside class="decision-column panel surface-cut">
+              <div class="panel-heading">
+                <div><p class="eyebrow">DECISION PRISM</p><h2>Why the engine acts</h2></div>
+                <span class="sequence-id" id="traceId">NO TRACE</span>
+              </div>
+
+              <div class="decision-hero" id="decisionHero">
+                <div class="decision-vector"><span id="decisionDirection">—</span><strong id="decisionDisposition">WAITING</strong></div>
+                <div class="score-orbit" style="--score: 0" id="scoreOrbit"><span><small>FUSION</small><strong id="fusionScore">—</strong></span></div>
+              </div>
+
+              <div class="pipeline" id="decisionPipeline">
+                <button class="pipeline-node" data-stage="technical" type="button"><span class="node-index">01</span><div><small>STRUCTURE</small><strong>Technical context</strong><em id="technicalStage">waiting</em></div><i></i></button>
+                <button class="pipeline-node" data-stage="fundamental" type="button"><span class="node-index">02</span><div><small>MACRO</small><strong>Fundamental differential</strong><em id="fundamentalStage">waiting</em></div><i></i></button>
+                <button class="pipeline-node" data-stage="fusion" type="button"><span class="node-index">03</span><div><small>FUSION</small><strong>Candidate construction</strong><em id="fusionStage">waiting</em></div><i></i></button>
+                <button class="pipeline-node" data-stage="gates" type="button"><span class="node-index">04</span><div><small>HARD GATES</small><strong>Context + execution</strong><em id="gateStage">waiting</em></div><i></i></button>
+                <button class="pipeline-node" data-stage="risk" type="button"><span class="node-index">05</span><div><small>RISK</small><strong>Capital authorization</strong><em id="riskStage">waiting</em></div><i></i></button>
+                <button class="pipeline-node" data-stage="execution" type="button"><span class="node-index">06</span><div><small>BROKER</small><strong>Execution + protection</strong><em id="executionStage">waiting</em></div><i></i></button>
+              </div>
+
+              <div class="reason-card">
+                <div class="mini-label"><span>Dominant rationale</span><button id="inspectDecision" type="button">INSPECT TRACE ↗</button></div>
+                <p id="decisionReason">No engine decision has been loaded.</p>
+              </div>
+            </aside>
+          </div>
+
+          <section class="telemetry-band">
+            <article class="telemetry-card"><p>DAILY REALIZED</p><strong id="dailyRealized">—</strong><small id="dailyRealizedMeta">broker ledger</small></article>
+            <article class="telemetry-card"><p>DECISION RATE</p><strong id="decisionRate">—</strong><small>observed / 24h</small></article>
+            <article class="telemetry-card"><p>TRADE CANDIDATES</p><strong id="tradeCandidates">—</strong><small>promotion ledger</small></article>
+            <article class="telemetry-card"><p>ORDER REJECTIONS</p><strong id="orderRejects">—</strong><small>promotion ledger</small></article>
+            <article class="telemetry-card"><p>DEGRADED SOURCES</p><strong id="degradedCount">—</strong><small id="degradedMeta">readiness graph</small></article>
+            <article class="telemetry-card"><p>RISK-DAY DRAWDOWN</p><strong id="riskDrawdown">0.459%</strong><small>latest dev replay</small></article>
+          </section>
+
+          <section class="lower-grid">
+            <article class="decision-tape panel surface-cut">
+              <div class="panel-heading">
+                <div><p class="eyebrow">AUDIT TAPE</p><h2>Decision stream</h2></div>
+                <div class="tape-filter" id="tapeFilters">
+                  <button class="active" data-filter="all" type="button">ALL</button><button data-filter="trade" type="button">TRADE</button><button data-filter="reject" type="button">REJECT / WAIT</button>
+                </div>
+              </div>
+              <div class="table-wrap tall">
+                <table class="data-table decision-table">
+                  <thead><tr><th>Time</th><th>Pair</th><th>Direction</th><th>Disposition</th><th>Tech</th><th>Macro</th><th>Fusion</th><th>Risk</th><th>Order</th><th>Reason</th></tr></thead>
+                  <tbody id="decisionsBody"><tr class="empty-row"><td colspan="10">Decision traces will appear here after connection.</td></tr></tbody>
+                </table>
+              </div>
+            </article>
+
+            <article class="risk-map panel surface-cut">
+              <div class="panel-heading"><div><p class="eyebrow">CAPITAL LATTICE</p><h2>Risk geometry</h2></div><span class="tiny-state">LIVE SNAPSHOT</span></div>
+              <div class="risk-radar">
+                <div class="radar-rings"><i></i><i></i><i></i><i></i><span id="riskRadarDot"></span></div>
+                <div class="radar-copy"><small>CURRENT LOAD</small><strong id="currentRiskLoad">0%</strong><p>Margin and position load mapped against the current account snapshot.</p></div>
+              </div>
+              <div class="risk-lines">
+                <div><span>Margin used</span><strong id="riskMarginUsed">—</strong></div>
+                <div><span>Margin available</span><strong id="riskMarginFree">—</strong></div>
+                <div><span>Open positions</span><strong id="riskPositions">0</strong></div>
+                <div><span>Account NAV</span><strong id="riskNav">—</strong></div>
+              </div>
+            </article>
+          </section>
+
+          <section class="backtest-lab panel surface-cut" id="backtest">
+            <div class="lab-heading">
+              <div>
+                <p class="eyebrow">HISTORICAL REPLAY / v0.7.30 EVIDENCE</p>
+                <h2>Backtesting laboratory</h2>
+                <p>Interrogate the frozen Jan–Mar development tape without confusing post-outcome development evidence for validation.</p>
+              </div>
+              <div class="validation-lock"><span>LOCKED</span><div><small>UNTOUCHED WINDOW</small><strong>NOT OPENED</strong></div></div>
+            </div>
+
+            <div class="lab-controls">
+              <label>TECHNICAL POLICY<select id="backtestPolicy"><option value="legacy">Legacy baseline</option><option value="q75d3">Zone q≥0.75 · ≤3 ATR</option><option value="q75d5" selected>Zone q≥0.75 · ≤5 ATR · selected</option><option value="q75d10">Zone q≥0.75 · ≤10 ATR</option></select></label>
+              <label>DEVELOPMENT TAPE<select disabled><option>2026-01-05 → 2026-04-01 · PIT ticks</option></select></label>
+              <label>INSTRUMENTS<select disabled><option>EUR/USD · GBP/USD · USD/JPY</option></select></label>
+              <button class="lab-run" id="renderBacktest" type="button"><span>RENDER RECORDED RUN</span><small>NO NEW OUTCOME ACCESS</small></button>
+            </div>
+
+            <div class="lab-grid">
+              <article class="lab-metric hero"><small>EXPECTANCY</small><strong id="btExpectancy">+0.04875R</strong><span id="btExpectancyFlag">development only</span></article>
+              <article class="lab-metric"><small>TRADES</small><strong id="btTrades">39</strong><span>shared causal tape</span></article>
+              <article class="lab-metric"><small>PROFIT FACTOR</small><strong id="btPf">1.139</strong><span>gross win / loss</span></article>
+              <article class="lab-metric"><small>95% LOWER BOUND</small><strong id="btLcb">-0.17954R</strong><span class="negative">fails promotion</span></article>
+              <article class="lab-metric"><small>FIXED-RISK RETURN</small><strong id="btReturn">+0.282%</strong><span>0.15% risk / trade</span></article>
+              <article class="lab-metric"><small>PROD-RISK REPLAY</small><strong id="btProdReturn">+0.138%</strong><span>34 / 39 admitted</span></article>
+            </div>
+
+            <div class="replay-visual">
+              <div class="replay-chart" id="replayChart" aria-label="Recorded development results chart"></div>
+              <div class="replay-side">
+                <div class="component-gate"><div><span>01</span><p><small>TECHNICAL</small><strong>0.75 quality / 5 ATR</strong></p></div><em class="ready">DEVELOPED</em></div>
+                <div class="component-gate"><div><span>02</span><p><small>PIT MACRO</small><strong>Consensus + actual archive</strong></p></div><em class="blocked">UNAVAILABLE</em></div>
+                <div class="component-gate"><div><span>03</span><p><small>CENTRALIZED FLOW</small><strong>Futures / order-flow archive</strong></p></div><em class="blocked">UNAVAILABLE</em></div>
+                <div class="component-gate"><div><span>04</span><p><small>UNTOUCHED VALIDATION</small><strong>Single-use holdout</strong></p></div><em class="locked">LOCKED</em></div>
+              </div>
+            </div>
+
+            <div class="stability-grid">
+              <article><small>EUR / USD</small><strong>+0.193R</strong><div class="sparkbar positive" style="--magnitude:.74"></div></article>
+              <article><small>GBP / USD</small><strong>-0.261R</strong><div class="sparkbar negative" style="--magnitude:1"></div></article>
+              <article><small>USD / JPY</small><strong>+0.055R</strong><div class="sparkbar positive" style="--magnitude:.21"></div></article>
+              <article><small>JANUARY</small><strong>+0.313R</strong><div class="sparkbar positive" style="--magnitude:1"></div></article>
+              <article><small>FEBRUARY</small><strong>-0.039R</strong><div class="sparkbar negative" style="--magnitude:.13"></div></article>
+              <article><small>MARCH</small><strong>-0.194R</strong><div class="sparkbar negative" style="--magnitude:.62"></div></article>
+            </div>
+          </section>
+        </section>
+
+        <section id="newsView" class="view news-view">
+          <div class="news-command-grid">
+            <article class="macro-scoreboard panel surface-cut">
+              <div class="panel-heading"><div><p class="eyebrow">CURRENCY PRESSURE FIELD</p><h2>Fundamental matrix</h2></div><span class="tiny-state" id="fundamentalAge">NO FEED</span></div>
+              <div class="currency-matrix" id="currencyMatrix"><div class="empty-state">Connect to render point-in-time currency state.</div></div>
+            </article>
+            <article class="blackout-panel panel surface-cut">
+              <div class="panel-heading"><div><p class="eyebrow">EVENT RISK</p><h2>Blackout radar</h2></div><span class="tiny-state" id="eventCount">0 scheduled</span></div>
+              <div class="blackout-clock"><div class="clock-core"><small>NEXT HIGH IMPACT</small><strong id="nextEventCountdown">—</strong></div><i></i><i></i><i></i></div>
+              <div id="nextEventDetail" class="next-event-detail">No scheduled event loaded.</div>
+            </article>
+          </div>
+
+          <div class="news-body-grid">
+            <article class="news-stream panel surface-cut">
+              <div class="panel-heading"><div><p class="eyebrow">POINT-IN-TIME FEED</p><h2>Macro / news observation stream</h2></div><div class="feed-tabs" id="newsFilters"><button class="active" data-news-filter="all" type="button">ALL</button><button data-news-filter="release" type="button">RELEASES</button><button data-news-filter="news" type="button">NEWS</button><button data-news-filter="central_bank" type="button">CENTRAL BANK</button></div></div>
+              <div class="news-feed" id="newsFeed"><div class="empty-state">No macro observations loaded.</div></div>
+            </article>
+            <aside class="event-timeline panel surface-cut">
+              <div class="panel-heading"><div><p class="eyebrow">FORWARD CALENDAR</p><h2>Scheduled events</h2></div></div>
+              <div class="timeline" id="eventTimeline"><div class="empty-state">No scheduled events loaded.</div></div>
+            </aside>
+          </div>
+
+          <section class="news-audit panel surface-cut">
+            <div class="panel-heading"><div><p class="eyebrow">SOURCE INTEGRITY</p><h2>Evidence boundary</h2></div></div>
+            <div class="integrity-grid">
+              <article><span>01</span><div><small>OBSERVED-AT</small><strong>Point-in-time ordering</strong><p>The interface renders availability time separately from event semantics.</p></div></article>
+              <article><span>02</span><div><small>NO PROXY SUBSTITUTION</small><strong>Missing remains missing</strong><p>Broker tick pressure is not displayed as institutional flow.</p></div></article>
+              <article><span>03</span><div><small>DECISION JOIN</small><strong>Macro reaches fusion</strong><p>Trace inspection shows the fundamental score actually used at decision time.</p></div></article>
+              <article><span>04</span><div><small>BLACKOUT GATE</small><strong>Event risk blocks risk</strong><p>Scheduled high-impact windows remain visible as hard execution context.</p></div></article>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+  <aside class="connection-drawer" id="connectionDrawer" aria-hidden="true">
+    <div class="drawer-head"><div><p class="eyebrow">CONTROL LINK</p><h2>Connect runtime</h2></div><button id="closeConnection" type="button" aria-label="Close">×</button></div>
+    <p class="drawer-intro">The operator token is held in session storage only and is never written into the repository or URL.</p>
+    <label>API BASE URL<input id="apiBaseInput" type="url" placeholder="Same origin (leave blank)" autocomplete="off"></label>
+    <label>BEARER TOKEN<input id="apiTokenInput" type="password" placeholder="FOREX_API_TOKEN" autocomplete="off"></label>
+    <button class="drawer-primary" id="saveConnection" type="button">CONNECT CONTROL PLANE</button>
+    <button class="drawer-secondary" id="clearConnection" type="button">CLEAR SESSION CREDENTIAL</button>
+    <div class="connection-help"><span></span><p><strong>Observational by design.</strong> The dashboard never posts an order directly. Existing engine readiness, risk authorization, execution locking and protection verification stay in the path.</p></div>
+  </aside>
+
+  <aside class="trace-drawer" id="traceDrawer" aria-hidden="true">
+    <div class="drawer-head"><div><p class="eyebrow">IMMUTABLE TRACE</p><h2 id="traceDrawerTitle">Decision inspection</h2></div><button id="closeTrace" type="button" aria-label="Close">×</button></div>
+    <div id="traceInspector" class="trace-inspector"><div class="empty-state">Select a decision trace.</div></div>
+  </aside>
+
+  <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>
