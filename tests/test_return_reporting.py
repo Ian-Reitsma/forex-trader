@@ -41,8 +41,8 @@ def _opportunity(instant: datetime, r_multiple: str) -> TickBacktestOpportunity:
 
 
 def test_period_return_includes_zero_trade_days_on_both_bases() -> None:
-    start = datetime(2026, 8, 3, tzinfo=UTC)  # Monday
-    end = datetime(2026, 8, 10, tzinfo=UTC)  # next Monday
+    start = datetime(2026, 8, 3, tzinfo=UTC)  # Monday 00:00 UTC
+    end = datetime(2026, 8, 10, tzinfo=UTC)  # next Monday 00:00 UTC
     values = (
         _opportunity(start + timedelta(hours=14), "1.0"),
         _opportunity(start + timedelta(days=1, hours=14), "-0.5"),
@@ -58,16 +58,20 @@ def test_period_return_includes_zero_trade_days_on_both_bases() -> None:
     assert report.active_days.average_daily_return == Decimal("0.0025")
     assert report.average_period_weekday_return == Decimal("0.001")
 
-    assert report.period_fx_risk_days == 5
+    # UTC midnight boundaries cut through the Sunday-start FX sessions at both
+    # ends of this interval, so six 5 p.m.-New-York risk-day intervals overlap it.
+    assert report.period_fx_risk_days == 6
     assert report.active_fx_risk_days.trading_days == 2
     assert report.active_fx_risk_days.average_daily_return == Decimal("0.0025")
-    assert report.average_period_fx_risk_day_return == Decimal("0.001")
+    assert report.average_period_fx_risk_day_return == Decimal("0.005") / Decimal("6")
     assert report.day_basis == "5pm_America/New_York_fx_risk_day"
 
 
 def test_sunday_evening_and_monday_daytime_share_one_fx_risk_day() -> None:
-    start = datetime(2026, 8, 3, tzinfo=UTC)
-    end = datetime(2026, 8, 10, tzinfo=UTC)
+    # Use exact Sunday-5-p.m.-NY through Friday-5-p.m.-NY boundaries so this is a
+    # complete five-session FX week rather than a UTC-midnight partial-session window.
+    start = datetime(2026, 8, 2, 21, 0, tzinfo=UTC)
+    end = datetime(2026, 8, 7, 21, 0, tzinfo=UTC)
     # Sunday 6 p.m. New York and Monday 10 a.m. New York are the same FX risk day
     # (Sunday 5 p.m. -> Monday 5 p.m.), despite being different calendar exit dates.
     sunday_evening = datetime(2026, 8, 2, 22, 0, tzinfo=UTC)
@@ -79,6 +83,7 @@ def test_sunday_evening_and_monday_daytime_share_one_fx_risk_day() -> None:
         period_end=end,
         risk_fraction_per_trade=Decimal("0.01"),
     )
+    assert report.period_fx_risk_days == 5
     assert report.active_days.trading_days == 2
     assert report.active_fx_risk_days.trading_days == 1
     assert report.active_fx_risk_days.total_return == Decimal("0.0201")
@@ -102,7 +107,7 @@ def test_empty_period_has_zero_return_but_preserves_period_denominators() -> Non
     assert report.period_weekdays == 5
     assert report.active_days.trading_days == 0
     assert report.average_period_weekday_return == 0
-    assert report.period_fx_risk_days == 5
+    assert report.period_fx_risk_days == 6
     assert report.active_fx_risk_days.trading_days == 0
     assert report.average_period_fx_risk_day_return == 0
 
