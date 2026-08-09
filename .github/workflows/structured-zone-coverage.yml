@@ -1,0 +1,70 @@
+name: Structured-zone development coverage
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  zone-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Restore completed Jan-Mar historical cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/forex-trader/public-history
+          key: structured-zone-coverage-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            staged-jan-mar-history-${{ runner.os }}-v1-
+            partial-runner-history-${{ runner.os }}-v1-
+            adaptive-fx-history-${{ runner.os }}-v1-
+            public-fx-history-${{ runner.os }}-v5-
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: Lint and strict typing
+        run: |
+          ruff check --select E4,E7,E9,F scripts/diagnose_structured_zone_coverage.py
+          python -m mypy --strict --follow-imports=silent scripts/diagnose_structured_zone_coverage.py scripts/run_staged_historical_development.py
+      - name: Run outcome-blind Jan-Mar zone coverage scan
+        run: >-
+          python -m scripts.diagnose_structured_zone_coverage
+          --instruments EUR_USD,GBP_USD,USD_JPY
+          --start 2026-01-05
+          --end 2026-04-01
+          --warmup-days 14
+          --concurrency-per-pair 12
+          --entry-latency-ms 500
+          --output artifacts/structured-zone-coverage-v1.json
+      - name: Summarize coverage
+        if: success()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          report = json.loads(Path("artifacts/structured-zone-coverage-v1.json").read_text())
+          values = report["aggregate"]
+          print("## Outcome-blind structured-zone coverage")
+          print(f"Candidate decisions: {values['candidate_decisions']}")
+          print(f"Same-direction unbroken zone available: {values['same_direction_unbroken_zone_available']}")
+          print(f"Pass quality only: {values['passes_quality_only']}")
+          print(f"Pass distance only: {values['passes_distance_only']}")
+          print(f"Pass both frozen gates: {values['passes_frozen_quality_and_distance']}")
+          print(f"Quality quantiles: {values['quality_quantiles']}")
+          print(f"Distance ATR quantiles: {values['distance_atr_quantiles']}")
+          PY
+      - name: Upload coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: structured-zone-coverage-v1
+          path: artifacts/structured-zone-coverage-v1.json
+          if-no-files-found: warn
+          retention-days: 30
