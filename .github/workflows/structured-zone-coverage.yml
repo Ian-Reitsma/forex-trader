@@ -38,7 +38,7 @@ jobs:
           python -m mypy --strict --follow-imports=silent scripts/diagnose_structured_zone_coverage.py scripts/run_staged_historical_development.py
       - name: Run outcome-blind Jan-Mar zone coverage scan
         run: >-
-          python scripts/diagnose_structured_zone_coverage.py
+          python -m scripts.diagnose_structured_zone_coverage
           --instruments EUR_USD,GBP_USD,USD_JPY
           --start 2026-01-05
           --end 2026-04-01
