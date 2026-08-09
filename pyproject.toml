@@ -41,6 +41,9 @@ version = { attr = "forex_trader.__version__" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+forex_trader = ["frontend/*.html", "frontend/*.css", "frontend/*.js"]
+
 [tool.pytest.ini_options]
 addopts = "-q --disable-warnings --strict-markers"
 testpaths = ["tests"]
