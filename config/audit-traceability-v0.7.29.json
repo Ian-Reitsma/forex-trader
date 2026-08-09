@@ -1,0 +1,130 @@
+{
+  "schema_version": "1.0",
+  "release": "0.7.29",
+  "audit_target_main_sha_before_release": "56348c87f73dda16d8266ff97bec39ffe9b18409",
+  "audit_date": "2026-08-09",
+  "principle": "Implemented research machinery is not evidence of a validated trading edge, and an adapter is not equivalent to an entitled real data feed.",
+  "edge_status": {
+    "validated_stable_win_rate": null,
+    "validated_stable_daily_profit": null,
+    "development_candidate": {
+      "period": "2026-05-20/2026-08-07",
+      "trades": 32,
+      "wins": 23,
+      "win_rate": "0.71875",
+      "expectancy_r": "0.111389",
+      "profit_factor": "1.5627",
+      "status": "failed_later_sealed_validation"
+    },
+    "sealed_validation": {
+      "period": "2026-04-15/2026-05-16",
+      "warmup": "2026-04-01/2026-04-15",
+      "trades": 6,
+      "wins": 2,
+      "losses": 4,
+      "win_rate": "0.3333333333333333333333333333",
+      "expectancy_r": "-0.4110335667051864093548320232",
+      "total_r": "-2.466201400231118456128992139",
+      "profit_factor": "0.2196729853179722715895913458",
+      "lower_confidence_expectancy_r": "-0.8716662545315647843548320232",
+      "runtime_default_0_15pct_total_return": "-0.0036962443670352131909653837",
+      "approx_full_period_weekday_average_return": "-0.0001607390563232557590273168",
+      "proof_floor_trades": 20,
+      "proof_floor_met": false,
+      "status": "failed"
+    }
+  },
+  "requirements": [
+    {
+      "requirement": "honest_full_period_return_reporting",
+      "status": "implemented",
+      "implementation": ["src/forex_trader/research/tick_backtest.py"],
+      "remaining": "Use full-period reporting in every future campaign artifact; retain active-day return only as a separately labeled diagnostic."
+    },
+    {
+      "requirement": "historical_portfolio_risk_parity",
+      "status": "runtime_policy_replay_implemented",
+      "implementation": ["src/forex_trader/research/portfolio_risk_replay.py"],
+      "remaining": "Wire exact candidate geometry into the next full-architecture campaign and provide a causal historical correlation candle loader for correlation enforcement."
+    },
+    {
+      "requirement": "multi_timeframe_structure_and_declared_liquidity",
+      "status": "implemented_existing",
+      "implementation": ["src/forex_trader/domain/technicals.py", "src/forex_trader/domain/liquidity.py"],
+      "remaining": "Continue sealed attribution by setup/regime; no promotion from development-only metrics."
+    },
+    {
+      "requirement": "structured_multicandle_supply_demand",
+      "status": "research_detector_implemented_not_practice_authorized",
+      "implementation": ["src/forex_trader/research/structured_zones.py"],
+      "remaining": "Run leakage-controlled paired ablation of RBR/RBD/DBR/DBD features before changing domain.zones.detect_zones or Practice policy."
+    },
+    {
+      "requirement": "economic_calendar_point_in_time_consensus",
+      "status": "adapter_and_causal_history_assembler_implemented_vendor_data_external",
+      "implementation": ["src/forex_trader/ingestion/file_providers.py", "src/forex_trader/research/release_surprise_history.py"],
+      "remaining": "Acquire/capture a licensed historical consensus feed with pre-release availability timestamps; official BLS actuals alone cannot supply market consensus."
+    },
+    {
+      "requirement": "economic_release_surprise_and_revision_model",
+      "status": "research_logic_implemented",
+      "implementation": ["src/forex_trader/intelligence/events.py", "src/forex_trader/research/release_surprise_history.py"],
+      "remaining": "Populate real consensus/actual history and evaluate sealed incremental value versus technical-only baselines."
+    },
+    {
+      "requirement": "institutional_order_flow",
+      "status": "runtime_adapter_and_research_evidence_logic_implemented_data_external",
+      "implementation": ["src/forex_trader/ingestion/providers.py", "src/forex_trader/ingestion/file_providers.py", "src/forex_trader/research/institutional_flow.py"],
+      "remaining": "Acquire entitled CME/equivalent centralized trades/depth history, map futures contracts/rolls to spot pairs, and validate feature orientation and normalization."
+    },
+    {
+      "requirement": "broker_tick_proxy_not_institutional",
+      "status": "implemented",
+      "implementation": ["src/forex_trader/domain/orderflow.py", "src/forex_trader/domain/component_confirmation.py", "src/forex_trader/research/institutional_flow.py"],
+      "remaining": "none"
+    },
+    {
+      "requirement": "flow_divergence_strategy",
+      "status": "research_policy_and_evidence_primitives_present_signal_state_machine_pending",
+      "implementation": ["src/forex_trader/domain/policy_registry.py", "src/forex_trader/research/institutional_flow.py"],
+      "remaining": "Implement a research-only state machine after real centralized flow history is connected, then run paired sealed validation."
+    },
+    {
+      "requirement": "vwap_repositioning_strategy",
+      "status": "research_policy_and_vwap_evidence_primitive_present_signal_state_machine_pending",
+      "implementation": ["src/forex_trader/domain/policy_registry.py", "src/forex_trader/research/institutional_flow.py"],
+      "remaining": "Implement a research-only state machine after centralized futures VWAP/volume history is connected."
+    },
+    {
+      "requirement": "event_concentration_and_macro_factor_risk",
+      "status": "implemented_runtime_and_historical_replay",
+      "implementation": ["src/forex_trader/domain/macro_factor_risk.py", "src/forex_trader/domain/risk_advanced.py", "src/forex_trader/research/portfolio_risk_replay.py"],
+      "remaining": "Validate historical rejection attribution in a full portfolio campaign."
+    },
+    {
+      "requirement": "technical_human_ground_truth",
+      "status": "pending",
+      "remaining": "Build blinded zone/sweep/structure chart annotation corpus and measure detector precision/recall before granting richer zone features runtime authority."
+    },
+    {
+      "requirement": "central_bank_human_validation",
+      "status": "methodology_implemented_labels_external",
+      "remaining": "Collect independent calibration labels and sealed holdout labels."
+    },
+    {
+      "requirement": "historical_executable_spot_data",
+      "status": "implemented_for_current_major_pair_tick_research",
+      "remaining": "Retain exact bid/ask/latency/slippage assumptions and expand coverage only with source-quality checks."
+    },
+    {
+      "requirement": "full_forex_scalper_historical_validation",
+      "status": "not_yet_measured",
+      "remaining": "Combine technicals, real PIT macro consensus/actuals, centralized institutional flow, portfolio-risk replay and realistic execution in a fresh development window, freeze once, then use a never-touched sealed holdout."
+    },
+    {
+      "requirement": "authenticated_oanda_practice_campaign",
+      "status": "evidence_gate",
+      "remaining": "Run authenticated read-only validation, reconciliation, protected Practice round-trip and sustained capped campaign when environment/network and market availability permit."
+    }
+  ]
+}
