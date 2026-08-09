@@ -8,13 +8,18 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from statistics import median
+from typing import Sequence
 
 from forex_trader.domain.macro_history import PointInTimeFundamentalBook
 from forex_trader.domain.models import jsonable
 from forex_trader.research.backtest import summarize_trades
 from forex_trader.research.public_history import utc_range
 from forex_trader.research.resilient_tick_history import ResilientDukascopyHistoryClient
-from scripts.run_staged_historical_development import enforce_nonoverlap, generate_causal_executions
+from scripts.run_staged_historical_development import (
+    CausalExecution,
+    enforce_nonoverlap,
+    generate_causal_executions,
+)
 
 QUALITY_GRID = (Decimal("0"), Decimal("0.25"), Decimal("0.50"), Decimal("0.75"))
 DISTANCE_GRID = (
@@ -47,7 +52,7 @@ def _quantiles(values: list[Decimal]) -> dict[str, Decimal] | None:
     }
 
 
-def _report(values):  # type: ignore[no-untyped-def]
+def _report(values: Sequence[CausalExecution]) -> dict[str, object]:
     report = summarize_trades([item.opportunity.trade for item in values])
     return {
         "trades": report.trades,
@@ -67,7 +72,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     history_start = start - timedelta(days=args.warmup_days)
     instruments = tuple(item.strip().upper() for item in args.instruments.split(",") if item.strip())
     fundamentals = PointInTimeFundamentalBook()
-    raw = []
+    raw: list[CausalExecution] = []
     per_instrument: dict[str, object] = {}
     for instrument in instruments:
         history = ResilientDukascopyHistoryClient(
