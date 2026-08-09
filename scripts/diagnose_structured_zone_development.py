@@ -167,7 +167,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     grid: list[dict[str, object]] = []
     for quality in QUALITY_GRID:
         for distance in DISTANCE_GRID:
-            selected = [
+            grid_selected = [
                 item
                 for item in available
                 if item.structured_zone.quality >= quality
@@ -178,8 +178,8 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
                 {
                     "minimum_quality": quality,
                     "maximum_distance_atr": distance,
-                    "coverage": Decimal(len(selected)) / Decimal(len(baseline)) if baseline else Decimal("0"),
-                    "report": _report(selected),
+                    "coverage": Decimal(len(grid_selected)) / Decimal(len(baseline)) if baseline else Decimal("0"),
+                    "report": _report(grid_selected),
                 }
             )
 
