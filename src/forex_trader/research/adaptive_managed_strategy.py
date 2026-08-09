@@ -5,7 +5,7 @@ import itertools
 import math
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from typing import Iterable, Sequence
 
