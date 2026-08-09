@@ -1,0 +1,153 @@
+{
+  "release": "0.7.30",
+  "date": "2026-08-09",
+  "research_status": "development_evidence_only",
+  "new_untouched_validation_opened": false,
+  "practice_authority_changed": false,
+  "practice_authorized_strategy": "sweep_reclaim:v1",
+  "development_period": {
+    "price_warmup_start": "2025-12-22T00:00:00+00:00",
+    "start": "2026-01-05T00:00:00+00:00",
+    "end_exclusive": "2026-04-01T00:00:00+00:00",
+    "instruments": ["EUR_USD", "GBP_USD", "USD_JPY"]
+  },
+  "execution_assumptions": {
+    "price_source": "Dukascopy first-party BI5 best bid/ask",
+    "feature_bars": "M5/H1 midpoint bars derived from same PIT tick archive",
+    "entry_latency_ms": 500,
+    "adverse_slippage_pips_each_side": "0.10",
+    "maximum_holding_minutes": 120,
+    "fixed_return_risk_fraction": "0.0015",
+    "risk_account_starting_balance": "100000"
+  },
+  "predeclared_run": {
+    "workflow_run_id": 31331626246,
+    "head_sha": "ac4d3e552455986e0f3c3dc05a694587957f2ad0",
+    "artifact_id": 9043643982,
+    "artifact_name": "staged-historical-development-v1",
+    "artifact_sha256": "1f0b4d0c37e5542a3a3eb68f281cdee54541016e0a5ec3284bc12a791145d964",
+    "raw_causal_executions": 1935,
+    "shared_nonoverlap_executions": 633,
+    "legacy": {
+      "trades": 633,
+      "wins": 120,
+      "losses": 265,
+      "timeouts": 248,
+      "win_rate": "0.1895734597",
+      "expectancy_r": "-0.0959005565",
+      "profit_factor": "0.8064611417",
+      "total_r": "-60.7050522642",
+      "max_drawdown_r": "63.0257371434",
+      "fixed_risk_total_return": "-0.08775413"
+    },
+    "structured_zone_gate": {
+      "minimum_quality": "0.50",
+      "maximum_distance_atr": "0.50",
+      "selected": 0,
+      "input": 633
+    },
+    "pit_macro": {
+      "status": "unavailable",
+      "reason": "no normalized genuine pre-release consensus/actual archive supplied"
+    },
+    "centralized_flow": {
+      "status": "unavailable",
+      "reason": "no eligible normalized centralized futures/order-flow archive supplied",
+      "broker_tick_proxy_allowed": false
+    },
+    "production_risk_diagnostic": {
+      "role": "legacy-baseline safety diagnostic; not completed sequential pipeline",
+      "input_stage": "legacy_technical",
+      "admitted": 15,
+      "denied": 618,
+      "ending_balance": "99287.4833",
+      "total_return": "-0.007125167",
+      "maximum_equity_drawdown": "0.007125167",
+      "correlation_enforced": true
+    }
+  },
+  "outcome_blind_zone_coverage": {
+    "workflow_run_id": 31335644029,
+    "head_sha": "9cea07c425bd447b01b08e26002a464ffa455045",
+    "artifact_id": 9044410815,
+    "artifact_name": "structured-zone-coverage-v1",
+    "artifact_sha256": "89db850e322ce2f436791ad6cc522976670de2daeaa17e6d45c997c47fa7d945",
+    "candidate_decisions": 1935,
+    "same_direction_unbroken_zone_available": 1738,
+    "quality_at_least_0_50": 1202,
+    "distance_at_most_0_50_atr": 14,
+    "both_predeclared_gates": 9,
+    "median_distance_atr": "2.91483",
+    "interpretation": "detector coverage was high; predeclared proximity gate was binding"
+  },
+  "post_outcome_grid": {
+    "workflow_run_id": 31335644034,
+    "head_sha": "9cea07c425bd447b01b08e26002a464ffa455045",
+    "artifact_id": 9044479515,
+    "artifact_name": "structured-zone-development-diagnostics-v1",
+    "artifact_sha256": "ee63bd077e560673ab736a8f6c19d6bbd7efb502147400e5248f958bb713a827",
+    "provenance": "post-outcome development selection; not validation",
+    "positive_neighbor_row": {
+      "minimum_quality": "0.75",
+      "distance_3_atr": {"trades": 20, "expectancy_r": "0.218066", "profit_factor": "1.804"},
+      "distance_5_atr": {"trades": 39, "expectancy_r": "0.048746", "profit_factor": "1.1386"},
+      "distance_10_atr": {"trades": 52, "expectancy_r": "0.083318", "profit_factor": "1.2076"}
+    },
+    "selected_development_subpolicy": {
+      "minimum_quality": "0.75",
+      "maximum_distance_atr": "5.00"
+    }
+  },
+  "selected_subpolicy_attribution": {
+    "workflow_run_id": 31336654237,
+    "head_sha": "941b55bcdce2fa54b8f3152aaabde1a4ac9cb549",
+    "artifact_id": 9044733724,
+    "artifact_name": "structured-zone-development-diagnostics-v1",
+    "schema_version": "structured-zone-development-diagnostics-v2",
+    "artifact_sha256": "176f2f46c7e624c5637e78f288eaa7b79172eeb7c1cd4629fb130f72beefdfb7",
+    "status": "development_selected_unproven_not_promotion_ready",
+    "report": {
+      "trades": 39,
+      "wins": 7,
+      "losses": 10,
+      "timeouts": 22,
+      "expectancy_r": "0.0487460912",
+      "profit_factor": "1.1386263932",
+      "total_r": "1.9010975573",
+      "max_drawdown_r": "4.1991931246",
+      "one_sided_95pct_expectancy_lcb_r": "-0.1795396317"
+    },
+    "fixed_0_15pct_risk": {
+      "total_return": "0.0028234197",
+      "period_fx_risk_days": 63,
+      "average_period_fx_risk_day_return": "0.00004521155",
+      "day_basis": "5pm_America/New_York_fx_risk_day"
+    },
+    "stability": {
+      "EUR_USD_expectancy_r": "0.1927230656",
+      "GBP_USD_expectancy_r": "-0.2606898973",
+      "USD_JPY_expectancy_r": "0.0548838169",
+      "January_expectancy_r": "0.3129168335",
+      "February_expectancy_r": "-0.0386338106",
+      "March_expectancy_r": "-0.1940874348",
+      "all_pair_and_month_one_sided_95pct_lcbs_positive": false
+    },
+    "production_risk": {
+      "admitted": 34,
+      "denied": 5,
+      "ending_balance": "100138.0719557",
+      "total_return": "0.0013807196",
+      "maximum_equity_drawdown": "0.0045874173",
+      "correlation_enforced": true
+    }
+  },
+  "next_gate": {
+    "required_before_new_validation": [
+      "genuine point-in-time historical consensus plus actual release archive",
+      "eligible centralized futures/order-flow archive with frozen mapping/roll/orientation",
+      "same Jan-Mar development tape full component replay",
+      "freeze complete policy after macro/flow attribution"
+    ],
+    "then": "open one completely untouched historical window once"
+  }
+}
