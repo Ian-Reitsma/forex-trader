@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import bisect
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Sequence
 
@@ -12,7 +12,7 @@ from forex_trader.domain.sessions import classify_phase
 from forex_trader.domain.strategy import SignalFusionPolicy
 from forex_trader.domain.technicals import assess_technicals, pip_size
 from forex_trader.research.partial_runner_backtest import PartialRunnerProfile
-from forex_trader.research.partial_runner_exact import evaluate_exact_partial_runner
+from forex_trader.research.partial_runner_exact_multi import evaluate_exact_partial_runners
 from forex_trader.research.public_history import HistoricalTick, resample_midpoint_candles
 from forex_trader.research.tick_backtest import TickBacktestOpportunity
 
@@ -29,12 +29,8 @@ def _latest_news_age_minutes(
     observations: Sequence[MacroObservation],
     *,
     currencies: tuple[str, str],
-    as_of: object,
+    as_of: datetime,
 ) -> Decimal | None:
-    from datetime import datetime
-
-    if not isinstance(as_of, datetime):
-        raise TypeError("as_of must be a datetime")
     latest: datetime | None = None
     allowed = set(currencies)
     for observation in observations:
@@ -152,16 +148,16 @@ def generate_exact_partial_runner_opportunities(
             currencies=(base_currency, quote_currency),
             as_of=decision_time,
         )
+        exact_by_profile = evaluate_exact_partial_runners(
+            candidate,
+            ordered_ticks,
+            entry_index=entry_index,
+            profiles=profile_tuple,
+            maximum_holding=maximum_holding,
+            adverse_slippage_pips=adverse_slippage_pips,
+        )
 
-        for profile in profile_tuple:
-            exact = evaluate_exact_partial_runner(
-                candidate,
-                ordered_ticks,
-                entry_index=entry_index,
-                profile=profile,
-                maximum_holding=maximum_holding,
-                adverse_slippage_pips=adverse_slippage_pips,
-            )
+        for profile, exact in exact_by_profile.items():
             opportunities[profile].append(
                 TickBacktestOpportunity(
                     instrument=normalized,
