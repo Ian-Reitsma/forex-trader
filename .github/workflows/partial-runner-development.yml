@@ -5,6 +5,7 @@ on:
     paths:
       - "src/forex_trader/research/partial_runner_backtest.py"
       - "src/forex_trader/research/partial_runner_exact.py"
+      - "src/forex_trader/research/partial_runner_exact_multi.py"
       - "src/forex_trader/research/partial_runner_exact_generation.py"
       - "src/forex_trader/research/partial_runner_selection.py"
       - "scripts/run_partial_runner_development.py"
@@ -35,6 +36,7 @@ jobs:
           path: .cache/forex-trader/public-history
           key: partial-runner-history-${{ runner.os }}-v1-${{ github.sha }}-attempt-${{ github.run_attempt }}
           restore-keys: |
+            partial-runner-history-${{ runner.os }}-v1-
             adaptive-fx-history-${{ runner.os }}-v1-
             public-fx-history-${{ runner.os }}-v5-
             scalp-fx-history-${{ runner.os }}-v1-
@@ -45,6 +47,7 @@ jobs:
         run: >-
           ruff check --select E4,E7,E9,F
           src/forex_trader/research/partial_runner_exact.py
+          src/forex_trader/research/partial_runner_exact_multi.py
           src/forex_trader/research/partial_runner_exact_generation.py
           src/forex_trader/research/partial_runner_selection.py
           scripts/run_partial_runner_development.py
@@ -53,6 +56,7 @@ jobs:
         run: >-
           python -m mypy --strict --follow-imports=silent
           src/forex_trader/research/partial_runner_exact.py
+          src/forex_trader/research/partial_runner_exact_multi.py
           src/forex_trader/research/partial_runner_exact_generation.py
           src/forex_trader/research/partial_runner_selection.py
           scripts/run_partial_runner_development.py
