@@ -674,7 +674,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     cache_dir = Path(args.cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    ticks_by_instrument: dict[str, tuple[HistoricalTick, ...]] = {}
+    ticks_by_instrument: dict[str, Sequence[HistoricalTick]] = {}
     executions: list[CausalExecution] = []
     empty_fundamentals = PointInTimeFundamentalBook()
     per_instrument: dict[str, object] = {}
