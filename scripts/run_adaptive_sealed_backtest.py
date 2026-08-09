@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Sequence, cast
 
 from forex_trader.domain.macro_history import PointInTimeFundamentalBook
 from forex_trader.research.adaptive_managed_strategy import (
@@ -75,8 +75,9 @@ def _selection_result(
     validation_end: datetime,
     minimum_proof_trades: int,
 ) -> dict[str, object]:
+    compatible = cast(dict[Decimal, Sequence[TickBacktestOpportunity]], opportunities_by_target)
     selected, report, economic_win_rate = evaluate_frozen_adaptive_policy(
-        opportunities_by_target,
+        compatible,
         policy_report=policy_report,
         history_start=history_start,
         evaluation_start=validation_start,
@@ -184,8 +185,9 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
         target: tuple(sorted(values, key=lambda item: (item.decision_time, item.instrument)))
         for target, values in opportunities_by_target.items()
     }
+    compatible = cast(dict[Decimal, Sequence[TickBacktestOpportunity]], immutable_by_target)
     robust, win_target = select_stable_adaptive_policies(
-        immutable_by_target,
+        compatible,
         development_start=development_start,
         development_end=development_end,
         instruments=instruments,
@@ -193,7 +195,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
         minimum_fold_trades=args.minimum_fold_trades,
     )
 
-    result = {
+    result: dict[str, object] = {
         "schema_version": "adaptive-managed-sealed-backtest-v1",
         "period": {
             "shadow_history_start": history_start,
@@ -251,7 +253,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
             "rule": "validation results are preserved whether or not goals are met",
         },
     }
-    return cast(dict[str, object], result)
+    return result
 
 
 def main() -> int:
