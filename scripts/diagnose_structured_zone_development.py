@@ -15,7 +15,11 @@ from forex_trader.domain.models import jsonable
 from forex_trader.research.backtest import summarize_trades
 from forex_trader.research.public_history import utc_range
 from forex_trader.research.resilient_tick_history import ResilientDukascopyHistoryClient
-from run_staged_historical_development import CausalExecution, enforce_nonoverlap, generate_causal_executions
+from scripts.run_staged_historical_development import (
+    CausalExecution,
+    enforce_nonoverlap,
+    generate_causal_executions,
+)
 
 QUALITY_GRID = (Decimal("0"), Decimal("0.25"), Decimal("0.50"), Decimal("0.75"))
 DISTANCE_GRID = (
