@@ -1,0 +1,38 @@
+name: Frontend contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: JavaScript syntax
+        run: node --check src/forex_trader/frontend/app.js
+      - name: Static cockpit contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s src/forex_trader/frontend/index.html
+          test -s src/forex_trader/frontend/styles.css
+          test -s src/forex_trader/frontend/app.js
+          grep -q 'Current open positions' src/forex_trader/frontend/index.html
+          grep -q 'Backtesting laboratory' src/forex_trader/frontend/index.html
+          grep -q 'News Intelligence' src/forex_trader/frontend/index.html
+          grep -q 'embed-widget-advanced-chart.js' src/forex_trader/frontend/app.js
+          grep -q '/v1/positions' src/forex_trader/frontend/app.js
+          grep -q '/v1/decisions?limit=100' src/forex_trader/frontend/app.js
+          if grep -q 'localStorage' src/forex_trader/frontend/app.js; then
+            echo 'Persistent localStorage is not allowed for cockpit credentials.' >&2
+            exit 1
+          fi
+          if grep -Eq "fetch\([^)]*method:[[:space:]]*['\"]POST['\"]" src/forex_trader/frontend/app.js; then
+            echo 'Direct browser POST execution paths are not allowed in the observational cockpit.' >&2
+            exit 1
+          fi
