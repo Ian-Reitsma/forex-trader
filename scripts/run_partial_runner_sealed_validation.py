@@ -128,6 +128,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     win_rate = economic_win_rate(selected)
     lcb = _lower_confidence_expectancy(selected)
     proof_floor = args.minimum_proof_trades
+    profit_factor_above_one = report.profit_factor is not None and report.profit_factor > 1
 
     return {
         "schema_version": "partial-runner-sealed-validation-v1",
@@ -166,13 +167,13 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
             "sample_floor_met": report.trades >= proof_floor,
             "win_rate_at_least_75pct": win_rate >= Decimal("0.75"),
             "positive_expectancy": report.expectancy_r > 0,
-            "profit_factor_above_one": report.profit_factor > 1,
+            "profit_factor_above_one": profit_factor_above_one,
             "positive_lower_confidence_expectancy": lcb > 0,
             "historical_75pct_proof": (
                 report.trades >= proof_floor
                 and win_rate >= Decimal("0.75")
                 and report.expectancy_r > 0
-                and report.profit_factor > 1
+                and profit_factor_above_one
             ),
         },
     }
