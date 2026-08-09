@@ -1,18 +1,13 @@
 name: Staged historical Forex Scalper development
 
 on:
-  pull_request:
-    paths:
-      - "scripts/run_staged_historical_development.py"
-      - "tests/test_staged_historical_development_runner.py"
-      - ".github/workflows/staged-historical-development.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: staged-historical-development-${{ github.event.pull_request.number || github.ref }}
+  group: staged-historical-development-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
