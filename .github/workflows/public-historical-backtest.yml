@@ -11,6 +11,7 @@ on:
       - "scripts/run_public_historical_backtest.py"
       - "scripts/run_official_historical_backtest.py"
       - "scripts/run_managed_official_historical_backtest.py"
+      - "scripts/run_managed_campaign.py"
       - ".github/workflows/public-historical-backtest.yml"
   workflow_dispatch:
 
@@ -46,14 +47,16 @@ jobs:
           ruff check --select E4,E7,E9,F
           src/forex_trader/research/managed_tick_backtest.py
           scripts/run_managed_official_historical_backtest.py
+          scripts/run_managed_campaign.py
           tests/test_managed_tick_backtest.py
           && python -m mypy --strict --follow-imports=silent
           src/forex_trader/research/managed_tick_backtest.py
           scripts/run_managed_official_historical_backtest.py
+          scripts/run_managed_campaign.py
           && pytest -q tests/test_managed_tick_backtest.py
       - name: Run exact multi-target development campaign
         run: >-
-          python scripts/run_managed_official_historical_backtest.py
+          python scripts/run_managed_campaign.py
           --instruments EUR_USD,GBP_USD,USD_JPY
           --days 35
           --lag-days 7
