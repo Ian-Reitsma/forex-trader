@@ -1,10 +1,6 @@
 name: Structured-zone development coverage
 
 on:
-  pull_request:
-    paths:
-      - "scripts/diagnose_structured_zone_coverage.py"
-      - ".github/workflows/structured-zone-coverage.yml"
   workflow_dispatch:
 
 permissions:
