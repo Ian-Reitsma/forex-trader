@@ -28,6 +28,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .cache/forex-trader/public-history
+          key: structured-zone-diagnostics-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             staged-jan-mar-history-${{ runner.os }}-v1-
             partial-runner-history-${{ runner.os }}-v1-
