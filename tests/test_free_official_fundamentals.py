@@ -74,11 +74,17 @@ def _official_handler(request: httpx.Request) -> httpx.Response:
     if url.endswith("/state_2026/index.htm"):
         return _response(request, "<table><tr><td>June 16, 2026</td><td>Change in the Guideline</td></tr></table>")
     if url.endswith("/state_2026/k260616a.htm"):
-        return _response(request, "The Bank will encourage the uncollateralized overnight call rate to remain at around 0.75 percent.")
+        return _response(
+            request,
+            "The Bank will encourage the uncollateralized overnight call rate to remain at around 0.75 percent.",
+        )
     if url == "https://www.stat.go.jp/english/":
         return _response(request, "Consumer Price Index 1.5% May 2026 change over the year")
     if url.endswith("/monetary-policy/decisions"):
-        return _response(request, '<a href="/en/publications/communication/press-releases-restricted/pre_20260618">June decision</a>')
+        return _response(
+            request,
+            '<a href="/en/publications/communication/press-releases-restricted/pre_20260618">June decision</a>',
+        )
     if url.endswith("/pre_20260618"):
         return _response(
             request,
@@ -190,8 +196,26 @@ def _sync_fetcher(currency: str, client: OfficialWebClient, observed: datetime) 
         currency,
         (_payload(),),
         (
-            OfficialIndicatorEvidence("bls", f"{currency.lower()}_policy", currency, "policy", Decimal("2"), None, True, "2026-08"),
-            OfficialIndicatorEvidence("bls", f"{currency.lower()}_inflation", currency, "inflation", Decimal("3"), Decimal("2.5"), False, "2026-07"),
+            OfficialIndicatorEvidence(
+                "bls",
+                f"{currency.lower()}_policy",
+                currency,
+                "policy",
+                Decimal("2"),
+                None,
+                True,
+                "2026-08",
+            ),
+            OfficialIndicatorEvidence(
+                "bls",
+                f"{currency.lower()}_inflation",
+                currency,
+                "inflation",
+                Decimal("3"),
+                Decimal("2.5"),
+                False,
+                "2026-07",
+            ),
         ),
     )
 
@@ -221,6 +245,10 @@ def test_free_official_sync_is_durable_point_in_time_and_idempotent(tmp_path) ->
     book = PointInTimeFundamentalBook(observations)
     assert book.assess_pair("EUR_USD", as_of=NOW - timedelta(seconds=1)).confidence == 0
     assert book.assess_pair("EUR_USD", as_of=NOW).confidence >= Decimal("0.50")
-    health = SourceEvidenceRepository(database).latest_health("free_official_usd")
+    health = SourceEvidenceRepository(database).latest_health(
+        "free_official_usd",
+        as_of=NOW,
+        maximum_age_seconds=Decimal("60"),
+    )
     assert health is not None
     assert health.state.value == "healthy"
