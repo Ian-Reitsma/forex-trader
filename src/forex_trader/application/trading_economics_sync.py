@@ -51,8 +51,8 @@ class TradingEconomicsSyncReport:
             "categories": dict(sorted(self.categories.items())),
             "skipped": dict(sorted(self.skipped.items())),
             "point_in_time_policy": (
-                "prospective-first-seen: release availability is the local retrieval timestamp; "
-                "historical vendor snapshots are never backdated into the decision ledger"
+                "prospective-first-seen: availability uses local retrieval time while event_at "
+                "preserves the economic-event timestamp for freshness decay"
             ),
         }
 
@@ -67,9 +67,8 @@ def sync_trading_economics_fundamentals(
     """Fetch recent licensed calendar data and append first-seen release observations.
 
     This is intentionally prospective. Even when the vendor row describes an older release,
-    the resulting MacroObservation becomes available at the time this process first retrieved
-    it. That prevents a current API response from leaking revised historical information into
-    an earlier backtest timestamp.
+    the observation is not knowable before local retrieval. ``event_at`` separately retains
+    the release timestamp so the fundamental book still applies real age/freshness decay.
     """
     settings.validate()
     started = (as_of or datetime.now(UTC)).astimezone(UTC)
@@ -117,6 +116,7 @@ def sync_trading_economics_fundamentals(
                         higher_is_positive=event.higher_is_positive,
                         importance=event.importance,
                         available_at=started,
+                        event_at=event.scheduled_at,
                         source=event.source_key,
                         observation_id=uuid5(NAMESPACE_URL, f"forex-trader:{event.source_key}"),
                     )
