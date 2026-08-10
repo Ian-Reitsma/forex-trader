@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
+from hmac import compare_digest
 from pathlib import Path
 
 from forex_trader.application.campaign import PracticeCampaignRunner
@@ -36,6 +37,21 @@ def _exclusion_category(reason: str) -> str:
     if "preflight failed" in lowered:
         return "fundamental_preflight_error"
     return "other_fundamental_exclusion"
+
+
+def _validate_te_secret_separation(config: AppConfig, settings: TradingEconomicsSettings) -> None:
+    if settings.api_key is None:
+        return
+    if config.api_token is not None and compare_digest(settings.api_key, config.api_token):
+        raise SystemExit(
+            "TRADING_ECONOMICS_API_KEY is cross-wired to FOREX_API_TOKEN. "
+            "Use a credential issued by Trading Economics; the forex-trader control-plane token cannot authenticate Trading Economics."
+        )
+    if config.oanda_token is not None and compare_digest(settings.api_key, config.oanda_token):
+        raise SystemExit(
+            "TRADING_ECONOMICS_API_KEY is cross-wired to OANDA_API_TOKEN. "
+            "Use a credential issued by Trading Economics; the OANDA Practice token cannot authenticate Trading Economics."
+        )
 
 
 parser = argparse.ArgumentParser()
@@ -107,6 +123,7 @@ if args.execute:
 
 fundamental_refresh: dict[str, object] | None = None
 te_settings = TradingEconomicsSettings.from_env()
+_validate_te_secret_separation(config, te_settings)
 if (
     args.execute
     and config.require_fundamentals
