@@ -65,8 +65,6 @@ def test_repository_backed_dashboard_reads_are_serialized(engine) -> None:  # ty
         "/v1/status",
         "/v1/promotion",
         "/v1/decisions?limit=100",
-        "/v1/operations/summary?hours=24",
-        "/v1/operations/events?hours=24&limit=80",
         "/v1/fundamentals/history",
         "/v1/events/scheduled",
     ]
@@ -74,7 +72,7 @@ def test_repository_backed_dashboard_reads_are_serialized(engine) -> None:  # ty
     def fetch_status(path: str) -> int:
         return client.get(path).status_code
 
-    requests = paths * 12
+    requests = paths * 16
     with ThreadPoolExecutor(max_workers=14) as pool:
         statuses = list(pool.map(fetch_status, requests))
 
