@@ -47,10 +47,10 @@ def test_confirmed_post_shift_pivot_can_only_tighten_long_stop() -> None:
     start = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
     candles = [
         Candle(start, Decimal("1.0990"), Decimal("1.1005"), Decimal("1.0988"), Decimal("1.1002")),
-        Candle(start + timedelta(minutes=5), Decimal("1.1002"), Decimal("1.1015"), Decimal("1.1005"), Decimal("1.1012")),
+        Candle(start + timedelta(minutes=5), Decimal("1.1006"), Decimal("1.1015"), Decimal("1.1005"), Decimal("1.1012")),
         Candle(start + timedelta(minutes=10), Decimal("1.1012"), Decimal("1.1022"), Decimal("1.1010"), Decimal("1.1020")),
         Candle(start + timedelta(minutes=15), Decimal("1.1020"), Decimal("1.1021"), Decimal("1.1004"), Decimal("1.1010")),
-        Candle(start + timedelta(minutes=20), Decimal("1.1010"), Decimal("1.1027"), Decimal("1.1012"), Decimal("1.1025")),
+        Candle(start + timedelta(minutes=20), Decimal("1.1013"), Decimal("1.1027"), Decimal("1.1012"), Decimal("1.1025")),
         Candle(start + timedelta(minutes=25), Decimal("1.1025"), Decimal("1.1033"), Decimal("1.1020"), Decimal("1.1030")),
     ]
     baseline = Decimal("1.0980")
