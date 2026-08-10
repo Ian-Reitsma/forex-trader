@@ -60,6 +60,49 @@ def pip_size(instrument: str) -> Decimal:
     return pip_size_for(instrument)
 
 
+def _confirmed_post_shift_stop(
+    candles: list[Candle],
+    *,
+    direction: Direction,
+    shift_index: int | None,
+    entry: Decimal,
+    baseline_stop: Decimal,
+    buffer: Decimal,
+) -> Decimal:
+    """Tighten a sweep-extreme stop only with a causally confirmed post-shift pivot.
+
+    The baseline sweep/zone invalidation remains authoritative until price has both shifted
+    structure and produced a confirmed pivot after that shift. ``find_swings`` requires two
+    right-hand bars, so this cannot use a future/unconfirmed higher-low or lower-high. The
+    helper may tighten risk, but it can never widen the original structural stop.
+    """
+    if shift_index is None or shift_index < 0 or shift_index >= len(candles) - 1:
+        return baseline_stop
+    post_shift = candles[shift_index + 1 :]
+    swings = find_swings(post_shift, left=2, right=2)
+    if direction is Direction.LONG:
+        lows = [
+            point
+            for point in swings
+            if point.kind is SwingKind.LOW and baseline_stop < point.price < entry
+        ]
+        if not lows:
+            return baseline_stop
+        proposed = lows[-1].price - buffer
+        return proposed if baseline_stop < proposed < entry else baseline_stop
+    if direction is Direction.SHORT:
+        highs = [
+            point
+            for point in swings
+            if point.kind is SwingKind.HIGH and entry < point.price < baseline_stop
+        ]
+        if not highs:
+            return baseline_stop
+        proposed = highs[-1].price + buffer
+        return proposed if entry < proposed < baseline_stop else baseline_stop
+    return baseline_stop
+
+
 def assess_technicals(
     instrument: str,
     lower: list[Candle],
@@ -146,6 +189,7 @@ def assess_technicals(
         )
 
     structure_shift = False
+    shift_index: int | None = None
     retest_confirmed = False
     displacement = False
     shift_reference: Decimal | None = None
@@ -155,40 +199,71 @@ def assess_technicals(
         if direction is Direction.LONG:
             highs = [point for point in swings if point.kind is SwingKind.HIGH]
             shift_reference = highs[-1].price if highs else max(c.high for c in pre[-8:])
-            structure_shift = any(
-                candle.close > shift_reference
-                for candle in completed_lower[directional_sweep.candle_index + 1 :]
-            )
+            for index in range(directional_sweep.candle_index + 1, len(completed_lower)):
+                if completed_lower[index].close > shift_reference:
+                    structure_shift = True
+                    shift_index = index
+                    break
         elif direction is Direction.SHORT:
             lows = [point for point in swings if point.kind is SwingKind.LOW]
             shift_reference = lows[-1].price if lows else min(c.low for c in pre[-8:])
-            structure_shift = any(
-                candle.close < shift_reference
-                for candle in completed_lower[directional_sweep.candle_index + 1 :]
-            )
+            for index in range(directional_sweep.candle_index + 1, len(completed_lower)):
+                if completed_lower[index].close < shift_reference:
+                    structure_shift = True
+                    shift_index = index
+                    break
 
-        bodies = [abs(c.close - c.open) for c in completed_lower[max(0, directional_sweep.candle_index - 10) : directional_sweep.candle_index]]
+        bodies = [
+            abs(c.close - c.open)
+            for c in completed_lower[
+                max(0, directional_sweep.candle_index - 10) : directional_sweep.candle_index
+            ]
+        ]
         average_body = sum(bodies, Decimal("0")) / Decimal(max(1, len(bodies)))
         post = completed_lower[directional_sweep.candle_index + 1 :]
         for candle in post:
             body = abs(candle.close - candle.open)
             candle_range = max(candle.high - candle.low, pip)
             close_location = (candle.close - candle.low) / candle_range
-            if direction is Direction.LONG and candle.close > candle.open and body >= max(current_atr * Decimal("0.35"), average_body * Decimal("1.15")) and close_location >= Decimal("0.60"):
+            if (
+                direction is Direction.LONG
+                and candle.close > candle.open
+                and body >= max(current_atr * Decimal("0.35"), average_body * Decimal("1.15"))
+                and close_location >= Decimal("0.60")
+            ):
                 displacement = True
-            if direction is Direction.SHORT and candle.close < candle.open and body >= max(current_atr * Decimal("0.35"), average_body * Decimal("1.15")) and close_location <= Decimal("0.40"):
+            if (
+                direction is Direction.SHORT
+                and candle.close < candle.open
+                and body >= max(current_atr * Decimal("0.35"), average_body * Decimal("1.15"))
+                and close_location <= Decimal("0.40")
+            ):
                 displacement = True
 
         if structure_shift and len(completed_lower) - 1 > directional_sweep.candle_index:
             reclaimed = directional_sweep.level.price
             latest = completed_lower[-1]
             if direction is Direction.LONG:
-                held_reclaim = latest.low <= reclaimed + current_atr * Decimal("0.55") and latest.close > reclaimed
-                held_shift = shift_reference is not None and latest.low <= shift_reference + current_atr * Decimal("0.35") and latest.close >= shift_reference
+                held_reclaim = (
+                    latest.low <= reclaimed + current_atr * Decimal("0.55")
+                    and latest.close > reclaimed
+                )
+                held_shift = (
+                    shift_reference is not None
+                    and latest.low <= shift_reference + current_atr * Decimal("0.35")
+                    and latest.close >= shift_reference
+                )
                 retest_confirmed = (held_reclaim or held_shift) and latest.close >= latest.open
             else:
-                held_reclaim = latest.high >= reclaimed - current_atr * Decimal("0.55") and latest.close < reclaimed
-                held_shift = shift_reference is not None and latest.high >= shift_reference - current_atr * Decimal("0.35") and latest.close <= shift_reference
+                held_reclaim = (
+                    latest.high >= reclaimed - current_atr * Decimal("0.55")
+                    and latest.close < reclaimed
+                )
+                held_shift = (
+                    shift_reference is not None
+                    and latest.high >= shift_reference - current_atr * Decimal("0.35")
+                    and latest.close <= shift_reference
+                )
                 retest_confirmed = (held_reclaim or held_shift) and latest.close <= latest.open
             if not retest_confirmed and displacement:
                 if direction is Direction.LONG and latest.close > reclaimed and latest.close >= l_fast:
@@ -243,18 +318,39 @@ def assess_technicals(
                 stop_anchor = max(stop_anchor, zone.distal)
             stop = stop_anchor + buffer
 
+        if structure_shift and retest_confirmed and stop is not None:
+            tightened_stop = _confirmed_post_shift_stop(
+                completed_lower,
+                direction=direction,
+                shift_index=shift_index,
+                entry=current.close,
+                baseline_stop=stop,
+                buffer=buffer,
+            )
+            if tightened_stop != stop:
+                reasons.append(
+                    f"confirmed post-shift pivot tightened structural stop from {stop} to {tightened_stop}"
+                )
+                stop = tightened_stop
+
         risk = abs(current.close - stop)
-        candidates: list[Decimal] = [level.price for level in target_levels(liquidity, direction=direction, entry=current.close)]
+        candidates: list[Decimal] = [
+            level.price for level in target_levels(liquidity, direction=direction, entry=current.close)
+        ]
         for opposing in opposing_zones(zones, direction=direction, price=current.close):
             candidates.append(opposing.low if direction is Direction.LONG else opposing.high)
         if direction is Direction.LONG:
             candidates.extend(
-                point.price for point in (higher_structure.last_high, higher_structure.prior_high) if point is not None and point.price > current.close
+                point.price
+                for point in (higher_structure.last_high, higher_structure.prior_high)
+                if point is not None and point.price > current.close
             )
             candidates = sorted(set(candidates))
         else:
             candidates.extend(
-                point.price for point in (higher_structure.last_low, higher_structure.prior_low) if point is not None and point.price < current.close
+                point.price
+                for point in (higher_structure.last_low, higher_structure.prior_low)
+                if point is not None and point.price < current.close
             )
             candidates = sorted(set(candidates), reverse=True)
         for objective in candidates:
@@ -283,7 +379,12 @@ def assess_technicals(
     if components.flow and flow.direction is direction:
         score += min(Decimal("0.04"), flow.confidence * Decimal("0.12"))
     if components.session:
-        if phase in {SessionPhase.LONDON_OPEN, SessionPhase.NEW_YORK_OPEN, SessionPhase.LONDON_NEW_YORK_OVERLAP, SessionPhase.LONDON_CONTINUATION}:
+        if phase in {
+            SessionPhase.LONDON_OPEN,
+            SessionPhase.NEW_YORK_OPEN,
+            SessionPhase.LONDON_NEW_YORK_OVERLAP,
+            SessionPhase.LONDON_CONTINUATION,
+        }:
             score += Decimal("0.04")
         elif phase is SessionPhase.ASIA:
             score += Decimal("0.02")
