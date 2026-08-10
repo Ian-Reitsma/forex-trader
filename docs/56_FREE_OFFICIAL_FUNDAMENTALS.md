@@ -1,10 +1,10 @@
-# v0.7.33 Free Official Fundamentals
+# v0.7.34 Free Official Fundamentals
 
 ## Goal
 
-OANDA Practice campaigns must be able to satisfy the existing fundamentals requirement without a paid economic-calendar or market-consensus subscription.
+OANDA Practice campaigns must satisfy the existing fundamentals requirement without a paid economic-calendar or market-consensus subscription.
 
-This implementation does **not** manufacture economist consensus from public data and does not relabel official actual data as a forecast surprise. It adds a separate point-in-time `indicator` observation whose meaning is:
+This implementation does **not** manufacture economist consensus from public data and does not relabel official actual data as a forecast surprise. It uses a separate point-in-time `indicator` observation whose meaning is:
 
 > What does the latest first-party official policy/inflation state say, and how did the published value change versus the previous comparable official value when that comparison is available?
 
@@ -16,16 +16,26 @@ The runtime uses only first-party/public HTTPS endpoints and sends no provider A
 
 | Currency | Policy source | Inflation source |
 | --- | --- | --- |
-| USD | Federal Reserve FOMC statements | U.S. Bureau of Labor Statistics CPI tables |
+| USD | Federal Reserve FOMC statements | BLS Public Data API, CPI-U index (`CUUR0000SA0`) |
 | EUR | ECB Data Portal key rates | ECB Data Portal HICP API |
 | GBP | Bank of England Bank Rate history | Office for National Statistics CPI bulletin |
-| JPY | Bank of Japan monetary-policy decisions | Statistics Bureau of Japan CPI indicator |
+| JPY | Bank of Japan Basic Loan Rate table | Statistics Bureau of Japan CPI indicator |
 | CHF | Swiss National Bank monetary-policy assessment | Swiss National Bank monetary-policy assessment |
 | CAD | Bank of Canada key monetary-policy variables | Bank of Canada key monetary-policy variables |
 | AUD | Reserve Bank of Australia cash-rate history | Reserve Bank of Australia CPI page (ABS source data) |
-| NZD | Reserve Bank of New Zealand OCR page | Reserve Bank of New Zealand Prices M1 (Stats NZ source data) |
+| NZD | RBNZ B2 downloadable OCR data file | RBNZ M1 downloadable CPI data file (Stats NZ source data) |
 
 No Trading Economics credential is required by `run_practice_campaign.py` or `sync_free_official.py`.
+
+## v0.7.34 source-resilience changes
+
+The first live no-key run exposed three source failures that were HTTP/application failures rather than connectivity timeouts. v0.7.34 removes those fragile paths:
+
+- **USD/BLS:** the runtime no longer scrapes the BLS CPI release HTML page. It submits one no-key request to the official BLS Public Data API, retrieves CPI-U index history, and calculates the current and previous 12-month changes from those official index values.
+- **JPY/BoJ:** the runtime no longer synthesizes a `kYYMMDDa.htm` monetary-policy URL. BoJ changed 2026 publication formats and some current decisions are PDF-only. For durable machine-readable policy-direction evidence, the runtime uses BoJ's maintained Basic Loan Rate table. This is an official BoJ policy-administered rate; it is not mislabeled as the overnight-call target.
+- **NZD/RBNZ:** the runtime no longer depends on the two public webpages that returned HTTP 403 to the application client. It uses RBNZ's downloadable B2 and M1 XLSX data files. RBNZ explicitly identifies its data-file index as the mechanism for automated data access. The workbook parser uses only the Python standard library.
+
+No commercial mirror, synthetic consensus, or unofficial fallback is used.
 
 ## Point-in-time policy
 
@@ -38,21 +48,19 @@ The free runtime is prospective-first-seen:
 5. `available_at` is the local retrieval time, so a value discovered today cannot appear in a historical decision yesterday.
 6. No forecast field is allowed on an indicator observation.
 
-Historical backtests that need true release-time state still require a historical point-in-time dataset. The prospective runtime intentionally does not backdate current webpages into old decisions.
+Historical backtests that need true release-time state still require a historical point-in-time dataset. The prospective runtime intentionally does not backdate current webpages or data files into old decisions.
 
 ## Confidence versus directional alpha
 
-The old fundamental model used one freshness concept for both direction and confidence. That is appropriate for short-lived surprise/news impulses but not for monthly or quarterly first-party macro publications.
+The fundamental model separates evidence coverage from directional freshness.
 
-v0.7.33 separates them:
-
-- **Directional score freshness** keeps the existing short half-lives: policy 21 days, inflation/growth 72 hours, labor 48 hours, news 6 hours.
-- **Evidence coverage confidence** decays much more slowly across the normal publication cycle: policy 365 days, inflation/growth 180 days, labor 90 days, news 6 hours.
+- **Directional score freshness:** policy 21 days, inflation/growth 72 hours, labor 48 hours, news 6 hours.
+- **Evidence coverage confidence:** policy 365 days, inflation/growth 180 days, labor 90 days, news 6 hours.
 - The existing 30-day maximum age still hard-expires non-policy components by default.
 
-This means a CPI trend can stop exerting strong directional force after a few days while the model can still know that inflation is covered by a current authoritative publication.
+This means a CPI trend stops exerting strong directional force after a few days while the model can still know that inflation is covered by a current authoritative publication.
 
-The strategy's existing component weights are unchanged:
+The strategy component weights remain unchanged:
 
 - policy: 0.35
 - inflation: 0.20
@@ -64,21 +72,19 @@ Current first-party policy + inflation coverage therefore represents 0.55 of the
 
 No minimum score, spread, slippage, confirmation, risk, drawdown, correlation, macro-factor, reconciliation, or broker-write threshold is lowered.
 
-## Failure behavior
+## Health semantics and failure behavior
 
-Source failures are isolated by currency. A temporary failure at one publisher does not contaminate other currencies with a fallback commercial source or synthetic value.
+Source failures remain isolated by currency. A temporary failure at one publisher does not contaminate other currencies with a fallback commercial source or synthetic value.
 
-Example: if the Statistics Bureau of Japan page changes and JPY cannot be parsed, JPY is reported as unavailable. EUR/USD may remain eligible if EUR and USD have sufficient official evidence. JPY pairs fail the normal fundamental preflight.
+Provider-level health now has three explicit states:
 
-The sync report records:
+- `healthy`: every attempted currency succeeded;
+- `degraded`: at least one attempted currency succeeded and at least one failed;
+- `unavailable`: no attempted currency succeeded.
 
-- currencies attempted and succeeded;
-- raw official payloads inserted;
-- indicators seen;
-- observations inserted/already existing;
-- policy/inflation component counts;
-- per-currency failures;
-- provider health.
+The JSON compatibility field `healthy` is `true` only for full success. A partial 5/8 source refresh therefore reports `status: degraded` and `healthy: false` instead of incorrectly presenting itself as healthy.
+
+The sync report records currencies attempted/succeeded, raw official payloads, indicators, observations, component counts, per-currency failures, `status`, and `healthy`.
 
 ## Commands
 
