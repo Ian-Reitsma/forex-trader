@@ -1,4 +1,4 @@
-"""Synchronize free first-party macro evidence into the local point-in-time ledger."""
+"""Synchronize free official/public macro evidence into the local point-in-time ledger."""
 from __future__ import annotations
 
 import json
@@ -10,5 +10,7 @@ config = AppConfig.from_env()
 report = sync_free_official_fundamentals(config.database_path)
 print(json.dumps(report.to_jsonable(), indent=2, sort_keys=True))
 
-if not report.healthy:
+if report.status == "degraded":
+    raise SystemExit("free official fundamentals sync degraded: one or more supported currency sources failed")
+if report.status == "unavailable":
     raise SystemExit("free official fundamentals sync failed: no supported currency source succeeded")
