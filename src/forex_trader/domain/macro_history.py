@@ -34,10 +34,16 @@ class MacroObservation:
     body: str = ""
     source_weight: Decimal = Decimal("0.7")
     revision_of: UUID | None = None
+    event_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.available_at.tzinfo is None:
             raise ValueError("available_at must be timezone-aware")
+        if self.event_at is not None:
+            if self.event_at.tzinfo is None:
+                raise ValueError("event_at must be timezone-aware")
+            if self.event_at > self.available_at:
+                raise ValueError("event_at cannot be after available_at")
         if len(self.currency.strip()) != 3:
             raise ValueError("currency must be a three-letter code")
         if self.kind is MacroObservationKind.RELEASE and (self.actual is None or self.forecast is None or self.previous is None):
@@ -55,10 +61,12 @@ class MacroObservation:
         higher_is_positive: bool,
         importance: Decimal = Decimal("1"),
         available_at: datetime | None = None,
+        event_at: datetime | None = None,
         source: str = "manual",
         revision_of: UUID | None = None,
         observation_id: UUID | None = None,
     ) -> "MacroObservation":
+        availability = available_at or datetime.now(UTC)
         return cls(
             observation_id=observation_id or uuid4(),
             kind=MacroObservationKind.RELEASE,
@@ -69,7 +77,8 @@ class MacroObservation:
             previous=previous,
             higher_is_positive=higher_is_positive,
             importance=importance,
-            available_at=available_at or datetime.now(UTC),
+            available_at=availability,
+            event_at=event_at,
             source=source,
             revision_of=revision_of,
         )
@@ -100,7 +109,13 @@ class MacroObservation:
 
 
 class PointInTimeFundamentalBook:
-    """Reconstruct fundamental state using observations available at each decision timestamp."""
+    """Reconstruct fundamental state using observations available at each decision timestamp.
+
+    ``available_at`` controls whether an observation was knowable at a decision timestamp.
+    ``event_at`` (when present) controls freshness/decay after that observation becomes
+    knowable. This lets a prospectively retrieved historical release remain unavailable to
+    earlier decisions without pretending the old economic event itself happened at retrieval.
+    """
 
     def __init__(
         self,
@@ -142,7 +157,7 @@ class PointInTimeFundamentalBook:
                     previous=observation.previous,
                     higher_is_positive=observation.higher_is_positive,
                     importance=observation.importance,
-                    observed_at=observation.available_at,
+                    observed_at=observation.event_at or observation.available_at,
                 )
             elif observation.kind is MacroObservationKind.CENTRAL_BANK:
                 book.apply_central_bank(

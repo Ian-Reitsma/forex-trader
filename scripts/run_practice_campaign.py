@@ -7,7 +7,9 @@ one point-in-time decision evidence row per instrument evaluation, and can captu
 paired research ablations from each exact shadow decision snapshot.
 
 Before an authenticated campaign, run `forex-trader sync` and the read-only Practice probe.
-Never put OANDA credentials on the command line; provide them through the local environment.
+Never put OANDA or licensed-data credentials on the command line; provide them through the
+local environment. When TRADING_ECONOMICS_API_KEY is configured, Practice execution refreshes
+prospective licensed macro observations before the fundamental-eligibility preflight.
 """
 from __future__ import annotations
 
@@ -18,9 +20,11 @@ from pathlib import Path
 
 from forex_trader.application.campaign import PracticeCampaignRunner
 from forex_trader.application.campaign_policy import campaign_policy_context, select_campaign_universe
+from forex_trader.application.trading_economics_sync import sync_trading_economics_fundamentals
 from forex_trader.config import AppConfig, build_engine
 from forex_trader.domain.enums import OperatingMode, ProviderKind
 from forex_trader.domain.timeframes import granularity_duration
+from forex_trader.ingestion.trading_economics import TradingEconomicsSettings
 
 
 def _exclusion_category(reason: str) -> str:
@@ -101,6 +105,23 @@ if args.execute:
             "--execute requires FOREX_MODE=paper and FOREX_ENABLE_PAPER_ORDERS=true"
         )
 
+fundamental_refresh: dict[str, object] | None = None
+te_settings = TradingEconomicsSettings.from_env()
+if (
+    args.execute
+    and config.require_fundamentals
+    and te_settings.auto_refresh
+    and te_settings.api_key is not None
+):
+    try:
+        refresh_report = sync_trading_economics_fundamentals(config.database_path, te_settings)
+    except Exception as exc:
+        raise SystemExit(
+            f"Trading Economics fundamental refresh failed closed: {type(exc).__name__}: {exc}"
+        ) from exc
+    fundamental_refresh = refresh_report.to_jsonable()
+    print(json.dumps({"fundamental_refresh": fundamental_refresh}, indent=2, sort_keys=True))
+
 engine = build_engine(config)
 if args.all_currency_pairs:
     discovered = tuple(engine.instrument_universe())
@@ -120,10 +141,16 @@ selection = select_campaign_universe(
 eligible = selection.selected
 if not eligible:
     if fundamental_preflight:
+        provider_hint = (
+            " Configure TRADING_ECONOMICS_API_KEY to enable the prospective licensed macro refresh."
+            if te_settings.api_key is None
+            else " The configured Trading Economics refresh completed but did not produce enough fresh confidence."
+        )
         raise SystemExit(
             "campaign has no instruments that can meet the current fundamental-confidence gate. "
             "Populate legitimate point-in-time fundamental data or run a shadow diagnostic without --eligible-only; "
             "do not lower strategy/risk gates merely to manufacture trades."
+            + provider_hint
         )
     raise SystemExit("campaign instrument universe is empty after normalization")
 
@@ -146,6 +173,7 @@ policy_context["campaign"] = {
     "max_new_orders_per_cycle": args.max_orders_per_cycle,
     "fundamental_preflight": fundamental_preflight,
     "paired_ablation_capture": args.ablation_evidence_path is not None,
+    "licensed_fundamental_refresh": fundamental_refresh,
 }
 campaign_metadata = {
     "universe_source": universe_source,
@@ -155,6 +183,7 @@ campaign_metadata = {
     "excluded_count": selection.excluded_count,
     "fundamental_preflight": fundamental_preflight,
     "paired_ablation_capture": args.ablation_evidence_path is not None,
+    "licensed_fundamental_refresh": fundamental_refresh,
     "excluded_reason_categories": dict(exclusion_categories),
 }
 
