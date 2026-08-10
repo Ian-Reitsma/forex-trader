@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import html as html_module
 import io
 import json
 import re
@@ -11,7 +10,6 @@ from urllib.parse import urljoin
 
 from forex_trader.ingestion.free_official import (
     BLS,
-    BOJ,
     FED,
     FreeOfficialSourceError,
     OfficialCurrencySnapshot,
@@ -19,12 +17,12 @@ from forex_trader.ingestion.free_official import (
     OfficialWebClient,
     _date_digits_from_url,
     _fed_target_midpoint,
-    _parse_date,
     fetch_currency as fetch_currency_legacy,
     html_document,
 )
 from forex_trader.ingestion.official_sources import (
     OFFICIAL_MACRO_SOURCES,
+    RawSourcePayload,
     SourceAuthority,
     SourceDescriptor,
 )
@@ -32,25 +30,24 @@ from forex_trader.ingestion.official_sources import (
 
 _BLS_CPI_SERIES = "CUUR0000SA0"
 _BLS_API_URL = f"https://api.bls.gov/publicAPI/v1/timeseries/data/{_BLS_CPI_SERIES}"
-_BOJ_POLICY_TABLE_URL = "https://www.boj.or.jp/en/statistics/boj/other/discount/discount.htm"
-_STATISTICS_JAPAN_CPI_URL = "https://www.stat.go.jp/data/cpi/sokuhou/tsuki/index-z.html"
+_BIS_JPY_POLICY_URL = (
+    "https://stats.bis.org/api/v2/data/dataflow/BIS/WS_CBPOL/1.0/M.JP"
+    "?startPeriod=2025-01&detail=dataonly&format=csvfile"
+)
+_BIS_JPY_CPI_URL = (
+    "https://stats.bis.org/api/v2/data/dataflow/BIS/WS_LONG_CPI/1.0/M.JP.771"
+    "?startPeriod=2025-01&detail=dataonly&format=csvfile"
+)
 _BIS_NZD_POLICY_URL = (
     "https://stats.bis.org/api/v2/data/dataflow/BIS/WS_CBPOL/1.0/M.NZ"
-    "?startPeriod=2020-01&detail=dataonly&format=csvfile"
+    "?startPeriod=2025-01&detail=dataonly&format=csvfile"
 )
-_STATS_NZ_CPI_TOPIC_URL = "https://www.stats.govt.nz/topics/consumers-price-index/"
 
 BIS_SOURCE = SourceDescriptor(
     "bis",
     "Bank for International Settlements",
     SourceAuthority.OFFICIAL,
     frozenset({"stats.bis.org"}),
-)
-STATISTICS_JAPAN_SOURCE = SourceDescriptor(
-    "statistics_japan",
-    "Statistics Bureau of Japan",
-    SourceAuthority.OFFICIAL,
-    frozenset({"stat.go.jp"}),
 )
 STATS_NZ_SOURCE = OFFICIAL_MACRO_SOURCES["stats_nz"]
 
@@ -182,110 +179,164 @@ def _percent_change(current: Decimal, prior: Decimal) -> Decimal:
     return (current / prior - Decimal("1")) * Decimal("100")
 
 
-def _fetch_jpy(client: OfficialWebClient, *, retrieved_at: datetime) -> OfficialCurrencySnapshot:
-    policy = client.fetch(BOJ, _BOJ_POLICY_TABLE_URL, retrieved_at=retrieved_at)
-    policy_rows: list[tuple[date, Decimal]] = []
-    for row in html_document(policy).rows:
-        if len(row) < 2:
+def _bis_observations(body: bytes) -> list[tuple[str, Decimal]]:
+    try:
+        text = body.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise FreeOfficialSourceError("bis API returned invalid UTF-8 CSV") from exc
+    reader = csv.DictReader(io.StringIO(text))
+    values: dict[str, Decimal] = {}
+    for row in reader:
+        period = (row.get("TIME_PERIOD") or "").strip()
+        raw_value = (row.get("OBS_VALUE") or "").strip()
+        if not period or raw_value in {"", ".", "NaN"}:
             continue
         try:
-            when = _parse_flexible_date(row[0])
-            value = Decimal(row[-1].replace("%", "").strip())
-        except (ValueError, InvalidOperation):
+            values[period] = Decimal(raw_value)
+        except InvalidOperation:
             continue
-        if when.year >= 2001:
-            policy_rows.append((when, value))
-    policy_rows.sort(key=lambda item: item[0])
-    if len(policy_rows) < 2:
-        raise FreeOfficialSourceError("bank_of_japan basic loan rate table was not parsed")
-    latest_rate = policy_rows[-1]
-    previous_rate = policy_rows[-2]
+    observations = sorted(values.items(), key=lambda item: item[0])
+    if not observations:
+        raise FreeOfficialSourceError("bis API returned no usable observations")
+    return observations
 
-    stats = client.fetch(STATISTICS_JAPAN_SOURCE, _STATISTICS_JAPAN_CPI_URL, retrieved_at=retrieved_at)
-    inflation_value, inflation_reference = _statistics_japan_cpi(stats.body)
+
+def _fetch_jpy(
+    client: OfficialWebClient,
+    *,
+    retrieved_at: datetime,
+) -> OfficialCurrencySnapshot:
+    policy_payload = client.fetch(BIS_SOURCE, _BIS_JPY_POLICY_URL, retrieved_at=retrieved_at)
+    cpi_payload = client.fetch(BIS_SOURCE, _BIS_JPY_CPI_URL, retrieved_at=retrieved_at)
+    policy = _bis_observations(policy_payload.body)
+    cpi = _bis_observations(cpi_payload.body)
+    if len(policy) < 2:
+        raise FreeOfficialSourceError("bis Japan policy-rate series did not expose two observations")
+    if len(cpi) < 2:
+        raise FreeOfficialSourceError("bis Japan CPI series did not expose two observations")
+    latest_policy, previous_policy = policy[-1], policy[-2]
+    latest_cpi, previous_cpi = cpi[-1], cpi[-2]
     return OfficialCurrencySnapshot(
         "JPY",
-        (policy, stats),
+        (policy_payload, cpi_payload),
         (
             OfficialIndicatorEvidence(
-                "bank_of_japan",
-                "basic_loan_rate",
+                "bis",
+                "central_bank_policy_rate_jp",
                 "JPY",
                 "policy",
-                latest_rate[1],
-                previous_rate[1],
+                latest_policy[1],
+                previous_policy[1],
                 True,
-                latest_rate[0].isoformat(),
+                latest_policy[0],
             ),
             OfficialIndicatorEvidence(
-                "statistics_japan",
-                "cpi_all_items_annual",
+                "bis",
+                "consumer_prices_yoy_jp",
                 "JPY",
                 "inflation",
-                inflation_value,
-                None,
+                latest_cpi[1],
+                previous_cpi[1],
                 False,
-                inflation_reference,
+                latest_cpi[0],
             ),
         ),
     )
 
 
-def _statistics_japan_cpi(body: bytes) -> tuple[Decimal, str]:
+def _stats_nz_release_candidates(retrieved_at: datetime) -> tuple[str, ...]:
+    month_names = {3: "march", 6: "june", 9: "september", 12: "december"}
     candidates: list[str] = []
-    for encoding in ("utf-8", "cp932", "shift_jis"):
-        try:
-            decoded = body.decode(encoding)
-        except UnicodeDecodeError:
+    for year in range(retrieved_at.year, retrieved_at.year - 3, -1):
+        for month in (12, 9, 6, 3):
+            if year == retrieved_at.year and month > retrieved_at.month:
+                continue
+            candidates.append(
+                "https://www.stats.govt.nz/information-releases/"
+                f"consumers-price-index-{month_names[month]}-{year}-quarter/"
+            )
+    return tuple(candidates)
+
+
+def _parse_nz_quarter(value: str) -> date | None:
+    match = re.fullmatch(r"(Mar|Jun|Sep|Sept|Dec)[- ](\d{2}|\d{4})", value.strip(), flags=re.IGNORECASE)
+    if match is None:
+        return None
+    month = {"mar": 3, "jun": 6, "sep": 9, "sept": 9, "dec": 12}[match.group(1).lower()]
+    raw_year = int(match.group(2))
+    year = raw_year if raw_year >= 1000 else 2000 + raw_year
+    return date(year, month, 1)
+
+
+def _stats_nz_cpi_values(payload: RawSourcePayload) -> list[tuple[date, Decimal]]:
+    rows = html_document(payload).rows
+    header_index: int | None = None
+    annual_column: int | None = None
+    for index, row in enumerate(rows):
+        if not row or row[0].strip().lower() != "quarter":
             continue
-        visible = html_module.unescape(re.sub(r"<[^>]+>", " ", decoded))
-        normalized = " ".join(visible.split())
-        if normalized:
-            candidates.append(normalized)
-        if "前年同月比" in normalized and "総合指数" in normalized:
+        for column, cell in enumerate(row):
+            normalized = " ".join(cell.lower().split())
+            if "cpi all groups" in normalized and "annual" in normalized:
+                header_index = index
+                annual_column = column
+                break
+        if header_index is not None:
             break
-    if not candidates:
-        raise FreeOfficialSourceError("statistics_japan CPI page could not be decoded")
-    text = candidates[-1]
-    inflation = re.search(
-        r"総合指数.*?前年同月比は\s*(-?\d+(?:\.\d+)?)\s*[％%]\s*の\s*(上昇|低下)",
-        text,
-    )
-    if inflation is None:
-        raise FreeOfficialSourceError("statistics_japan latest national CPI year-over-year indicator was not found")
-    actual = Decimal(inflation.group(1))
-    if inflation.group(2) == "低下":
-        actual = -actual
-    reference = re.search(r"全国\s+(\d{4})年(?:（[^）]+）)?\s*(\d{1,2})月分", text)
-    if reference is None:
-        raise FreeOfficialSourceError("statistics_japan CPI reference month was not found")
-    return actual, f"{int(reference.group(1)):04d}-{int(reference.group(2)):02d}"
+    if header_index is None or annual_column is None:
+        raise FreeOfficialSourceError("stats_nz CPI annual-change table header was not found")
+
+    values: list[tuple[date, Decimal]] = []
+    for row in rows[header_index + 1 :]:
+        if len(row) <= annual_column:
+            continue
+        period = _parse_nz_quarter(row[0])
+        if period is None:
+            if values:
+                break
+            continue
+        try:
+            annual = Decimal(row[annual_column].replace("%", "").strip())
+        except InvalidOperation:
+            continue
+        values.append((period, annual))
+    values.sort(key=lambda item: item[0])
+    if len(values) < 2:
+        raise FreeOfficialSourceError("stats_nz CPI table did not expose two annual observations")
+    return values
 
 
-def _parse_flexible_date(value: str) -> date:
-    cleaned = " ".join(value.replace(".", "").replace(",", " ").split())
-    return _parse_date(cleaned)
+def _fetch_latest_stats_nz_cpi(
+    client: OfficialWebClient,
+    *,
+    retrieved_at: datetime,
+) -> tuple[RawSourcePayload, list[tuple[date, Decimal]]]:
+    for url in _stats_nz_release_candidates(retrieved_at):
+        try:
+            payload = client.fetch(STATS_NZ_SOURCE, url, retrieved_at=retrieved_at)
+        except FreeOfficialSourceError as exc:
+            if " returned HTTP 404" in str(exc):
+                continue
+            raise
+        return payload, _stats_nz_cpi_values(payload)
+    raise FreeOfficialSourceError("stats_nz current CPI release was not found")
 
 
-def _fetch_nzd(client: OfficialWebClient, *, retrieved_at: datetime) -> OfficialCurrencySnapshot:
-    policy = client.fetch(BIS_SOURCE, _BIS_NZD_POLICY_URL, retrieved_at=retrieved_at)
-    policy_values = _bis_observations(policy.body)
-    if not policy_values:
-        raise FreeOfficialSourceError("bis New Zealand policy-rate series returned no observations")
-    latest_policy = policy_values[-1]
-    previous_policy = next(
-        (item for item in reversed(policy_values[:-1]) if item[1] != latest_policy[1]),
-        None,
-    )
-
-    topic = client.fetch(STATS_NZ_SOURCE, _STATS_NZ_CPI_TOPIC_URL, retrieved_at=retrieved_at)
-    release_url = _latest_stats_nz_cpi_release_url(topic.url, html_document(topic).links)
-    release = client.fetch(STATS_NZ_SOURCE, release_url, retrieved_at=retrieved_at)
-    cpi_values = _stats_nz_cpi_values(html_document(release).rows)
-    latest_cpi, previous_cpi = cpi_values[-1], cpi_values[-2]
+def _fetch_nzd(
+    client: OfficialWebClient,
+    *,
+    retrieved_at: datetime,
+) -> OfficialCurrencySnapshot:
+    policy_payload = client.fetch(BIS_SOURCE, _BIS_NZD_POLICY_URL, retrieved_at=retrieved_at)
+    policy = _bis_observations(policy_payload.body)
+    if len(policy) < 2:
+        raise FreeOfficialSourceError("bis New Zealand policy-rate series did not expose two observations")
+    cpi_payload, cpi = _fetch_latest_stats_nz_cpi(client, retrieved_at=retrieved_at)
+    latest_policy, previous_policy = policy[-1], policy[-2]
+    latest_cpi, previous_cpi = cpi[-1], cpi[-2]
     return OfficialCurrencySnapshot(
         "NZD",
-        (policy, topic, release),
+        (policy_payload, cpi_payload),
         (
             OfficialIndicatorEvidence(
                 "bis",
@@ -293,7 +344,7 @@ def _fetch_nzd(client: OfficialWebClient, *, retrieved_at: datetime) -> Official
                 "NZD",
                 "policy",
                 latest_policy[1],
-                None if previous_policy is None else previous_policy[1],
+                previous_policy[1],
                 True,
                 latest_policy[0],
             ),
@@ -309,65 +360,3 @@ def _fetch_nzd(client: OfficialWebClient, *, retrieved_at: datetime) -> Official
             ),
         ),
     )
-
-
-def _bis_observations(body: bytes) -> list[tuple[str, Decimal]]:
-    try:
-        text = body.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise FreeOfficialSourceError("bis API returned invalid UTF-8 CSV") from exc
-    reader = csv.DictReader(io.StringIO(text))
-    observations: dict[str, Decimal] = {}
-    for row in reader:
-        period = (row.get("TIME_PERIOD") or "").strip()
-        raw_value = (row.get("OBS_VALUE") or "").strip()
-        if not period or raw_value in {"", ".", "NaN"}:
-            continue
-        try:
-            observations[period] = Decimal(raw_value)
-        except InvalidOperation:
-            continue
-    result = sorted(observations.items(), key=lambda item: item[0])
-    if not result:
-        raise FreeOfficialSourceError("bis API returned no usable observations")
-    return result
-
-
-def _latest_stats_nz_cpi_release_url(base_url: str, links: tuple[str, ...]) -> str:
-    month_number = {"march": 3, "june": 6, "september": 9, "december": 12}
-    candidates: list[tuple[tuple[int, int], str]] = []
-    for href in links:
-        absolute = urljoin(base_url, href).split("?", 1)[0].rstrip("/")
-        match = re.search(
-            r"/information-releases/consumers-price-index-(march|june|september|december)-(\d{4})-quarter$",
-            absolute,
-            flags=re.IGNORECASE,
-        )
-        if match is None:
-            continue
-        candidates.append(((int(match.group(2)), month_number[match.group(1).lower()]), absolute + "/"))
-    if not candidates:
-        raise FreeOfficialSourceError("stats_nz latest CPI release link was not found")
-    candidates.sort(key=lambda item: item[0])
-    return candidates[-1][1]
-
-
-def _stats_nz_cpi_values(rows: tuple[tuple[str, ...], ...]) -> list[tuple[date, Decimal]]:
-    month_number = {"mar": 3, "jun": 6, "sep": 9, "sept": 9, "dec": 12}
-    values: dict[date, Decimal] = {}
-    for row in rows:
-        if len(row) < 3:
-            continue
-        match = re.fullmatch(r"(Mar|Jun|Sep|Sept|Dec)-(\d{2})", row[0].strip(), flags=re.IGNORECASE)
-        if match is None:
-            continue
-        try:
-            annual = Decimal(row[2].replace("%", "").strip())
-        except InvalidOperation:
-            continue
-        when = date(2000 + int(match.group(2)), month_number[match.group(1).lower()], 1)
-        values[when] = annual
-    result = sorted(values.items(), key=lambda item: item[0])
-    if len(result) < 2:
-        raise FreeOfficialSourceError("stats_nz CPI table did not expose two annual observations")
-    return result
