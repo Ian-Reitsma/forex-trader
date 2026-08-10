@@ -14,8 +14,11 @@ from forex_trader.ingestion.free_official import (
     FreeOfficialSourceError,
     OfficialCurrencySnapshot,
     OfficialWebClient,
-    fetch_currency,
     supported_currencies,
+)
+from forex_trader.ingestion.free_official_resilient import (
+    ResilientOfficialWebClient,
+    fetch_currency_resilient,
 )
 
 
@@ -34,7 +37,15 @@ class FreeOfficialSyncReport:
 
     @property
     def healthy(self) -> bool:
-        return bool(self.currencies_succeeded)
+        return bool(self.currencies_attempted) and len(self.currencies_succeeded) == len(self.currencies_attempted)
+
+    @property
+    def status(self) -> str:
+        if self.healthy:
+            return "healthy"
+        if self.currencies_succeeded:
+            return "degraded"
+        return "unavailable"
 
     def to_jsonable(self) -> dict[str, object]:
         return {
@@ -52,6 +63,7 @@ class FreeOfficialSyncReport:
             "components": dict(sorted(self.components.items())),
             "failures": dict(sorted(self.failures.items())),
             "healthy": self.healthy,
+            "status": self.status,
             "point_in_time_policy": (
                 "prospective-first-seen official state: current official values become knowable "
                 "only when locally retrieved; no paid or reconstructed consensus is invented"
@@ -86,10 +98,10 @@ def sync_free_official_fundamentals(
     succeeded: list[str] = []
     failures: dict[str, str] = {}
     components: dict[str, int] = {}
-    factory = client_factory or OfficialWebClient
+    factory = client_factory or ResilientOfficialWebClient
 
     def default_fetch(currency: str, client: OfficialWebClient, observed: datetime) -> OfficialCurrencySnapshot:
-        return fetch_currency(currency, client, retrieved_at=observed)
+        return fetch_currency_resilient(currency, client, retrieved_at=observed)
 
     selected_fetcher = fetcher or default_fetch
     with factory() as client:
