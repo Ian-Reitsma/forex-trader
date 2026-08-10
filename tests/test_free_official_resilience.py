@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import json
 import zipfile
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -51,7 +50,7 @@ def _xlsx(rows: list[list[str | float]]) -> bytes:
     return buffer.getvalue()
 
 
-def test_usd_uses_bls_public_api_not_blocked_html_page() -> None:
+def test_usd_uses_unregistered_bls_v1_api_not_blocked_html_page() -> None:
     calls: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -67,10 +66,8 @@ def test_usd_uses_bls_public_api_not_blocked_html_page() -> None:
             return _html(request, "target range for the federal funds rate at 3-1/2 to 3-3/4 percent")
         if url.endswith("monetary20260617a.htm"):
             return _html(request, "target range for the federal funds rate at 3-1/2 to 3-3/4 percent")
-        if url == "https://api.bls.gov/publicAPI/v2/timeseries/data/":
-            assert request.method == "POST"
-            submitted = json.loads(request.content.decode())
-            assert submitted["seriesid"] == ["CUUR0000SA0"]
+        if url == "https://api.bls.gov/publicAPI/v1/timeseries/data/CUUR0000SA0":
+            assert request.method == "GET"
             return httpx.Response(
                 200,
                 json={
@@ -104,6 +101,7 @@ def test_usd_uses_bls_public_api_not_blocked_html_page() -> None:
     assert inflation.series_id == "cpi_u_12m_from_index"
     assert inflation.reference == "2026-06"
     assert all("news.release/cpi" not in url for _, url in calls)
+    assert any("/publicAPI/v1/" in url for _, url in calls)
 
 
 def test_jpy_uses_maintained_boj_rate_table_instead_of_guessed_decision_url() -> None:
