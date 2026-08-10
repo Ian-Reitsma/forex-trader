@@ -29,8 +29,6 @@ def test_fx_risk_day_before_close_belongs_to_prior_new_york_day() -> None:
 
 
 def test_fx_risk_day_requires_timezone_aware_timestamp() -> None:
-    import pytest
-
     try:
         fx_risk_day_bounds(datetime(2026, 8, 7, 12))
     except ValueError as exc:

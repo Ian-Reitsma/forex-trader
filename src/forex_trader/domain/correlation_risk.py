@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from math import log, sqrt
 from statistics import fmean
 from typing import Callable, Iterable
@@ -124,7 +125,7 @@ class CorrelationRiskGuard:
             )
         return CorrelationRiskDecision(False, None, tuple(pairs), max_signed)
 
-    def _prices(self, instrument: str) -> dict[object, float]:
+    def _prices(self, instrument: str) -> dict[datetime, float]:
         candles = [
             candle
             for candle in self.candle_loader(

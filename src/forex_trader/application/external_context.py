@@ -196,6 +196,11 @@ class ExternalContextFusionPolicy(RegimeAwareSignalFusionPolicy):
         *,
         maximum_spread_pips: Decimal | None = None,
         components: DecisionComponentPolicy = PRODUCTION_DECISION_COMPONENTS,
+        cross_asset_alignment: Decimal = Decimal("0"),
+        cross_asset_source_ids: tuple[str, ...] = (),
+        institutional_flow_pressure: Decimal | None = None,
+        institutional_flow_source: str | None = None,
+        institutional_flow_confidence: Decimal = Decimal("0"),
     ) -> TradeCandidate:
         context = self.external_context.snapshot(technical.instrument, as_of=quote.time)
         candidate = super().evaluate(

@@ -112,10 +112,8 @@ def evaluate_candidate_outcome(
         return _late_entry(candidate, entry_fill, entry_delay_bars + 1)
 
     risk = abs(entry_fill - candidate.stop_loss)
-    reward = abs(candidate.take_profit - entry_fill)
     if risk <= 0:
         raise ValueError("candidate stop distance must be positive")
-    win_r = reward / risk
     entry_cost_r = adverse_entry / risk
     max_favorable = Decimal("0")
     max_adverse = Decimal("0")

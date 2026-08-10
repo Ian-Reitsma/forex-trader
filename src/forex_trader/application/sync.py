@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Protocol
@@ -15,7 +16,7 @@ class TransactionSource(Protocol):
         *,
         max_events: int | None = None,
         include_heartbeats: bool = False,
-    ): ...
+    ) -> Iterator[dict[str, object]]: ...
 
 
 class TransactionRepository(Protocol):

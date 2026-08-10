@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
 from forex_trader.domain.enums import Direction
-from forex_trader.domain.market_structure import SwingKind, find_swings
+from forex_trader.domain.market_structure import SwingKind, SwingPoint, find_swings
 from forex_trader.domain.models import Candle
 from forex_trader.domain.risk_day import (
     fx_bar_risk_day_key,
@@ -63,7 +63,7 @@ class LiquidityLevel:
     kind: LiquidityKind
     price: Decimal
     strength: Decimal
-    source_time: object | None = None
+    source_time: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,12 +157,8 @@ def find_recent_sweep(
         candle = completed[index]
         for level in levels:
             # A swing/session level cannot be swept by the same candle that creates it.
-            if level.source_time is not None and getattr(level.source_time, "__gt__", None) is not None:
-                try:
-                    if level.source_time >= candle.time:
-                        continue
-                except TypeError:
-                    pass
+            if level.source_time is not None and level.source_time >= candle.time:
+                continue
             if level.kind in _LOW_KINDS:
                 excursion = level.price - candle.low
                 if excursion >= pip_size * minimum_excursion_pips and candle.close > level.price:
@@ -246,7 +242,7 @@ def _completed_session_levels(
     low_kind: LiquidityKind,
     strength: Decimal,
 ) -> list[LiquidityLevel]:
-    groups: dict[object, list[Candle]] = defaultdict(list)
+    groups: dict[date, list[Candle]] = defaultdict(list)
     for candle in candles:
         local = candle.time.astimezone(definition.zone)
         current = local.timetz().replace(tzinfo=None)
@@ -276,7 +272,7 @@ def _opening_range_levels(
     strength: Decimal,
     range_minutes: int = 30,
 ) -> list[LiquidityLevel]:
-    groups: dict[object, list[Candle]] = defaultdict(list)
+    groups: dict[date, list[Candle]] = defaultdict(list)
     for candle in candles:
         local = candle.time.astimezone(definition.zone)
         open_local = datetime.combine(local.date(), definition.local_open, tzinfo=definition.zone)
@@ -299,7 +295,7 @@ def _opening_range_levels(
     ]
 
 
-def _recent_external_swings(points: list[object], kind: LiquidityKind, *, count: int = 5) -> list[LiquidityLevel]:
+def _recent_external_swings(points: list[SwingPoint], kind: LiquidityKind, *, count: int = 5) -> list[LiquidityLevel]:
     results: list[LiquidityLevel] = []
     selected = points[-count:]
     for age, point in enumerate(reversed(selected)):
@@ -307,26 +303,26 @@ def _recent_external_swings(points: list[object], kind: LiquidityKind, *, count:
         results.append(
             LiquidityLevel(
                 kind,
-                Decimal(str(getattr(point, "price"))),
+                point.price,
                 strength,
-                getattr(point, "time", None),
+                point.time,
             )
         )
     return results
 
 
-def _equal_levels(points: list[object], kind: LiquidityKind, *, tolerance: Decimal) -> list[LiquidityLevel]:
+def _equal_levels(points: list[SwingPoint], kind: LiquidityKind, *, tolerance: Decimal) -> list[LiquidityLevel]:
     results: list[LiquidityLevel] = []
     for first, second in zip(points[-8:-1], points[-7:], strict=False):
-        first_price = Decimal(str(getattr(first, "price")))
-        second_price = Decimal(str(getattr(second, "price")))
+        first_price = first.price
+        second_price = second.price
         if abs(first_price - second_price) <= tolerance:
             results.append(
                 LiquidityLevel(
                     kind,
                     (first_price + second_price) / Decimal("2"),
                     Decimal("0.85"),
-                    getattr(second, "time", None),
+                    second.time,
                 )
             )
     return results
