@@ -36,6 +36,7 @@ jobs:
           src/forex_trader/adapters/synthetic.py
           src/forex_trader/api/app.py
           src/forex_trader/application/campaign.py
+          src/forex_trader/application/free_official_sync.py
           src/forex_trader/application/fx_engine.py
           src/forex_trader/application/macro_ingestion.py
           src/forex_trader/application/official_document_discovery.py
@@ -48,6 +49,7 @@ jobs:
           src/forex_trader/domain/component_confirmation.py
           src/forex_trader/domain/context.py
           src/forex_trader/domain/decision_components.py
+          src/forex_trader/domain/fundamentals.py
           src/forex_trader/domain/fusion.py
           src/forex_trader/domain/macro_history.py
           src/forex_trader/domain/models.py
@@ -62,6 +64,7 @@ jobs:
           src/forex_trader/infrastructure/repository.py
           src/forex_trader/infrastructure/source_evidence_repository.py
           src/forex_trader/ingestion/bls.py
+          src/forex_trader/ingestion/free_official.py
           src/forex_trader/ingestion/official_feeds.py
           src/forex_trader/ingestion/official_json.py
           src/forex_trader/ingestion/official_sources.py
@@ -99,6 +102,7 @@ jobs:
           scripts/label_ablation_decisions.py
           scripts/label_decision_evidence.py
           scripts/run_practice_campaign.py
+          scripts/sync_free_official.py
           scripts/sync_trading_economics.py
           scripts/validate_central_bank_stance_statistics.py
           tests/test_ablation_outcome_maturity.py
@@ -112,6 +116,7 @@ jobs:
           tests/test_central_bank_stance_outcomes.py
           tests/test_central_bank_stance_statistical_validation.py
           tests/test_central_bank_stance_statistical_validation_cli.py
+          tests/test_free_official_fundamentals.py
           tests/test_macro_event_availability.py
           tests/test_macro_source_orchestration.py
           tests/test_official_bls_adapter.py
@@ -141,6 +146,7 @@ jobs:
         run: >-
           python -m mypy --strict --follow-imports=silent
           src/forex_trader/application/campaign.py
+          src/forex_trader/application/free_official_sync.py
           src/forex_trader/application/fx_engine.py
           src/forex_trader/application/macro_ingestion.py
           src/forex_trader/application/official_document_discovery.py
@@ -151,6 +157,7 @@ jobs:
           src/forex_trader/intelligence/official_documents.py
           src/forex_trader/domain/component_confirmation.py
           src/forex_trader/domain/decision_components.py
+          src/forex_trader/domain/fundamentals.py
           src/forex_trader/domain/fusion.py
           src/forex_trader/domain/macro_history.py
           src/forex_trader/domain/setup.py
@@ -160,6 +167,7 @@ jobs:
           src/forex_trader/infrastructure/official_document_repository.py
           src/forex_trader/infrastructure/source_evidence_repository.py
           src/forex_trader/ingestion/bls.py
+          src/forex_trader/ingestion/free_official.py
           src/forex_trader/ingestion/official_feeds.py
           src/forex_trader/ingestion/official_json.py
           src/forex_trader/ingestion/official_sources.py
@@ -190,6 +198,7 @@ jobs:
           scripts/assess_research_promotion.py
           scripts/evaluate_central_bank_stance_semantics.py
           scripts/label_ablation_decisions.py
+          scripts/sync_free_official.py
           scripts/sync_trading_economics.py
           scripts/validate_central_bank_stance_statistics.py
       - name: Test and coverage

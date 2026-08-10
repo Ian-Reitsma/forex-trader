@@ -13,6 +13,7 @@ from forex_trader.domain.models import CurrencyFundamentals, FundamentalAssessme
 
 class MacroObservationKind(StrEnum):
     RELEASE = "release"
+    INDICATOR = "indicator"
     NEWS = "news"
     CENTRAL_BANK = "central_bank"
 
@@ -46,8 +47,14 @@ class MacroObservation:
                 raise ValueError("event_at cannot be after available_at")
         if len(self.currency.strip()) != 3:
             raise ValueError("currency must be a three-letter code")
-        if self.kind is MacroObservationKind.RELEASE and (self.actual is None or self.forecast is None or self.previous is None):
+        if self.kind is MacroObservationKind.RELEASE and (
+            self.actual is None or self.forecast is None or self.previous is None
+        ):
             raise ValueError("release observations require actual, forecast, and previous")
+        if self.kind is MacroObservationKind.INDICATOR and (
+            self.actual is None or self.forecast is not None
+        ):
+            raise ValueError("indicator observations require actual and cannot include forecast")
 
     @classmethod
     def release(
@@ -74,6 +81,38 @@ class MacroObservation:
             category=category,
             actual=actual,
             forecast=forecast,
+            previous=previous,
+            higher_is_positive=higher_is_positive,
+            importance=importance,
+            available_at=availability,
+            event_at=event_at,
+            source=source,
+            revision_of=revision_of,
+        )
+
+    @classmethod
+    def indicator(
+        cls,
+        *,
+        currency: str,
+        category: str,
+        actual: Decimal,
+        previous: Decimal | None = None,
+        higher_is_positive: bool,
+        importance: Decimal = Decimal("1"),
+        available_at: datetime | None = None,
+        event_at: datetime | None = None,
+        source: str = "manual",
+        revision_of: UUID | None = None,
+        observation_id: UUID | None = None,
+    ) -> "MacroObservation":
+        availability = available_at or datetime.now(UTC)
+        return cls(
+            observation_id=observation_id or uuid4(),
+            kind=MacroObservationKind.INDICATOR,
+            currency=currency.upper(),
+            category=category,
+            actual=actual,
             previous=previous,
             higher_is_positive=higher_is_positive,
             importance=importance,
@@ -123,7 +162,10 @@ class PointInTimeFundamentalBook:
         *,
         seeds: Iterable[CurrencyFundamentals] | None = None,
     ) -> None:
-        self._observations = sorted(list(observations or []), key=lambda item: (item.available_at, str(item.observation_id)))
+        self._observations = sorted(
+            list(observations or []),
+            key=lambda item: (item.available_at, str(item.observation_id)),
+        )
         self._seeds = list(seeds or [])
 
     def append(self, observation: MacroObservation) -> None:
@@ -148,12 +190,25 @@ class PointInTimeFundamentalBook:
             if observation.available_at > as_of:
                 break
             if observation.kind is MacroObservationKind.RELEASE:
-                assert observation.actual is not None and observation.forecast is not None and observation.previous is not None
+                assert observation.actual is not None
+                assert observation.forecast is not None
+                assert observation.previous is not None
                 book.apply_release(
                     currency=observation.currency,
                     category=observation.category,
                     actual=observation.actual,
                     forecast=observation.forecast,
+                    previous=observation.previous,
+                    higher_is_positive=observation.higher_is_positive,
+                    importance=observation.importance,
+                    observed_at=observation.event_at or observation.available_at,
+                )
+            elif observation.kind is MacroObservationKind.INDICATOR:
+                assert observation.actual is not None
+                book.apply_indicator(
+                    currency=observation.currency,
+                    category=observation.category,
+                    actual=observation.actual,
                     previous=observation.previous,
                     higher_is_positive=observation.higher_is_positive,
                     importance=observation.importance,
@@ -185,7 +240,11 @@ class PointInTimeFundamentalBook:
         maximum_age: timedelta = timedelta(days=30),
     ) -> FundamentalAssessment:
         observed_at = as_of or datetime.now(UTC)
-        return self.book_at(observed_at).assess_pair(instrument, as_of=observed_at, maximum_age=maximum_age)
+        return self.book_at(observed_at).assess_pair(
+            instrument,
+            as_of=observed_at,
+            maximum_age=maximum_age,
+        )
 
     def snapshots(self, *, as_of: datetime | None = None) -> list[CurrencyFundamentals]:
         return self.book_at(as_of or datetime.now(UTC)).snapshots()

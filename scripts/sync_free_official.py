@@ -1,0 +1,14 @@
+"""Synchronize free first-party macro evidence into the local point-in-time ledger."""
+from __future__ import annotations
+
+import json
+
+from forex_trader.application.free_official_sync import sync_free_official_fundamentals
+from forex_trader.config import AppConfig
+
+config = AppConfig.from_env()
+report = sync_free_official_fundamentals(config.database_path)
+print(json.dumps(report.to_jsonable(), indent=2, sort_keys=True))
+
+if not report.healthy:
+    raise SystemExit("free official fundamentals sync failed: no supported currency source succeeded")

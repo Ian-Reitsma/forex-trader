@@ -16,11 +16,23 @@ _COMPONENT_WEIGHTS = {
     "labor": Decimal("0.15"),
     "news": Decimal("0.15"),
 }
+# Directional influence should decay as markets digest the information.
 _COMPONENT_HALF_LIVES = {
     "policy": timedelta(days=21),
     "inflation": timedelta(hours=72),
     "growth": timedelta(hours=72),
     "labor": timedelta(hours=48),
+    "news": timedelta(hours=6),
+}
+# Evidence coverage is distinct from directional alpha. Official monthly/quarterly
+# data remains valid coverage through its normal reporting interval, while the
+# directional impulse above decays much faster. maximum_age still hard-expires
+# non-policy components after 30 days by default.
+_COMPONENT_CONFIDENCE_HALF_LIVES = {
+    "policy": timedelta(days=365),
+    "inflation": timedelta(days=180),
+    "growth": timedelta(days=180),
+    "labor": timedelta(days=90),
     "news": timedelta(hours=6),
 }
 _POSITIVE_PHRASES = {
@@ -47,12 +59,24 @@ _NEGATIVE_PHRASES = {
     "labor market is weakening": Decimal("0.7"),
 }
 _SINGLE_TERMS = {
-    "hawkish": Decimal("0.8"), "strong": Decimal("0.35"), "accelerates": Decimal("0.45"),
-    "beats": Decimal("0.45"), "higher": Decimal("0.20"), "tightening": Decimal("0.55"),
-    "resilient": Decimal("0.40"), "expands": Decimal("0.35"), "upgrade": Decimal("0.35"),
-    "dovish": Decimal("-0.8"), "weak": Decimal("-0.35"), "slows": Decimal("-0.40"),
-    "misses": Decimal("-0.45"), "lower": Decimal("-0.20"), "easing": Decimal("-0.55"),
-    "recession": Decimal("-0.70"), "contracts": Decimal("-0.35"), "downgrade": Decimal("-0.35"),
+    "hawkish": Decimal("0.8"),
+    "strong": Decimal("0.35"),
+    "accelerates": Decimal("0.45"),
+    "beats": Decimal("0.45"),
+    "higher": Decimal("0.20"),
+    "tightening": Decimal("0.55"),
+    "resilient": Decimal("0.40"),
+    "expands": Decimal("0.35"),
+    "upgrade": Decimal("0.35"),
+    "dovish": Decimal("-0.8"),
+    "weak": Decimal("-0.35"),
+    "slows": Decimal("-0.40"),
+    "misses": Decimal("-0.45"),
+    "lower": Decimal("-0.20"),
+    "easing": Decimal("-0.55"),
+    "recession": Decimal("-0.70"),
+    "contracts": Decimal("-0.35"),
+    "downgrade": Decimal("-0.35"),
 }
 _NEGATIONS = {"not", "no", "never", "neither", "without", "unlikely"}
 _UNCERTAINTY = {"may", "might", "could", "uncertain", "possibly", "rumor", "unconfirmed"}
@@ -74,8 +98,14 @@ class FundamentalBook:
     def upsert(self, snapshot: CurrencyFundamentals) -> None:
         currency = snapshot.currency.upper()
         self._states[currency] = snapshot
-        self._component_times.setdefault(currency, {component: snapshot.as_of for component in _COMPONENT_WEIGHTS})
-        self._component_confidence.setdefault(currency, {component: snapshot.confidence for component in _COMPONENT_WEIGHTS})
+        self._component_times.setdefault(
+            currency,
+            {component: snapshot.as_of for component in _COMPONENT_WEIGHTS},
+        )
+        self._component_confidence.setdefault(
+            currency,
+            {component: snapshot.confidence for component in _COMPONENT_WEIGHTS},
+        )
 
     def get(self, currency: str) -> CurrencyFundamentals | None:
         return self._states.get(currency.upper())
@@ -104,7 +134,11 @@ class FundamentalBook:
             historical_scale = Decimal(str(median(history[-24:])))
         else:
             historical_scale = Decimal("0")
-        fallback_scale = max(abs(forecast - previous), abs(forecast) * Decimal("0.01"), Decimal("0.0001"))
+        fallback_scale = max(
+            abs(forecast - previous),
+            abs(forecast) * Decimal("0.01"),
+            Decimal("0.0001"),
+        )
         scale = max(historical_scale, fallback_scale)
         surprise = raw_surprise / scale
         last_actual = self._last_actual.get(history_key)
@@ -117,9 +151,67 @@ class FundamentalBook:
         history.append(abs(raw_surprise))
         self._last_actual[history_key] = actual
 
-        updates: dict[str, Decimal | datetime] = {component: _blend(getattr(state, component), combined), "as_of": max(state.as_of, timestamp)}
         confidence = min(Decimal("1"), Decimal("0.50") + bounded_importance * Decimal("0.40"))
-        next_state = replace(state, **updates, confidence=max(state.confidence, confidence))
+        next_state = _replace_component(
+            state,
+            component,
+            _blend(getattr(state, component), combined),
+            confidence=max(state.confidence, confidence),
+            as_of=max(state.as_of, timestamp),
+        )
+        self._states[currency] = next_state
+        self._component_times.setdefault(currency, {})[component] = timestamp
+        self._component_confidence.setdefault(currency, {})[component] = confidence
+        return next_state
+
+    def apply_indicator(
+        self,
+        *,
+        currency: str,
+        category: str,
+        actual: Decimal,
+        previous: Decimal | None,
+        higher_is_positive: bool,
+        importance: Decimal = Decimal("1"),
+        source_confidence: Decimal = Decimal("1"),
+        observed_at: datetime | None = None,
+    ) -> CurrencyFundamentals:
+        """Apply verified official state/trend evidence without inventing consensus.
+
+        If the publisher exposes a prior comparable value, actual-vs-previous supplies a
+        directional trend. If it exposes only the current policy level, ``previous=None``
+        records full first-party evidence coverage with a neutral directional contribution
+        instead of fabricating a historical comparison.
+        """
+        currency = currency.upper()
+        timestamp = observed_at or datetime.now(UTC)
+        state = self.get(currency) or CurrencyFundamentals(currency=currency, as_of=timestamp)
+        component = _component_for_category(category.lower())
+        if previous is None:
+            direction = Decimal("0")
+        else:
+            delta = actual - previous
+            if delta > 0:
+                direction = Decimal("1")
+            elif delta < 0:
+                direction = Decimal("-1")
+            else:
+                direction = Decimal("0")
+            if not higher_is_positive:
+                direction = -direction
+        bounded_importance = max(Decimal("0"), min(Decimal("1"), importance))
+        signal = direction * bounded_importance
+        confidence = (
+            max(Decimal("0"), min(Decimal("1"), source_confidence))
+            * (Decimal("0.75") + bounded_importance * Decimal("0.25"))
+        )
+        next_state = _replace_component(
+            state,
+            component,
+            _blend(getattr(state, component), signal, old_weight=Decimal("0.35")),
+            confidence=max(state.confidence, confidence),
+            as_of=max(state.as_of, timestamp),
+        )
         self._states[currency] = next_state
         self._component_times.setdefault(currency, {})[component] = timestamp
         self._component_confidence.setdefault(currency, {})[component] = confidence
@@ -137,7 +229,7 @@ class FundamentalBook:
         currency = currency.upper()
         timestamp = observed_at or datetime.now(UTC)
         state = self.get(currency) or CurrencyFundamentals(currency=currency, as_of=timestamp)
-        score, lexical_confidence, evidence = interpret_fx_text(f"{headline}. {body}")
+        score, lexical_confidence, _ = interpret_fx_text(f"{headline}. {body}")
         weight = max(Decimal("0"), min(Decimal("1"), source_weight))
         confidence = lexical_confidence * weight
         next_state = replace(
@@ -168,9 +260,19 @@ class FundamentalBook:
         previous_text = self._last_central_bank_text.get(currency, "")
         previous_score = interpret_fx_text(previous_text)[0] if previous_text else Decimal("0")
         statement_delta = current_score - previous_score
-        policy_signal = max(Decimal("-1"), min(Decimal("1"), current_score * Decimal("0.65") + statement_delta * Decimal("0.35")))
+        policy_signal = max(
+            Decimal("-1"),
+            min(
+                Decimal("1"),
+                current_score * Decimal("0.65") + statement_delta * Decimal("0.35"),
+            ),
+        )
         weight = max(Decimal("0"), min(Decimal("1"), source_weight))
-        confidence = min(Decimal("1"), lexical_confidence * weight + (Decimal("0.15") if previous_text else Decimal("0")))
+        confidence = min(
+            Decimal("1"),
+            lexical_confidence * weight
+            + (Decimal("0.15") if previous_text else Decimal("0")),
+        )
         next_state = replace(
             state,
             policy=_blend(state.policy, policy_signal * weight, old_weight=Decimal("0.55")),
@@ -199,13 +301,34 @@ class FundamentalBook:
         base_state = self.get(base)
         quote_state = self.get(quote)
         if base_state is None or quote_state is None:
-            missing = [c for c, state in ((base, base_state), (quote, quote_state)) if state is None]
-            return FundamentalAssessment(instrument.upper(), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), (f"missing fundamental state for {', '.join(missing)}",))
+            missing = [
+                currency
+                for currency, state in ((base, base_state), (quote, quote_state))
+                if state is None
+            ]
+            return FundamentalAssessment(
+                instrument.upper(),
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                (f"missing fundamental state for {', '.join(missing)}",),
+            )
         observed_at = as_of or datetime.now(UTC)
         if observed_at.tzinfo is None:
             raise ValueError("as_of must be timezone-aware")
-        base_score, base_confidence, base_reasons = self._effective_currency(base, base_state, observed_at, maximum_age)
-        quote_score, quote_confidence, quote_reasons = self._effective_currency(quote, quote_state, observed_at, maximum_age)
+        base_score, base_confidence, base_reasons = self._effective_currency(
+            base,
+            base_state,
+            observed_at,
+            maximum_age,
+        )
+        quote_score, quote_confidence, quote_reasons = self._effective_currency(
+            quote,
+            quote_state,
+            observed_at,
+            maximum_age,
+        )
         differential = max(Decimal("-2"), min(Decimal("2"), base_score - quote_score))
         confidence = min(base_confidence, quote_confidence)
         return FundamentalAssessment(
@@ -243,22 +366,35 @@ class FundamentalBook:
                 continue
             age = as_of - timestamp
             if age > maximum_age and component != "policy":
-                freshness = Decimal("0")
+                score_freshness = Decimal("0")
+                confidence_freshness = Decimal("0")
             else:
-                half_life = _COMPONENT_HALF_LIVES[component]
-                freshness = _decay(age, half_life)
+                score_freshness = _decay(age, _COMPONENT_HALF_LIVES[component])
+                confidence_freshness = _decay(
+                    age,
+                    _COMPONENT_CONFIDENCE_HALF_LIVES[component],
+                )
             value = Decimal(str(getattr(state, component)))
-            weighted_score += value * weight * freshness
-            confidence = confidences.get(component, state.confidence) * freshness
+            weighted_score += value * weight * score_freshness
+            confidence = confidences.get(component, Decimal("0")) * confidence_freshness
             weighted_confidence += confidence * weight
             covered_weight += weight
         if covered_weight <= 0:
-            return Decimal("0"), Decimal("0"), (f"{currency} has no point-in-time eligible components",)
+            return (
+                Decimal("0"),
+                Decimal("0"),
+                (f"{currency} has no point-in-time eligible components",),
+            )
         score = max(Decimal("-1"), min(Decimal("1"), weighted_score / covered_weight))
-        confidence = max(Decimal("0"), min(Decimal("1"), weighted_confidence / covered_weight))
+        confidence = max(
+            Decimal("0"),
+            min(Decimal("1"), weighted_confidence / covered_weight),
+        )
         reasons: list[str] = []
         if future_components:
-            reasons.append(f"{currency} excluded future components: {','.join(sorted(future_components))}")
+            reasons.append(
+                f"{currency} excluded future components: {','.join(sorted(future_components))}"
+            )
         return score, confidence, tuple(reasons)
 
     def snapshots(self) -> list[CurrencyFundamentals]:
@@ -289,10 +425,22 @@ def interpret_fx_text(text: str) -> tuple[Decimal, Decimal, tuple[str, ...]]:
             local = -local
             evidence.append(f"negated:{token}")
         score += local
-    score = max(Decimal("-1"), min(Decimal("1"), score / max(Decimal("1"), Decimal(len(evidence)) * Decimal("0.75"))))
+    score = max(
+        Decimal("-1"),
+        min(
+            Decimal("1"),
+            score / max(Decimal("1"), Decimal(len(evidence)) * Decimal("0.75")),
+        ),
+    )
     uncertainty_count = sum(token in _UNCERTAINTY for token in tokens)
-    confidence = min(Decimal("0.85"), Decimal("0.25") + Decimal(len(evidence)) * Decimal("0.12"))
-    confidence *= max(Decimal("0.25"), Decimal("1") - Decimal(uncertainty_count) * Decimal("0.20"))
+    confidence = min(
+        Decimal("0.85"),
+        Decimal("0.25") + Decimal(len(evidence)) * Decimal("0.12"),
+    )
+    confidence *= max(
+        Decimal("0.25"),
+        Decimal("1") - Decimal(uncertainty_count) * Decimal("0.20"),
+    )
     return score, confidence, tuple(evidence)
 
 
@@ -306,7 +454,30 @@ def _component_for_category(category: str) -> str:
     return "growth"
 
 
-def _blend(old: Decimal, new: Decimal, old_weight: Decimal = Decimal("0.5")) -> Decimal:
+def _replace_component(
+    state: CurrencyFundamentals,
+    component: str,
+    value: Decimal,
+    *,
+    confidence: Decimal,
+    as_of: datetime,
+) -> CurrencyFundamentals:
+    if component == "policy":
+        return replace(state, policy=value, confidence=confidence, as_of=as_of)
+    if component == "inflation":
+        return replace(state, inflation=value, confidence=confidence, as_of=as_of)
+    if component == "labor":
+        return replace(state, labor=value, confidence=confidence, as_of=as_of)
+    if component == "news":
+        return replace(state, news=value, confidence=confidence, as_of=as_of)
+    return replace(state, growth=value, confidence=confidence, as_of=as_of)
+
+
+def _blend(
+    old: Decimal,
+    new: Decimal,
+    old_weight: Decimal = Decimal("0.5"),
+) -> Decimal:
     value = old * old_weight + new * (Decimal("1") - old_weight)
     return max(Decimal("-1"), min(Decimal("1"), value))
 

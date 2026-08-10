@@ -7,25 +7,23 @@ one point-in-time decision evidence row per instrument evaluation, and can captu
 paired research ablations from each exact shadow decision snapshot.
 
 Before an authenticated campaign, run `forex-trader sync` and the read-only Practice probe.
-Never put OANDA or licensed-data credentials on the command line; provide them through the
-local environment. When TRADING_ECONOMICS_API_KEY is configured, Practice execution refreshes
-prospective licensed macro observations before the fundamental-eligibility preflight.
+Never put OANDA credentials on the command line; provide them through the local environment.
+Fundamental preflight refreshes free first-party official macro evidence and never requires a
+paid market-consensus/calendar subscription.
 """
 from __future__ import annotations
 
 import argparse
 import json
 from collections import Counter
-from hmac import compare_digest
 from pathlib import Path
 
 from forex_trader.application.campaign import PracticeCampaignRunner
 from forex_trader.application.campaign_policy import campaign_policy_context, select_campaign_universe
-from forex_trader.application.trading_economics_sync import sync_trading_economics_fundamentals
+from forex_trader.application.free_official_sync import sync_free_official_fundamentals
 from forex_trader.config import AppConfig, build_engine
 from forex_trader.domain.enums import OperatingMode, ProviderKind
 from forex_trader.domain.timeframes import granularity_duration
-from forex_trader.ingestion.trading_economics import TradingEconomicsSettings
 
 
 def _exclusion_category(reason: str) -> str:
@@ -37,21 +35,6 @@ def _exclusion_category(reason: str) -> str:
     if "preflight failed" in lowered:
         return "fundamental_preflight_error"
     return "other_fundamental_exclusion"
-
-
-def _validate_te_secret_separation(config: AppConfig, settings: TradingEconomicsSettings) -> None:
-    if settings.api_key is None:
-        return
-    if config.api_token is not None and compare_digest(settings.api_key, config.api_token):
-        raise SystemExit(
-            "TRADING_ECONOMICS_API_KEY is cross-wired to FOREX_API_TOKEN. "
-            "Use a credential issued by Trading Economics; the forex-trader control-plane token cannot authenticate Trading Economics."
-        )
-    if config.oanda_token is not None and compare_digest(settings.api_key, config.oanda_token):
-        raise SystemExit(
-            "TRADING_ECONOMICS_API_KEY is cross-wired to OANDA_API_TOKEN. "
-            "Use a credential issued by Trading Economics; the OANDA Practice token cannot authenticate Trading Economics."
-        )
 
 
 parser = argparse.ArgumentParser()
@@ -121,21 +104,10 @@ if args.execute:
             "--execute requires FOREX_MODE=paper and FOREX_ENABLE_PAPER_ORDERS=true"
         )
 
+fundamental_preflight = bool(config.require_fundamentals and (args.execute or args.eligible_only))
 fundamental_refresh: dict[str, object] | None = None
-te_settings = TradingEconomicsSettings.from_env()
-_validate_te_secret_separation(config, te_settings)
-if (
-    args.execute
-    and config.require_fundamentals
-    and te_settings.auto_refresh
-    and te_settings.api_key is not None
-):
-    try:
-        refresh_report = sync_trading_economics_fundamentals(config.database_path, te_settings)
-    except Exception as exc:
-        raise SystemExit(
-            f"Trading Economics fundamental refresh failed closed: {type(exc).__name__}: {exc}"
-        ) from exc
+if fundamental_preflight:
+    refresh_report = sync_free_official_fundamentals(config.database_path)
     fundamental_refresh = refresh_report.to_jsonable()
     print(json.dumps({"fundamental_refresh": fundamental_refresh}, indent=2, sort_keys=True))
 
@@ -149,7 +121,6 @@ else:
 if not discovered:
     raise SystemExit("campaign instrument universe is empty")
 
-fundamental_preflight = bool(config.require_fundamentals and (args.execute or args.eligible_only))
 selection = select_campaign_universe(
     engine,
     list(discovered),
@@ -158,16 +129,13 @@ selection = select_campaign_universe(
 eligible = selection.selected
 if not eligible:
     if fundamental_preflight:
-        provider_hint = (
-            " Configure TRADING_ECONOMICS_API_KEY to enable the prospective licensed macro refresh."
-            if te_settings.api_key is None
-            else " The configured Trading Economics refresh completed but did not produce enough fresh confidence."
-        )
+        failure_detail = ""
+        if fundamental_refresh is not None and fundamental_refresh.get("failures"):
+            failure_detail = f" Official-source failures: {fundamental_refresh['failures']}."
         raise SystemExit(
-            "campaign has no instruments that can meet the current fundamental-confidence gate. "
-            "Populate legitimate point-in-time fundamental data or run a shadow diagnostic without --eligible-only; "
-            "do not lower strategy/risk gates merely to manufacture trades."
-            + provider_hint
+            "campaign has no instruments that can meet the current fundamental-confidence gate after the free official refresh. "
+            "Do not lower strategy/risk gates merely to manufacture trades."
+            + failure_detail
         )
     raise SystemExit("campaign instrument universe is empty after normalization")
 
@@ -190,7 +158,7 @@ policy_context["campaign"] = {
     "max_new_orders_per_cycle": args.max_orders_per_cycle,
     "fundamental_preflight": fundamental_preflight,
     "paired_ablation_capture": args.ablation_evidence_path is not None,
-    "licensed_fundamental_refresh": fundamental_refresh,
+    "official_fundamental_refresh": fundamental_refresh,
 }
 campaign_metadata = {
     "universe_source": universe_source,
@@ -200,7 +168,7 @@ campaign_metadata = {
     "excluded_count": selection.excluded_count,
     "fundamental_preflight": fundamental_preflight,
     "paired_ablation_capture": args.ablation_evidence_path is not None,
-    "licensed_fundamental_refresh": fundamental_refresh,
+    "official_fundamental_refresh": fundamental_refresh,
     "excluded_reason_categories": dict(exclusion_categories),
 }
 
@@ -253,7 +221,8 @@ print(
             "ablation_evidence_path": str(args.ablation_evidence_path) if args.ablation_evidence_path else None,
             "note": (
                 "Trade frequency is an observed outcome. The campaign does not lower strategy/risk gates "
-                "to manufacture fills. Paired ablations are shadow-only and cannot authorize broker writes. "
+                "to manufacture fills. Fundamental coverage is sourced from free first-party official data; "
+                "no paid consensus is required. Paired ablations are shadow-only and cannot authorize broker writes. "
                 "Any unresolved broker state stops further campaign risk."
             ),
         },
