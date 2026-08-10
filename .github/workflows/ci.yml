@@ -65,6 +65,7 @@ jobs:
           src/forex_trader/infrastructure/source_evidence_repository.py
           src/forex_trader/ingestion/bls.py
           src/forex_trader/ingestion/free_official.py
+          src/forex_trader/ingestion/free_official_resilient.py
           src/forex_trader/ingestion/official_feeds.py
           src/forex_trader/ingestion/official_json.py
           src/forex_trader/ingestion/official_sources.py
@@ -117,6 +118,7 @@ jobs:
           tests/test_central_bank_stance_statistical_validation.py
           tests/test_central_bank_stance_statistical_validation_cli.py
           tests/test_free_official_fundamentals.py
+          tests/test_free_official_resilience.py
           tests/test_macro_event_availability.py
           tests/test_macro_source_orchestration.py
           tests/test_official_bls_adapter.py
@@ -168,6 +170,7 @@ jobs:
           src/forex_trader/infrastructure/source_evidence_repository.py
           src/forex_trader/ingestion/bls.py
           src/forex_trader/ingestion/free_official.py
+          src/forex_trader/ingestion/free_official_resilient.py
           src/forex_trader/ingestion/official_feeds.py
           src/forex_trader/ingestion/official_json.py
           src/forex_trader/ingestion/official_sources.py
