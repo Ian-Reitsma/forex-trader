@@ -35,8 +35,8 @@ def _stats_nz_release_source(current: str, period: str) -> str:
     return (
         "<!doctype html><html><body><div id=\"app\"></div>"
         "<script type=\"application/json\">"
-        '{"content":"The consumers price index (CPI) increased '
-        f'{current} percent in the 12 months to the {period} quarter."}'
+        f'{{"content":"The consumers price index (CPI) increased {current} percent '
+        f'in the 12 months to the {period} quarter."}}'
         "</script></body></html>"
     )
 
