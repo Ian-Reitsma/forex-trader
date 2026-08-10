@@ -52,9 +52,9 @@ class MacroObservation:
         ):
             raise ValueError("release observations require actual, forecast, and previous")
         if self.kind is MacroObservationKind.INDICATOR and (
-            self.actual is None or self.previous is None or self.forecast is not None
+            self.actual is None or self.forecast is not None
         ):
-            raise ValueError("indicator observations require actual and previous without forecast")
+            raise ValueError("indicator observations require actual and cannot include forecast")
 
     @classmethod
     def release(
@@ -97,7 +97,7 @@ class MacroObservation:
         currency: str,
         category: str,
         actual: Decimal,
-        previous: Decimal,
+        previous: Decimal | None = None,
         higher_is_positive: bool,
         importance: Decimal = Decimal("1"),
         available_at: datetime | None = None,
@@ -204,7 +204,7 @@ class PointInTimeFundamentalBook:
                     observed_at=observation.event_at or observation.available_at,
                 )
             elif observation.kind is MacroObservationKind.INDICATOR:
-                assert observation.actual is not None and observation.previous is not None
+                assert observation.actual is not None
                 book.apply_indicator(
                     currency=observation.currency,
                     category=observation.category,
