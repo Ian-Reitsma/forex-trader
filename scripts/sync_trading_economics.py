@@ -6,6 +6,7 @@ a release first becomes available to the strategy at the timestamp this process 
 from __future__ import annotations
 
 import json
+from hmac import compare_digest
 
 from forex_trader.application.trading_economics_sync import sync_trading_economics_fundamentals
 from forex_trader.config import AppConfig
@@ -17,6 +18,18 @@ try:
     settings.validate()
 except ValueError as exc:
     raise SystemExit(str(exc)) from exc
+
+if settings.api_key is not None:
+    if config.api_token is not None and compare_digest(settings.api_key, config.api_token):
+        raise SystemExit(
+            "TRADING_ECONOMICS_API_KEY is cross-wired to FOREX_API_TOKEN. "
+            "Use a credential issued by Trading Economics; the forex-trader control-plane token cannot authenticate Trading Economics."
+        )
+    if config.oanda_token is not None and compare_digest(settings.api_key, config.oanda_token):
+        raise SystemExit(
+            "TRADING_ECONOMICS_API_KEY is cross-wired to OANDA_API_TOKEN. "
+            "Use a credential issued by Trading Economics; the OANDA Practice token cannot authenticate Trading Economics."
+        )
 
 try:
     report = sync_trading_economics_fundamentals(config.database_path, settings)
