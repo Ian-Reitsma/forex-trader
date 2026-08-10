@@ -6,7 +6,6 @@ import re
 import zipfile
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any
 from urllib.parse import urljoin
 from xml.etree import ElementTree
 
