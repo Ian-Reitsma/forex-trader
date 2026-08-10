@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
@@ -18,7 +19,7 @@ class SwingPoint:
     index: int
     kind: SwingKind
     price: Decimal
-    time: object
+    time: datetime
 
 
 @dataclass(frozen=True, slots=True)

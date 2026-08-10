@@ -115,7 +115,6 @@ def evaluate_candidate_outcome(
     reward = abs(candidate.take_profit - entry_fill)
     if risk <= 0:
         raise ValueError("candidate stop distance must be positive")
-    win_r = reward / risk
     entry_cost_r = adverse_entry / risk
     max_favorable = Decimal("0")
     max_adverse = Decimal("0")

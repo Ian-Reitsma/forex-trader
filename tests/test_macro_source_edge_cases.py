@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from forex_trader.application.macro_ingestion import MacroIngestionOrchestrator, MacroReadinessEvaluator, ProviderPollRunner
-from forex_trader.domain.context import DataQualitySnapshot, HealthState, ProviderHealth
+from forex_trader.domain.context import DataQualitySnapshot, HealthState
 from forex_trader.infrastructure.source_evidence_repository import SourceEvidenceRepository
 from forex_trader.ingestion.official_sources import (
     EconomicEventMapping,

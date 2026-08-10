@@ -12,7 +12,18 @@ from forex_trader.domain.events import EventImportance, ScheduledMacroEvent, pai
 from forex_trader.domain.fundamentals import FundamentalBook
 from forex_trader.domain.instruments import pip_size_for, register_spec
 from forex_trader.domain.macro_history import MacroObservation, MacroObservationKind, PointInTimeFundamentalBook
-from forex_trader.domain.models import DecisionTrace, OrderRequest, OrderResult, Quote, jsonable
+from forex_trader.domain.models import (
+    AccountSnapshot,
+    DecisionTrace,
+    InstrumentSpec,
+    OrderRequest,
+    OrderResult,
+    Quote,
+    RiskAuthorization,
+    TradeCandidate,
+    jsonable,
+)
+from forex_trader.domain.portfolio import OpenPosition
 from forex_trader.domain.promotion import PracticePromotionPolicy
 from forex_trader.domain.risk import RiskPolicy
 from forex_trader.domain.sessions import SessionPhase, classify_phase
@@ -76,7 +87,7 @@ class TradingEngine:
         order = None
         trace_quote = quote
         account_snapshot = None
-        positions_snapshot: list[object] = []
+        positions_snapshot: list[OpenPosition] = []
 
         if candidate.disposition is DecisionDisposition.TRADE:
             account_snapshot = self.broker.account()
@@ -134,12 +145,19 @@ class TradingEngine:
     def _execute_candidate(
         self,
         *,
-        candidate,
-        initial_risk,
-        initial_account,
-        spec,
+        candidate: TradeCandidate,
+        initial_risk: RiskAuthorization,
+        initial_account: AccountSnapshot,
+        spec: InstrumentSpec | None,
         spread_limit: Decimal,
-    ):
+    ) -> tuple[
+        TradeCandidate,
+        RiskAuthorization,
+        OrderResult | None,
+        Quote,
+        AccountSnapshot,
+        list[OpenPosition],
+    ]:
         account_id = initial_account.account_id
         lock_owner = f"exec-{uuid4().hex}"
         acquired = self._acquire_account_lock(account_id, lock_owner)
@@ -309,7 +327,12 @@ class TradingEngine:
         finally:
             self._release_account_lock(account_id, lock_owner)
 
-    def _confirm_protection(self, order: OrderResult, candidate, account_id: str) -> OrderResult:
+    def _confirm_protection(
+        self,
+        order: OrderResult,
+        candidate: TradeCandidate,
+        account_id: str,
+    ) -> OrderResult:
         if order.provider_trade_id is None:
             self._set_halt(f"execution:{account_id}", "filled broker order did not expose a trade ID for protection verification")
             return replace(order, status=OrderStatus.RECONCILIATION_REQUIRED)
@@ -460,10 +483,14 @@ class TradingEngine:
         clearer(name)
 
     def promotion_status(self) -> dict[str, object]:
-        if not hasattr(self.repository, "promotion_metrics"):
+        metrics_reader = getattr(self.repository, "promotion_metrics", None)
+        if metrics_reader is None:
             return {"ready": False, "reasons": ["repository does not expose promotion metrics"]}
-        metrics = self.repository.promotion_metrics()  # type: ignore[attr-defined]
-        return jsonable(self.promotion_policy.evaluate(metrics))
+        metrics = metrics_reader()
+        result = jsonable(self.promotion_policy.evaluate(metrics))
+        if not isinstance(result, dict):
+            raise TypeError("promotion evaluation must serialize to a mapping")
+        return {str(key): value for key, value in result.items()}
 
     def status(self) -> dict[str, object]:
         account = self.broker.account()
@@ -513,7 +540,11 @@ class TradingEngine:
         if saver is not None:
             saver(observation)
 
-    def _apply_context_hard_gates(self, candidate, quote: Quote):
+    def _apply_context_hard_gates(
+        self,
+        candidate: TradeCandidate,
+        quote: Quote,
+    ) -> TradeCandidate:
         if candidate.disposition is not DecisionDisposition.TRADE:
             return candidate
         blocked, reasons = pair_event_blackout(candidate.instrument, quote.time, self._scheduled_events_near(quote.time))
@@ -553,7 +584,8 @@ class TradingEngine:
         getter = getattr(self.repository, "get_halt", None)
         if getter is None:
             return None
-        return getter("global") or getter(f"execution:{account_id}") or getter(f"risk:{account_id}")
+        reason = getter("global") or getter(f"execution:{account_id}") or getter(f"risk:{account_id}")
+        return None if reason is None else str(reason)
 
     def _set_halt(self, name: str, reason: str) -> None:
         setter = getattr(self.repository, "set_halt", None)
@@ -569,7 +601,12 @@ class TradingEngine:
         if release is not None:
             release(account_id, owner)
 
-    def _observe_latched_loss(self, account, signal_time: datetime, capital_base: Decimal) -> bool:
+    def _observe_latched_loss(
+        self,
+        account: AccountSnapshot,
+        signal_time: datetime,
+        capital_base: Decimal,
+    ) -> bool:
         observe = getattr(self.repository, "observe_risk_day", None)
         if observe is None or capital_base <= 0:
             return False
@@ -583,18 +620,23 @@ class TradingEngine:
             )
         )
 
-    def _instrument_spec(self, instrument: str):
+    def _instrument_spec(self, instrument: str) -> InstrumentSpec | None:
         getter = getattr(self.broker, "instrument_spec", None)
         if getter is None:
             return None
         spec = getter(instrument)
+        if not isinstance(spec, InstrumentSpec):
+            raise TypeError("broker instrument_spec must return InstrumentSpec")
         register_spec(spec)
         return spec
 
     def _quote_for_units(self, instrument: str, units: int | None) -> Quote:
         getter = getattr(self.broker, "quote_for_units", None)
         if getter is not None:
-            return getter(instrument, units)
+            quote = getter(instrument, units)
+            if not isinstance(quote, Quote):
+                raise TypeError("broker quote_for_units must return Quote")
+            return quote
         return self.market_data.quote(instrument)
 
     def _mark_price(self, instrument: str) -> Decimal | None:
