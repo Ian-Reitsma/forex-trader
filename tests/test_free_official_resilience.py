@@ -4,9 +4,14 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import httpx
+import pytest
 
 from forex_trader.application.free_official_sync import sync_free_official_fundamentals
-from forex_trader.ingestion.free_official import OfficialCurrencySnapshot, OfficialIndicatorEvidence
+from forex_trader.ingestion.free_official import (
+    FreeOfficialSourceError,
+    OfficialCurrencySnapshot,
+    OfficialIndicatorEvidence,
+)
 from forex_trader.ingestion.free_official_resilient import (
     ResilientOfficialWebClient,
     fetch_currency_resilient,
@@ -24,6 +29,16 @@ def _html(request: httpx.Request, body: str) -> httpx.Response:
 def _csv(request: httpx.Request, rows: list[tuple[str, str]]) -> httpx.Response:
     body = "TIME_PERIOD,OBS_VALUE\n" + "".join(f"{period},{value}\n" for period, value in rows)
     return httpx.Response(200, text=body, headers={"content-type": "text/csv"}, request=request)
+
+
+def _stats_nz_release_source(current: str, period: str) -> str:
+    return (
+        "<!doctype html><html><body><div id=\"app\"></div>"
+        "<script type=\"application/json\">"
+        '{"content":"The consumers price index (CPI) increased '
+        f'{current} percent in the 12 months to the {period} quarter."}'
+        "</script></body></html>"
+    )
 
 
 def test_usd_uses_unregistered_bls_v1_api_not_blocked_html_page() -> None:
@@ -110,7 +125,7 @@ def test_jpy_uses_bis_machine_readable_policy_and_cpi_series() -> None:
     assert all("boj.or.jp" not in url for url in calls)
 
 
-def test_nzd_uses_bis_policy_and_stats_nz_cpi_without_rbnz_automation() -> None:
+def test_nzd_uses_two_published_stats_nz_release_sources_without_rendered_tables() -> None:
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -118,16 +133,10 @@ def test_nzd_uses_bis_policy_and_stats_nz_cpi_without_rbnz_automation() -> None:
         calls.append(url)
         if url.startswith("https://stats.bis.org/api/v2/data/dataflow/BIS/WS_CBPOL/1.0/M.NZ"):
             return _csv(request, [("2026-06", "2.25"), ("2026-07", "2.50")])
-        if url == "https://www.stats.govt.nz/information-releases/consumers-price-index-june-2026-quarter/":
-            return _html(
-                request,
-                "<table>"
-                "<tr><th>Quarter</th><th>CPI all groups (quarterly)</th>"
-                "<th>CPI all groups (annual)</th><th>Tradeables (annual)</th></tr>"
-                "<tr><td>Mar-26</td><td>0.9</td><td>3.1</td><td>2.5</td></tr>"
-                "<tr><td>Jun-26</td><td>1.5</td><td>4.1</td><td>4.9</td></tr>"
-                "</table>",
-            )
+        if url.endswith("consumers-price-index-june-2026-quarter/"):
+            return _html(request, _stats_nz_release_source("4.1", "June 2026"))
+        if url.endswith("consumers-price-index-march-2026-quarter/"):
+            return _html(request, _stats_nz_release_source("3.1", "March 2026"))
         raise AssertionError(f"unexpected request: {url}")
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
@@ -144,7 +153,11 @@ def test_nzd_uses_bis_policy_and_stats_nz_cpi_without_rbnz_automation() -> None:
     assert inflation.source_id == "stats_nz"
     assert inflation.actual == Decimal("4.1")
     assert inflation.previous == Decimal("3.1")
+    assert inflation.reference == "2026-06-01"
+    assert len(snapshot.payloads) == 3
     assert all("rbnz.govt.nz" not in url for url in calls)
+    assert any("june-2026" in url for url in calls)
+    assert any("march-2026" in url for url in calls)
 
 
 def test_stats_nz_release_probe_falls_back_only_on_404() -> None:
@@ -159,15 +172,9 @@ def test_stats_nz_release_probe_falls_back_only_on_404() -> None:
         if url.endswith("consumers-price-index-march-2026-quarter/"):
             return httpx.Response(404, text="not yet published", request=request)
         if url.endswith("consumers-price-index-december-2025-quarter/"):
-            return _html(
-                request,
-                "<table>"
-                "<tr><th>Quarter</th><th>CPI all groups (quarterly)</th>"
-                "<th>CPI all groups (annual)</th></tr>"
-                "<tr><td>Sept-25</td><td>1.0</td><td>3.0</td></tr>"
-                "<tr><td>Dec-25</td><td>0.6</td><td>3.1</td></tr>"
-                "</table>",
-            )
+            return _html(request, _stats_nz_release_source("3.1", "December 2025"))
+        if url.endswith("consumers-price-index-september-2025-quarter/"):
+            return _html(request, _stats_nz_release_source("3.0", "September 2025"))
         raise AssertionError(f"unexpected request: {url}")
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
@@ -181,6 +188,31 @@ def test_stats_nz_release_probe_falls_back_only_on_404() -> None:
     assert inflation.previous == Decimal("3.0")
     assert any("march-2026" in url for url in calls)
     assert any("december-2025" in url for url in calls)
+    assert any("september-2025" in url for url in calls)
+
+
+def test_stats_nz_published_release_parser_failure_does_not_silently_use_stale_data() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        calls.append(url)
+        if url.startswith("https://stats.bis.org/api/v2/data/dataflow/BIS/WS_CBPOL/1.0/M.NZ"):
+            return _csv(request, [("2026-06", "2.25"), ("2026-07", "2.50")])
+        if url.endswith("consumers-price-index-june-2026-quarter/"):
+            return _html(request, "<html><body>published but unsupported payload</body></html>")
+        if url.endswith("consumers-price-index-march-2026-quarter/"):
+            return _html(request, _stats_nz_release_source("3.1", "March 2026"))
+        raise AssertionError(f"unexpected request: {url}")
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    try:
+        with ResilientOfficialWebClient(client=http) as client:
+            with pytest.raises(FreeOfficialSourceError, match="June 2026 was not found"):
+                fetch_currency_resilient("NZD", client, retrieved_at=NOW)
+    finally:
+        http.close()
+    assert not any("march-2026" in url for url in calls)
 
 
 def _payload(currency: str) -> RawSourcePayload:
