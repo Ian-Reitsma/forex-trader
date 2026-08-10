@@ -1,37 +1,55 @@
 from __future__ import annotations
 
+import csv
 import io
 import json
 import re
-import zipfile
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urljoin
-from xml.etree import ElementTree
 
 from forex_trader.ingestion.free_official import (
     BLS,
-    BOJ,
     FED,
-    RESERVE_BANK_NEW_ZEALAND_SOURCE,
-    STATISTICS_JAPAN_SOURCE,
     FreeOfficialSourceError,
     OfficialCurrencySnapshot,
     OfficialIndicatorEvidence,
     OfficialWebClient,
     _date_digits_from_url,
     _fed_target_midpoint,
-    _parse_date,
     fetch_currency as fetch_currency_legacy,
     html_document,
+)
+from forex_trader.ingestion.official_sources import (
+    OFFICIAL_MACRO_SOURCES,
+    RawSourcePayload,
+    SourceAuthority,
+    SourceDescriptor,
 )
 
 
 _BLS_CPI_SERIES = "CUUR0000SA0"
 _BLS_API_URL = f"https://api.bls.gov/publicAPI/v1/timeseries/data/{_BLS_CPI_SERIES}"
-_BOJ_POLICY_TABLE_URL = "https://www.boj.or.jp/en/statistics/boj/other/discount/discount.htm"
-_RBNZ_OCR_XLSX_URL = "https://rbnz.govt.nz/-/media/project/sites/rbnz/files/statistics/series/b/b2/hb2-daily-close.xlsx"
-_RBNZ_CPI_XLSX_URL = "https://rbnz.govt.nz/-/media/project/sites/rbnz/files/statistics/series/m/m1/hm1.xlsx"
+_BIS_JPY_POLICY_URL = (
+    "https://stats.bis.org/api/v2/data/dataflow/BIS/WS_CBPOL/1.0/M.JP"
+    "?startPeriod=2025-01&detail=dataonly&format=csvfile"
+)
+_BIS_JPY_CPI_URL = (
+    "https://stats.bis.org/api/v2/data/dataflow/BIS/WS_LONG_CPI/1.0/M.JP.771"
+    "?startPeriod=2025-01&detail=dataonly&format=csvfile"
+)
+_BIS_NZD_POLICY_URL = (
+    "https://stats.bis.org/api/v2/data/dataflow/BIS/WS_CBPOL/1.0/M.NZ"
+    "?startPeriod=2025-01&detail=dataonly&format=csvfile"
+)
+
+BIS_SOURCE = SourceDescriptor(
+    "bis",
+    "Bank for International Settlements",
+    SourceAuthority.OFFICIAL,
+    frozenset({"stats.bis.org"}),
+)
+STATS_NZ_SOURCE = OFFICIAL_MACRO_SOURCES["stats_nz"]
 
 
 class ResilientOfficialWebClient(OfficialWebClient):
@@ -161,113 +179,178 @@ def _percent_change(current: Decimal, prior: Decimal) -> Decimal:
     return (current / prior - Decimal("1")) * Decimal("100")
 
 
-def _fetch_jpy(client: OfficialWebClient, *, retrieved_at: datetime) -> OfficialCurrencySnapshot:
-    policy = client.fetch(BOJ, _BOJ_POLICY_TABLE_URL, retrieved_at=retrieved_at)
-    policy_rows: list[tuple[date, Decimal]] = []
-    for row in html_document(policy).rows:
-        if len(row) < 2:
+def _bis_observations(body: bytes) -> list[tuple[str, Decimal]]:
+    try:
+        text = body.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise FreeOfficialSourceError("bis API returned invalid UTF-8 CSV") from exc
+    reader = csv.DictReader(io.StringIO(text))
+    values: dict[str, Decimal] = {}
+    for row in reader:
+        period = (row.get("TIME_PERIOD") or "").strip()
+        raw_value = (row.get("OBS_VALUE") or "").strip()
+        if not period or raw_value in {"", ".", "NaN"}:
             continue
         try:
-            when = _parse_flexible_date(row[0])
-            value = Decimal(row[-1].replace("%", "").strip())
-        except (ValueError, InvalidOperation):
+            values[period] = Decimal(raw_value)
+        except InvalidOperation:
             continue
-        if when.year >= 2001:
-            policy_rows.append((when, value))
-    policy_rows.sort(key=lambda item: item[0])
-    if len(policy_rows) < 2:
-        raise FreeOfficialSourceError("bank_of_japan basic loan rate table was not parsed")
-    latest_rate = policy_rows[-1]
-    previous_rate = policy_rows[-2]
+    observations = sorted(values.items(), key=lambda item: item[0])
+    if not observations:
+        raise FreeOfficialSourceError("bis API returned no usable observations")
+    return observations
 
-    stats = client.fetch(
-        STATISTICS_JAPAN_SOURCE,
-        "https://www.stat.go.jp/english/",
-        retrieved_at=retrieved_at,
-    )
-    text = html_document(stats).text
-    inflation = re.search(
-        r"Consumer Price Index\s+(-?\d+(?:\.\d+)?)%\s+([A-Za-z]+)\s+(\d{4})\s+change over the year",
-        text,
-        flags=re.IGNORECASE,
-    )
-    if inflation is None:
-        raise FreeOfficialSourceError("statistics_japan latest CPI indicator was not found")
+
+def _fetch_jpy(
+    client: OfficialWebClient,
+    *,
+    retrieved_at: datetime,
+) -> OfficialCurrencySnapshot:
+    policy_payload = client.fetch(BIS_SOURCE, _BIS_JPY_POLICY_URL, retrieved_at=retrieved_at)
+    cpi_payload = client.fetch(BIS_SOURCE, _BIS_JPY_CPI_URL, retrieved_at=retrieved_at)
+    policy = _bis_observations(policy_payload.body)
+    cpi = _bis_observations(cpi_payload.body)
+    if len(policy) < 2:
+        raise FreeOfficialSourceError("bis Japan policy-rate series did not expose two observations")
+    if len(cpi) < 2:
+        raise FreeOfficialSourceError("bis Japan CPI series did not expose two observations")
+    latest_policy, previous_policy = policy[-1], policy[-2]
+    latest_cpi, previous_cpi = cpi[-1], cpi[-2]
     return OfficialCurrencySnapshot(
         "JPY",
-        (policy, stats),
+        (policy_payload, cpi_payload),
         (
             OfficialIndicatorEvidence(
-                "bank_of_japan",
-                "basic_loan_rate",
+                "bis",
+                "central_bank_policy_rate_jp",
                 "JPY",
                 "policy",
-                latest_rate[1],
-                previous_rate[1],
+                latest_policy[1],
+                previous_policy[1],
                 True,
-                latest_rate[0].isoformat(),
+                latest_policy[0],
             ),
             OfficialIndicatorEvidence(
-                "statistics_japan",
-                "cpi_all_items_annual",
+                "bis",
+                "consumer_prices_yoy_jp",
                 "JPY",
                 "inflation",
-                Decimal(inflation.group(1)),
-                None,
+                latest_cpi[1],
+                previous_cpi[1],
                 False,
-                f"{inflation.group(2)} {inflation.group(3)}",
+                latest_cpi[0],
             ),
         ),
     )
 
 
-def _parse_flexible_date(value: str) -> date:
-    cleaned = " ".join(value.replace(".", "").replace(",", " ").split())
-    return _parse_date(cleaned)
+def _stats_nz_release_candidates(retrieved_at: datetime) -> tuple[str, ...]:
+    month_names = {3: "march", 6: "june", 9: "september", 12: "december"}
+    candidates: list[str] = []
+    for year in range(retrieved_at.year, retrieved_at.year - 3, -1):
+        for month in (12, 9, 6, 3):
+            if year == retrieved_at.year and month > retrieved_at.month:
+                continue
+            candidates.append(
+                "https://www.stats.govt.nz/information-releases/"
+                f"consumers-price-index-{month_names[month]}-{year}-quarter/"
+            )
+    return tuple(candidates)
 
 
-def _fetch_nzd(client: OfficialWebClient, *, retrieved_at: datetime) -> OfficialCurrencySnapshot:
-    ocr_payload = client.fetch(
-        RESERVE_BANK_NEW_ZEALAND_SOURCE,
-        _RBNZ_OCR_XLSX_URL,
-        retrieved_at=retrieved_at,
-    )
-    cpi_payload = client.fetch(
-        RESERVE_BANK_NEW_ZEALAND_SOURCE,
-        _RBNZ_CPI_XLSX_URL,
-        retrieved_at=retrieved_at,
-    )
-    ocr_rows = _xlsx_rows(ocr_payload.body)
-    cpi_rows = _xlsx_rows(cpi_payload.body)
-    ocr = _rbnz_ocr_values(ocr_rows)
-    cpi = _rbnz_cpi_values(cpi_rows)
-    if not ocr:
-        raise FreeOfficialSourceError("rbnz B2 data file did not expose OCR values")
-    if len(cpi) < 2:
-        raise FreeOfficialSourceError("rbnz M1 data file did not expose two CPI observations")
-    latest_ocr = ocr[-1]
-    previous_distinct = next(
-        (item for item in reversed(ocr[:-1]) if item[1] != latest_ocr[1]),
-        None,
-    )
+def _parse_nz_quarter(value: str) -> date | None:
+    match = re.fullmatch(r"(Mar|Jun|Sep|Sept|Dec)[- ](\d{2}|\d{4})", value.strip(), flags=re.IGNORECASE)
+    if match is None:
+        return None
+    month = {"mar": 3, "jun": 6, "sep": 9, "sept": 9, "dec": 12}[match.group(1).lower()]
+    raw_year = int(match.group(2))
+    year = raw_year if raw_year >= 1000 else 2000 + raw_year
+    return date(year, month, 1)
+
+
+def _stats_nz_cpi_values(payload: RawSourcePayload) -> list[tuple[date, Decimal]]:
+    rows = html_document(payload).rows
+    header_index: int | None = None
+    annual_column: int | None = None
+    for index, row in enumerate(rows):
+        if not row or row[0].strip().lower() != "quarter":
+            continue
+        for column, cell in enumerate(row):
+            normalized = " ".join(cell.lower().split())
+            if "cpi all groups" in normalized and "annual" in normalized:
+                header_index = index
+                annual_column = column
+                break
+        if header_index is not None:
+            break
+    if header_index is None or annual_column is None:
+        raise FreeOfficialSourceError("stats_nz CPI annual-change table header was not found")
+
+    values: list[tuple[date, Decimal]] = []
+    for row in rows[header_index + 1 :]:
+        if len(row) <= annual_column:
+            continue
+        period = _parse_nz_quarter(row[0])
+        if period is None:
+            if values:
+                break
+            continue
+        try:
+            annual = Decimal(row[annual_column].replace("%", "").strip())
+        except InvalidOperation:
+            continue
+        values.append((period, annual))
+    values.sort(key=lambda item: item[0])
+    if len(values) < 2:
+        raise FreeOfficialSourceError("stats_nz CPI table did not expose two annual observations")
+    return values
+
+
+def _fetch_latest_stats_nz_cpi(
+    client: OfficialWebClient,
+    *,
+    retrieved_at: datetime,
+) -> tuple[RawSourcePayload, list[tuple[date, Decimal]]]:
+    for url in _stats_nz_release_candidates(retrieved_at):
+        try:
+            payload = client.fetch(STATS_NZ_SOURCE, url, retrieved_at=retrieved_at)
+        except FreeOfficialSourceError as exc:
+            if " returned HTTP 404" in str(exc):
+                continue
+            raise
+        return payload, _stats_nz_cpi_values(payload)
+    raise FreeOfficialSourceError("stats_nz current CPI release was not found")
+
+
+def _fetch_nzd(
+    client: OfficialWebClient,
+    *,
+    retrieved_at: datetime,
+) -> OfficialCurrencySnapshot:
+    policy_payload = client.fetch(BIS_SOURCE, _BIS_NZD_POLICY_URL, retrieved_at=retrieved_at)
+    policy = _bis_observations(policy_payload.body)
+    if len(policy) < 2:
+        raise FreeOfficialSourceError("bis New Zealand policy-rate series did not expose two observations")
+    cpi_payload, cpi = _fetch_latest_stats_nz_cpi(client, retrieved_at=retrieved_at)
+    latest_policy, previous_policy = policy[-1], policy[-2]
     latest_cpi, previous_cpi = cpi[-1], cpi[-2]
     return OfficialCurrencySnapshot(
         "NZD",
-        (ocr_payload, cpi_payload),
+        (policy_payload, cpi_payload),
         (
             OfficialIndicatorEvidence(
-                "reserve_bank_new_zealand",
-                "official_cash_rate_b2",
+                "bis",
+                "central_bank_policy_rate_nz",
                 "NZD",
                 "policy",
-                latest_ocr[1],
-                None if previous_distinct is None else previous_distinct[1],
+                latest_policy[1],
+                previous_policy[1],
                 True,
-                latest_ocr[0].isoformat(),
+                latest_policy[0],
             ),
             OfficialIndicatorEvidence(
-                "reserve_bank_new_zealand",
-                "cpi_year_ended_m1",
+                "stats_nz",
+                "cpi_all_groups_annual",
                 "NZD",
                 "inflation",
                 latest_cpi[1],
@@ -277,143 +360,3 @@ def _fetch_nzd(client: OfficialWebClient, *, retrieved_at: datetime) -> Official
             ),
         ),
     )
-
-
-def _xlsx_rows(body: bytes) -> tuple[tuple[str, ...], ...]:
-    try:
-        archive = zipfile.ZipFile(io.BytesIO(body))
-    except (zipfile.BadZipFile, OSError) as exc:
-        raise FreeOfficialSourceError("official XLSX payload is not a valid workbook") from exc
-    with archive:
-        shared = _xlsx_shared_strings(archive)
-        rows: list[tuple[str, ...]] = []
-        sheet_names = sorted(
-            name for name in archive.namelist() if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)
-        )
-        for sheet_name in sheet_names:
-            try:
-                root = ElementTree.fromstring(archive.read(sheet_name))
-            except (ElementTree.ParseError, KeyError) as exc:
-                raise FreeOfficialSourceError("official XLSX worksheet could not be parsed") from exc
-            for row in root.findall(".//{*}row"):
-                values: dict[int, str] = {}
-                for cell in row.findall("{*}c"):
-                    ref = cell.attrib.get("r", "")
-                    column = _xlsx_column_index(ref)
-                    if column is None:
-                        continue
-                    values[column] = _xlsx_cell_value(cell, shared)
-                if values:
-                    width = max(values) + 1
-                    rows.append(tuple(values.get(index, "") for index in range(width)))
-        return tuple(rows)
-
-
-def _xlsx_shared_strings(archive: zipfile.ZipFile) -> tuple[str, ...]:
-    try:
-        body = archive.read("xl/sharedStrings.xml")
-    except KeyError:
-        return ()
-    try:
-        root = ElementTree.fromstring(body)
-    except ElementTree.ParseError as exc:
-        raise FreeOfficialSourceError("official XLSX shared strings could not be parsed") from exc
-    result: list[str] = []
-    for item in root.findall("{*}si"):
-        result.append("".join(node.text or "" for node in item.findall(".//{*}t")))
-    return tuple(result)
-
-
-def _xlsx_column_index(reference: str) -> int | None:
-    match = re.match(r"([A-Z]+)", reference.upper())
-    if match is None:
-        return None
-    value = 0
-    for char in match.group(1):
-        value = value * 26 + (ord(char) - ord("A") + 1)
-    return value - 1
-
-
-def _xlsx_cell_value(cell: ElementTree.Element, shared: tuple[str, ...]) -> str:
-    cell_type = cell.attrib.get("t", "")
-    if cell_type == "inlineStr":
-        return "".join(node.text or "" for node in cell.findall(".//{*}t"))
-    node = cell.find("{*}v")
-    if node is None or node.text is None:
-        return ""
-    raw = node.text.strip()
-    if cell_type == "s":
-        try:
-            return shared[int(raw)]
-        except (ValueError, IndexError):
-            return ""
-    return raw
-
-
-def _rbnz_ocr_values(rows: tuple[tuple[str, ...], ...]) -> list[tuple[date, Decimal]]:
-    header_row = -1
-    ocr_column = -1
-    for row_index, row in enumerate(rows):
-        for column, value in enumerate(row):
-            if "official cash rate" in value.lower():
-                header_row = row_index
-                ocr_column = column
-                break
-        if header_row >= 0:
-            break
-    if header_row < 0:
-        return []
-    values: list[tuple[date, Decimal]] = []
-    for row in rows[header_row + 1 :]:
-        if len(row) <= max(0, ocr_column):
-            continue
-        when = _excel_or_text_date(row[0])
-        if when is None:
-            continue
-        try:
-            rate = Decimal(row[ocr_column].strip())
-        except (InvalidOperation, ValueError):
-            continue
-        values.append((when, rate))
-    values.sort(key=lambda item: item[0])
-    return values
-
-
-def _rbnz_cpi_values(rows: tuple[tuple[str, ...], ...]) -> list[tuple[date, Decimal]]:
-    values: list[tuple[date, Decimal]] = []
-    for row in rows:
-        if len(row) < 4:
-            continue
-        when = _excel_or_text_date(row[0])
-        if when is None:
-            continue
-        try:
-            annual = Decimal(row[3].strip())
-        except (InvalidOperation, ValueError):
-            continue
-        if Decimal("-100") < annual < Decimal("100"):
-            values.append((when, annual))
-    values.sort(key=lambda item: item[0])
-    deduplicated: dict[date, Decimal] = {}
-    for when, value in values:
-        deduplicated[when] = value
-    return sorted(deduplicated.items(), key=lambda item: item[0])
-
-
-def _excel_or_text_date(value: str) -> date | None:
-    cleaned = value.strip()
-    if not cleaned:
-        return None
-    try:
-        serial = Decimal(cleaned)
-    except InvalidOperation:
-        serial = Decimal("0")
-    if Decimal("20000") <= serial <= Decimal("100000"):
-        return date(1899, 12, 30) + timedelta(days=int(serial))
-    normalized = cleaned.replace("Sept", "Sep")
-    for fmt in ("%d %b %Y", "%b %Y", "%B %Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(normalized, fmt).date()
-        except ValueError:
-            continue
-    return None
