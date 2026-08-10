@@ -204,6 +204,10 @@ jobs:
           scripts/sync_free_official.py
           scripts/sync_trading_economics.py
           scripts/validate_central_bank_stance_statistics.py
+      - name: Full-tree lint
+        run: ruff check src scripts tests
+      - name: Strict application/domain typing
+        run: python -m mypy --strict src/forex_trader/application src/forex_trader/domain
       - name: Test and coverage
         shell: bash
         run: |
