@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 import httpx
 
@@ -20,6 +20,29 @@ TRADING_ECONOMICS_SOURCE = SourceDescriptor(
     publisher="Trading Economics",
     authority=SourceAuthority.LICENSED,
     allowed_hosts=frozenset({"api.tradingeconomics.com"}),
+)
+
+_DEFAULT_COUNTRIES = (
+    "United States",
+    "Euro Area",
+    "United Kingdom",
+    "Japan",
+    "Switzerland",
+    "Canada",
+    "Australia",
+    "New Zealand",
+    "China",
+    "Czech Republic",
+    "Denmark",
+    "Hong Kong",
+    "Hungary",
+    "Mexico",
+    "Norway",
+    "Poland",
+    "Singapore",
+    "South Africa",
+    "Sweden",
+    "Turkey",
 )
 
 _COUNTRY_TO_CURRENCY = {
@@ -143,9 +166,15 @@ class TradingEconomicsSettings:
     auto_refresh: bool = True
     auth_mode: str = "header"
     maximum_payload_bytes: int = 8_000_000
+    countries: tuple[str, ...] = _DEFAULT_COUNTRIES
 
     @classmethod
     def from_env(cls) -> "TradingEconomicsSettings":
+        configured_countries = tuple(
+            item.strip()
+            for item in os.getenv("TRADING_ECONOMICS_COUNTRIES", ",".join(_DEFAULT_COUNTRIES)).split(",")
+            if item.strip()
+        )
         return cls(
             api_key=(os.getenv("TRADING_ECONOMICS_API_KEY") or "").strip() or None,
             base_url=os.getenv("TRADING_ECONOMICS_BASE_URL", "https://api.tradingeconomics.com").strip(),
@@ -156,6 +185,7 @@ class TradingEconomicsSettings:
             auto_refresh=_env_bool("TRADING_ECONOMICS_AUTO_REFRESH", True),
             auth_mode=os.getenv("TRADING_ECONOMICS_AUTH_MODE", "header").strip().lower(),
             maximum_payload_bytes=int(os.getenv("TRADING_ECONOMICS_MAX_PAYLOAD_BYTES", "8000000")),
+            countries=configured_countries,
         )
 
     def validate(self, *, require_api_key: bool = True) -> None:
@@ -176,6 +206,10 @@ class TradingEconomicsSettings:
             raise ValueError("TRADING_ECONOMICS_AUTH_MODE must be header or query")
         if self.maximum_payload_bytes < 1:
             raise ValueError("TRADING_ECONOMICS_MAX_PAYLOAD_BYTES must be positive")
+        if not self.countries:
+            raise ValueError("TRADING_ECONOMICS_COUNTRIES cannot be empty")
+        if any("/" in country or "?" in country or "#" in country for country in self.countries):
+            raise ValueError("TRADING_ECONOMICS_COUNTRIES contains an invalid country name")
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,15 +281,19 @@ class TradingEconomicsCalendarClient:
         if end < start:
             raise ValueError("Trading Economics calendar end date cannot precede start date")
         observed = (retrieved_at or datetime.now(UTC)).astimezone(UTC)
-        endpoint = f"{self.settings.base_url.rstrip('/')}/calendar/country/All/{start.isoformat()}/{end.isoformat()}"
+        countries = quote(",".join(self.settings.countries), safe=",")
+        endpoint = (
+            f"{self.settings.base_url.rstrip('/')}/calendar/country/{countries}/"
+            f"{start.isoformat()}/{end.isoformat()}"
+        )
         headers = {
             "Accept": "application/json",
             "User-Agent": "forex-trader/trading-economics-calendar",
         }
-        params: dict[str, str] = {}
+        params: dict[str, str] = {"values": "true", "f": "json"}
         assert self.settings.api_key is not None
         if self.settings.auth_mode == "header":
-            headers["Authorization"] = f"Client {self.settings.api_key}"
+            headers["Authorization"] = self.settings.api_key
         else:
             params["c"] = self.settings.api_key
         try:
@@ -269,8 +307,11 @@ class TradingEconomicsCalendarClient:
             raise TradingEconomicsApiError(
                 f"Trading Economics transport failure: {type(exc).__name__}"
             ) from exc
-        if response.status_code == 429:
-            raise TradingEconomicsRateLimitedError("Trading Economics rate limited the calendar request", status_code=429)
+        if response.status_code in {409, 429}:
+            raise TradingEconomicsRateLimitedError(
+                f"Trading Economics rate limited the calendar request (HTTP {response.status_code})",
+                status_code=response.status_code,
+            )
         if response.status_code != 200:
             detail = _redact(response.text[:240], self.settings.api_key)
             raise TradingEconomicsApiError(
@@ -504,7 +545,7 @@ def _parse_decimal(value: object) -> Decimal | None:
 
 def _sanitize_url(url: str) -> str:
     parsed = urlparse(url)
-    query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key.lower() != "c"]
+    query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key.lower() not in {"c", "client"}]
     return urlunparse(parsed._replace(query=urlencode(query)))
 
 
