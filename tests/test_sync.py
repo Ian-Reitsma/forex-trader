@@ -77,3 +77,52 @@ def test_heartbeat_rest_catchup_persists_transaction_created_before_stream_conne
     ids = [item["id"] for item in repository.broker_transactions()]
     assert "12" in ids
     assert ids[-1] == "13"
+
+
+class InvalidTimeRange(RuntimeError):
+    status_code = 416
+
+
+class NewPracticeAccountSource(FakeTransactionSource):
+    def __init__(self) -> None:
+        super().__init__()
+        self.history_windows: list[tuple[datetime, datetime]] = []
+
+    def transactions_between(self, start, end):  # type: ignore[no-untyped-def]
+        self.history_windows.append((start, end))
+        if len(self.history_windows) <= 2:
+            raise InvalidTimeRange("INVALID_TIME_RANGE")
+        return [{"id": "1", "type": "CREATE"}, {"id": "2", "type": "CLIENT_CONFIGURE"}]
+
+
+def test_state_sync_skips_only_leading_pre_account_416_windows() -> None:
+    repository = SqliteDecisionRepository(":memory:")
+    source = NewPracticeAccountSource()
+    sync = BrokerStateSynchronizer(source, repository, initial_history_days=800)
+
+    assert sync.bootstrap() == "10"
+    assert len(source.history_windows) == 3
+    assert all(end - start <= timedelta(days=364) for start, end in source.history_windows)
+    assert source.history_windows[-1][1] <= datetime.now(UTC)
+    assert [item["id"] for item in repository.broker_transactions()] == ["1", "2"]
+
+
+class LaterInvalidTimeRangeSource(NewPracticeAccountSource):
+    def transactions_between(self, start, end):  # type: ignore[no-untyped-def]
+        self.history_windows.append((start, end))
+        if len(self.history_windows) == 1:
+            return [{"id": "1", "type": "CREATE"}]
+        raise InvalidTimeRange("unexpected later INVALID_TIME_RANGE")
+
+
+def test_state_sync_fails_closed_on_416_after_valid_history_begins() -> None:
+    repository = SqliteDecisionRepository(":memory:")
+    source = LaterInvalidTimeRangeSource()
+    sync = BrokerStateSynchronizer(source, repository, initial_history_days=500)
+
+    try:
+        sync.bootstrap()
+    except InvalidTimeRange as exc:
+        assert "unexpected later" in str(exc)
+    else:
+        raise AssertionError("later invalid time range must not be suppressed")
