@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
+from collections.abc import AsyncIterator
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -73,6 +75,7 @@ def create_app(
     """
     app = FastAPI(title="Forex Trader Control API", version=__version__)
     operations = OperationalTelemetryService(cast(OperationalRepository, engine.repository))
+    repository_api_lock = asyncio.Lock()
 
     def require_auth(authorization: str | None = Header(default=None)) -> None:
         if api_token is None:
@@ -90,14 +93,20 @@ def create_app(
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
+    async def serialize_repository_access() -> AsyncIterator[None]:
+        """Serialize request paths that share the runtime's single SQLite connection."""
+        async with repository_api_lock:
+            yield
+
     protected = [Depends(require_auth)]
+    repository_protected = [Depends(require_auth), Depends(serialize_repository_access)]
 
     @app.get("/health")
     @app.get("/health/live")
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/health/ready")
+    @app.get("/health/ready", dependencies=[Depends(serialize_repository_access)])
     def readiness_health(instrument: str = "EUR_USD") -> dict[str, object]:
         try:
             snapshot, providers, readiness = assess_engine_readiness(engine, instrument)
@@ -122,7 +131,7 @@ def create_app(
             "providers": jsonable(providers),
         }
 
-    @app.get("/v1/status", dependencies=protected)
+    @app.get("/v1/status", dependencies=repository_protected)
     def system_status() -> dict[str, object]:
         return engine.status()
 
@@ -153,7 +162,7 @@ def create_app(
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.get("/v1/readiness/{instrument}", dependencies=protected)
+    @app.get("/v1/readiness/{instrument}", dependencies=repository_protected)
     def runtime_readiness(instrument: str) -> dict[str, object]:
         snapshot, providers, readiness = assess_engine_readiness(engine, instrument)
         return {
@@ -165,14 +174,14 @@ def create_app(
             "providers": jsonable(providers),
         }
 
-    @app.get("/v1/operations/summary", dependencies=protected)
+    @app.get("/v1/operations/summary", dependencies=repository_protected)
     def operations_summary(hours: int = 24) -> dict[str, object]:
         try:
             return jsonable(operations.snapshot(hours=hours))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.get("/v1/operations/events", dependencies=protected)
+    @app.get("/v1/operations/events", dependencies=repository_protected)
     def operations_events(
         limit: int = 200,
         hours: int = 24,
@@ -194,7 +203,7 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.get("/v1/operations/metrics", dependencies=protected, response_class=PlainTextResponse)
+    @app.get("/v1/operations/metrics", dependencies=repository_protected, response_class=PlainTextResponse)
     def operations_metrics(hours: int = 24) -> PlainTextResponse:
         try:
             return PlainTextResponse(
@@ -204,11 +213,11 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.get("/v1/promotion", dependencies=protected)
+    @app.get("/v1/promotion", dependencies=repository_protected)
     def promotion() -> dict[str, object]:
         return engine.promotion_status()
 
-    @app.get("/v1/decisions", dependencies=protected)
+    @app.get("/v1/decisions", dependencies=repository_protected)
     def decisions(limit: int = Query(default=20, ge=1, le=250)) -> list[dict[str, object]]:
         return engine.repository.recent_traces(limit)
 
@@ -216,46 +225,46 @@ def create_app(
     def fundamental_snapshots() -> list[dict[str, object]]:
         return [jsonable(item) for item in engine.fundamentals.snapshots()]
 
-    @app.get("/v1/fundamentals/history", dependencies=protected)
+    @app.get("/v1/fundamentals/history", dependencies=repository_protected)
     def fundamental_history() -> list[dict[str, object]]:
         if not hasattr(engine.repository, "macro_observations"):
             return []
         return [jsonable(item) for item in engine.repository.macro_observations()]  # type: ignore[attr-defined]
 
-    @app.get("/v1/events/scheduled", dependencies=protected)
+    @app.get("/v1/events/scheduled", dependencies=repository_protected)
     def scheduled_events() -> list[dict[str, object]]:
         if not hasattr(engine.repository, "scheduled_events"):
             return []
         return [jsonable(item) for item in engine.repository.scheduled_events()]  # type: ignore[attr-defined]
 
-    @app.post("/v1/fundamentals/releases", dependencies=protected)
+    @app.post("/v1/fundamentals/releases", dependencies=repository_protected)
     def ingest_release(payload: ReleaseInput) -> dict[str, object]:
         state = engine.ingest_release(**payload.model_dump())
         return jsonable(state)
 
-    @app.post("/v1/fundamentals/news", dependencies=protected)
+    @app.post("/v1/fundamentals/news", dependencies=repository_protected)
     def ingest_news(payload: NewsInput) -> dict[str, object]:
         state = engine.ingest_news(**payload.model_dump())
         return jsonable(state)
 
-    @app.post("/v1/fundamentals/central-bank", dependencies=protected)
+    @app.post("/v1/fundamentals/central-bank", dependencies=repository_protected)
     def ingest_central_bank(payload: CentralBankInput) -> dict[str, object]:
         state = engine.ingest_central_bank(**payload.model_dump())
         return jsonable(state)
 
-    @app.post("/v1/events/scheduled", dependencies=protected)
+    @app.post("/v1/events/scheduled", dependencies=repository_protected)
     def ingest_scheduled_event(payload: ScheduledEventInput) -> dict[str, object]:
         event = engine.ingest_scheduled_event(**payload.model_dump())
         return jsonable(event)
 
-    @app.post("/v1/evaluate/{instrument}", dependencies=protected)
+    @app.post("/v1/evaluate/{instrument}", dependencies=repository_protected)
     def evaluate(instrument: str, execute: bool = False) -> dict[str, object]:
         try:
             return jsonable(engine.evaluate(instrument, execute=execute))
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/v1/halts/{name}/clear", dependencies=protected)
+    @app.post("/v1/halts/{name}/clear", dependencies=repository_protected)
     def clear_halt(name: str) -> dict[str, str]:
         engine.clear_halt(name)
         return {"status": "cleared", "name": name}
