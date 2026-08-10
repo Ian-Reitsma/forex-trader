@@ -24,15 +24,15 @@ _COMPONENT_HALF_LIVES = {
     "labor": timedelta(hours=48),
     "news": timedelta(hours=6),
 }
-# Evidence coverage is a different question from directional alpha.  A monthly
-# first-party CPI release remains legitimate evidence that inflation is covered
-# after its short-term market impulse has faded.  maximum_age below still caps
-# non-policy evidence at 30 days by default.
+# Evidence coverage is distinct from directional alpha. Official monthly/quarterly
+# data remains valid coverage through its normal reporting interval, while the
+# directional impulse above decays much faster. maximum_age still hard-expires
+# non-policy components after 30 days by default.
 _COMPONENT_CONFIDENCE_HALF_LIVES = {
-    "policy": timedelta(days=180),
-    "inflation": timedelta(days=45),
-    "growth": timedelta(days=60),
-    "labor": timedelta(days=30),
+    "policy": timedelta(days=365),
+    "inflation": timedelta(days=180),
+    "growth": timedelta(days=180),
+    "labor": timedelta(days=90),
     "news": timedelta(hours=6),
 }
 _POSITIVE_PHRASES = {
@@ -149,15 +149,15 @@ class FundamentalBook:
         previous: Decimal | None,
         higher_is_positive: bool,
         importance: Decimal = Decimal("1"),
-        source_confidence: Decimal = Decimal("0.95"),
+        source_confidence: Decimal = Decimal("1"),
         observed_at: datetime | None = None,
     ) -> CurrencyFundamentals:
         """Apply verified official state/trend evidence without inventing consensus.
 
         If the publisher exposes a prior comparable value, actual-vs-previous supplies a
-        directional trend.  If it exposes only the current policy level, ``previous=None``
-        records strong evidence coverage with a neutral directional contribution instead of
-        fabricating a historical comparison.
+        directional trend. If it exposes only the current policy level, ``previous=None``
+        records full first-party evidence coverage with a neutral directional contribution
+        instead of fabricating a historical comparison.
         """
         currency = currency.upper()
         timestamp = observed_at or datetime.now(UTC)
