@@ -117,9 +117,63 @@ class FundamentalBook:
         history.append(abs(raw_surprise))
         self._last_actual[history_key] = actual
 
-        updates: dict[str, Decimal | datetime] = {component: _blend(getattr(state, component), combined), "as_of": max(state.as_of, timestamp)}
+        updates: dict[str, Decimal | datetime] = {
+            component: _blend(getattr(state, component), combined),
+            "as_of": max(state.as_of, timestamp),
+        }
         confidence = min(Decimal("1"), Decimal("0.50") + bounded_importance * Decimal("0.40"))
         next_state = replace(state, **updates, confidence=max(state.confidence, confidence))
+        self._states[currency] = next_state
+        self._component_times.setdefault(currency, {})[component] = timestamp
+        self._component_confidence.setdefault(currency, {})[component] = confidence
+        return next_state
+
+    def apply_indicator(
+        self,
+        *,
+        currency: str,
+        category: str,
+        actual: Decimal,
+        previous: Decimal,
+        higher_is_positive: bool,
+        importance: Decimal = Decimal("1"),
+        source_confidence: Decimal = Decimal("0.95"),
+        observed_at: datetime | None = None,
+    ) -> CurrencyFundamentals:
+        """Apply verified official trend/state evidence without inventing a market consensus.
+
+        This signal deliberately answers a different question than ``apply_release``.  It asks
+        whether the latest official value strengthened or weakened versus the previous official
+        value.  Direction is unit-agnostic and magnitude is bounded by importance; confidence is
+        driven by source quality, not by how large the move happened to be in its native units.
+        """
+        currency = currency.upper()
+        timestamp = observed_at or datetime.now(UTC)
+        state = self.get(currency) or CurrencyFundamentals(currency=currency, as_of=timestamp)
+        component = _component_for_category(category.lower())
+        delta = actual - previous
+        if delta > 0:
+            direction = Decimal("1")
+        elif delta < 0:
+            direction = Decimal("-1")
+        else:
+            direction = Decimal("0")
+        if not higher_is_positive:
+            direction = -direction
+        bounded_importance = max(Decimal("0"), min(Decimal("1"), importance))
+        signal = direction * bounded_importance
+        confidence = (
+            max(Decimal("0"), min(Decimal("1"), source_confidence))
+            * (Decimal("0.75") + bounded_importance * Decimal("0.25"))
+        )
+        next_state = replace(
+            state,
+            **{
+                component: _blend(getattr(state, component), signal, old_weight=Decimal("0.35")),
+                "confidence": max(state.confidence, confidence),
+                "as_of": max(state.as_of, timestamp),
+            },
+        )
         self._states[currency] = next_state
         self._component_times.setdefault(currency, {})[component] = timestamp
         self._component_confidence.setdefault(currency, {})[component] = confidence
@@ -168,9 +222,15 @@ class FundamentalBook:
         previous_text = self._last_central_bank_text.get(currency, "")
         previous_score = interpret_fx_text(previous_text)[0] if previous_text else Decimal("0")
         statement_delta = current_score - previous_score
-        policy_signal = max(Decimal("-1"), min(Decimal("1"), current_score * Decimal("0.65") + statement_delta * Decimal("0.35")))
+        policy_signal = max(
+            Decimal("-1"),
+            min(Decimal("1"), current_score * Decimal("0.65") + statement_delta * Decimal("0.35")),
+        )
         weight = max(Decimal("0"), min(Decimal("1"), source_weight))
-        confidence = min(Decimal("1"), lexical_confidence * weight + (Decimal("0.15") if previous_text else Decimal("0")))
+        confidence = min(
+            Decimal("1"),
+            lexical_confidence * weight + (Decimal("0.15") if previous_text else Decimal("0")),
+        )
         next_state = replace(
             state,
             policy=_blend(state.policy, policy_signal * weight, old_weight=Decimal("0.55")),
@@ -200,7 +260,14 @@ class FundamentalBook:
         quote_state = self.get(quote)
         if base_state is None or quote_state is None:
             missing = [c for c, state in ((base, base_state), (quote, quote_state)) if state is None]
-            return FundamentalAssessment(instrument.upper(), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), (f"missing fundamental state for {', '.join(missing)}",))
+            return FundamentalAssessment(
+                instrument.upper(),
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                Decimal("0"),
+                (f"missing fundamental state for {', '.join(missing)}",),
+            )
         observed_at = as_of or datetime.now(UTC)
         if observed_at.tzinfo is None:
             raise ValueError("as_of must be timezone-aware")
@@ -249,7 +316,7 @@ class FundamentalBook:
                 freshness = _decay(age, half_life)
             value = Decimal(str(getattr(state, component)))
             weighted_score += value * weight * freshness
-            confidence = confidences.get(component, state.confidence) * freshness
+            confidence = confidences.get(component, Decimal("0")) * freshness
             weighted_confidence += confidence * weight
             covered_weight += weight
         if covered_weight <= 0:
@@ -289,7 +356,10 @@ def interpret_fx_text(text: str) -> tuple[Decimal, Decimal, tuple[str, ...]]:
             local = -local
             evidence.append(f"negated:{token}")
         score += local
-    score = max(Decimal("-1"), min(Decimal("1"), score / max(Decimal("1"), Decimal(len(evidence)) * Decimal("0.75"))))
+    score = max(
+        Decimal("-1"),
+        min(Decimal("1"), score / max(Decimal("1"), Decimal(len(evidence)) * Decimal("0.75"))),
+    )
     uncertainty_count = sum(token in _UNCERTAINTY for token in tokens)
     confidence = min(Decimal("0.85"), Decimal("0.25") + Decimal(len(evidence)) * Decimal("0.12"))
     confidence *= max(Decimal("0.25"), Decimal("1") - Decimal(uncertainty_count) * Decimal("0.20"))
