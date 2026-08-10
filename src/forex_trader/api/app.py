@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import hmac
-from collections.abc import AsyncIterator
+from collections.abc import Iterator
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from threading import Lock
 from typing import cast
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
@@ -75,7 +75,7 @@ def create_app(
     """
     app = FastAPI(title="Forex Trader Control API", version=__version__)
     operations = OperationalTelemetryService(cast(OperationalRepository, engine.repository))
-    repository_api_lock = asyncio.Lock()
+    repository_api_lock = Lock()
 
     def require_auth(authorization: str | None = Header(default=None)) -> None:
         if api_token is None:
@@ -93,9 +93,9 @@ def create_app(
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-    async def serialize_repository_access() -> AsyncIterator[None]:
+    def serialize_repository_access() -> Iterator[None]:
         """Serialize request paths that share the runtime's single SQLite connection."""
-        async with repository_api_lock:
+        with repository_api_lock:
             yield
 
     protected = [Depends(require_auth)]
