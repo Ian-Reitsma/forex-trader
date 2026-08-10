@@ -1,0 +1,48 @@
+name: Free official live source
+
+on:
+  pull_request:
+    paths:
+      - "src/forex_trader/ingestion/free_official.py"
+      - "src/forex_trader/ingestion/free_official_resilient.py"
+      - "src/forex_trader/application/free_official_sync.py"
+      - "tests/test_free_official_fundamentals.py"
+      - "tests/test_free_official_resilience.py"
+      - ".github/workflows/free-official-live.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nzd-live-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install package
+        run: python -m pip install -e .
+      - name: Verify live NZD public fundamentals
+        run: |
+          python - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+
+          from forex_trader.application.free_official_sync import sync_free_official_fundamentals
+
+          with tempfile.TemporaryDirectory() as directory:
+              report = sync_free_official_fundamentals(
+                  Path(directory) / "live-nzd.db",
+                  currencies=("NZD",),
+              )
+              payload = report.to_jsonable()
+              print(json.dumps(payload, indent=2, sort_keys=True))
+              if not report.healthy:
+                  raise SystemExit(f"NZD live official-source smoke failed: {report.failures}")
+              if report.components != {"policy": 1, "inflation": 1}:
+                  raise SystemExit(f"unexpected NZD components: {report.components}")
+          PY

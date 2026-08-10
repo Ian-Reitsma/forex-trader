@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import html
 import io
 import json
 import re
@@ -258,59 +259,71 @@ def _stats_nz_release_candidates(retrieved_at: datetime) -> tuple[str, ...]:
     return tuple(candidates)
 
 
-def _parse_nz_quarter(value: str) -> date | None:
-    match = re.fullmatch(r"(Mar|Jun|Sep|Sept|Dec)[- ](\d{2}|\d{4})", value.strip(), flags=re.IGNORECASE)
+def _stats_nz_release_period(url: str) -> date:
+    match = re.search(
+        r"consumers-price-index-(march|june|september|december)-(\d{4})-quarter/?$",
+        url,
+        flags=re.IGNORECASE,
+    )
     if match is None:
-        return None
-    month = {"mar": 3, "jun": 6, "sep": 9, "sept": 9, "dec": 12}[match.group(1).lower()]
-    raw_year = int(match.group(2))
-    year = raw_year if raw_year >= 1000 else 2000 + raw_year
-    return date(year, month, 1)
+        raise FreeOfficialSourceError("stats_nz CPI release URL did not contain a quarter")
+    month = {"march": 3, "june": 6, "september": 9, "december": 12}[match.group(1).lower()]
+    return date(int(match.group(2)), month, 1)
 
 
-def _stats_nz_cpi_values(payload: RawSourcePayload) -> list[tuple[date, Decimal]]:
-    rows = html_document(payload).rows
-    header_index: int | None = None
-    annual_column: int | None = None
-    for index, row in enumerate(rows):
-        if not row or row[0].strip().lower() != "quarter":
-            continue
-        for column, cell in enumerate(row):
-            normalized = " ".join(cell.lower().split())
-            if "cpi all groups" in normalized and "annual" in normalized:
-                header_index = index
-                annual_column = column
-                break
-        if header_index is not None:
-            break
-    if header_index is None or annual_column is None:
-        raise FreeOfficialSourceError("stats_nz CPI annual-change table header was not found")
+def _stats_nz_source_text(payload: RawSourcePayload) -> str:
+    raw = payload.body.decode("utf-8", errors="replace")
 
-    values: list[tuple[date, Decimal]] = []
-    for row in rows[header_index + 1 :]:
-        if len(row) <= annual_column:
-            continue
-        period = _parse_nz_quarter(row[0])
-        if period is None:
-            if values:
-                break
+    def unicode_escape(match: re.Match[str]) -> str:
+        try:
+            return chr(int(match.group(1), 16))
+        except ValueError:
+            return match.group(0)
+
+    expanded = re.sub(r"\\u([0-9a-fA-F]{4})", unicode_escape, raw)
+    expanded = expanded.replace(r"\n", " ").replace(r"\r", " ").replace(r"\t", " ")
+    expanded = expanded.replace(r'\"', '"').replace(r"\/", "/")
+    visible = html_document(payload).text
+    return " ".join(html.unescape(f"{visible} {expanded}").split())
+
+
+def _stats_nz_cpi_annual_value(payload: RawSourcePayload, period: date) -> Decimal:
+    text = _stats_nz_source_text(payload)
+    month = {3: "March", 6: "June", 9: "September", 12: "December"}[period.month]
+    period_pattern = rf"(?:the\s+)?{month}\s+{period.year}(?:\s+quarter)?"
+    patterns = (
+        rf"(?:CPI|consumers?\s+price\s+index(?:\s*\(CPI\))?)\s+"
+        rf"(?:increased|decreased|rose|fell)\s+(-?\d+(?:\.\d+)?)\s+percent\s+"
+        rf"in\s+the\s+12\s+months\s+to\s+{period_pattern}",
+        rf"(-?\d+(?:\.\d+)?)\s+percent\s+"
+        rf"(?:increase|decrease|rise|fall)?\s*(?:in\s+the\s+CPI\s+)?"
+        rf"in\s+the\s+12\s+months\s+to\s+{period_pattern}",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match is None:
             continue
         try:
-            annual = Decimal(row[annual_column].replace("%", "").strip())
+            value = Decimal(match.group(1))
         except InvalidOperation:
             continue
-        values.append((period, annual))
-    values.sort(key=lambda item: item[0])
-    if len(values) < 2:
-        raise FreeOfficialSourceError("stats_nz CPI table did not expose two annual observations")
-    return values
+        context_start = max(0, match.start() - 80)
+        context = text[context_start : match.end()].lower()
+        if value > 0 and ("decreased" in context or "fell" in context or "percent decrease" in context):
+            value = -value
+        return value
+    raise FreeOfficialSourceError(
+        f"stats_nz annual CPI value for {month} {period.year} was not found in release source"
+    )
 
 
 def _fetch_latest_stats_nz_cpi(
     client: OfficialWebClient,
     *,
     retrieved_at: datetime,
-) -> tuple[RawSourcePayload, list[tuple[date, Decimal]]]:
+) -> tuple[tuple[RawSourcePayload, ...], list[tuple[date, Decimal]]]:
+    payloads: list[RawSourcePayload] = []
+    values: list[tuple[date, Decimal]] = []
     for url in _stats_nz_release_candidates(retrieved_at):
         try:
             payload = client.fetch(STATS_NZ_SOURCE, url, retrieved_at=retrieved_at)
@@ -318,8 +331,16 @@ def _fetch_latest_stats_nz_cpi(
             if " returned HTTP 404" in str(exc):
                 continue
             raise
-        return payload, _stats_nz_cpi_values(payload)
-    raise FreeOfficialSourceError("stats_nz current CPI release was not found")
+        period = _stats_nz_release_period(payload.url)
+        value = _stats_nz_cpi_annual_value(payload, period)
+        payloads.append(payload)
+        values.append((period, value))
+        if len(values) == 2:
+            break
+    if len(values) < 2:
+        raise FreeOfficialSourceError("stats_nz did not expose two published CPI releases")
+    values.sort(key=lambda item: item[0])
+    return tuple(payloads), values
 
 
 def _fetch_nzd(
@@ -331,12 +352,12 @@ def _fetch_nzd(
     policy = _bis_observations(policy_payload.body)
     if len(policy) < 2:
         raise FreeOfficialSourceError("bis New Zealand policy-rate series did not expose two observations")
-    cpi_payload, cpi = _fetch_latest_stats_nz_cpi(client, retrieved_at=retrieved_at)
+    cpi_payloads, cpi = _fetch_latest_stats_nz_cpi(client, retrieved_at=retrieved_at)
     latest_policy, previous_policy = policy[-1], policy[-2]
     latest_cpi, previous_cpi = cpi[-1], cpi[-2]
     return OfficialCurrencySnapshot(
         "NZD",
-        (policy_payload, cpi_payload),
+        (policy_payload, *cpi_payloads),
         (
             OfficialIndicatorEvidence(
                 "bis",
