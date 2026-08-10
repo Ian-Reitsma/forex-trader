@@ -64,11 +64,41 @@ class BrokerStateSynchronizer:
         if history is not None:
             now = datetime.now(UTC)
             start = now - timedelta(days=self.initial_history_days)
-            for transaction in history(start, now + timedelta(seconds=1)):
-                if isinstance(transaction, dict) and transaction.get("id"):
-                    self.repository.save_broker_transaction(transaction)
+            self._backfill_history(history, start=start, end=now)
         self.repository.set_broker_cursor(self.cursor_name, cursor)
         return cursor
+
+    def _backfill_history(self, history, *, start: datetime, end: datetime) -> None:  # type: ignore[no-untyped-def]
+        """Backfill bounded transaction windows while tolerating pre-account ranges.
+
+        OANDA limits time-based transaction requests to one year. When a requested
+        starting timestamp predates account creation, OANDA substitutes the account
+        creation time; windows ending before account creation then become an invalid
+        range and return HTTP 416. Leading 416 windows are therefore skipped until the
+        first valid account-history window is reached. After one valid window has been
+        observed, any later 416 is treated as a real reconciliation failure and raised.
+        """
+        cursor = start.astimezone(UTC)
+        final = end.astimezone(UTC)
+        valid_window_seen = False
+        while cursor < final:
+            window_end = min(final, cursor + timedelta(days=364))
+            try:
+                transactions = history(cursor, window_end)
+            except RuntimeError as exc:
+                if (
+                    getattr(exc, "status_code", None) == 416
+                    and not valid_window_seen
+                    and window_end < final
+                ):
+                    cursor = window_end
+                    continue
+                raise
+            valid_window_seen = True
+            for transaction in transactions:
+                if isinstance(transaction, dict) and transaction.get("id"):
+                    self.repository.save_broker_transaction(transaction)
+            cursor = window_end
 
     def catch_up(self) -> int:
         cursor = self.bootstrap()
