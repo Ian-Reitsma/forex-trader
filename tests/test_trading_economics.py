@@ -354,7 +354,8 @@ def test_calendar_client_fails_closed_for_transport_status_shape_and_size() -> N
 
 def test_calendar_client_rejects_response_host_escape() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=[], request=httpx.Request("GET", "https://evil.example/calendar"))
+        request.url = httpx.URL("https://evil.example/calendar")
+        return httpx.Response(200, json=[])
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
     with pytest.raises(TradingEconomicsApiError, match="escaped"):
