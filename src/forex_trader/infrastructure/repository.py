@@ -384,4 +384,5 @@ def _macro_from_json(payload: dict[str, object]) -> MacroObservation:
         body=str(payload.get("body", "")),
         source_weight=Decimal(str(payload.get("source_weight", "0.7"))),
         revision_of=(UUID(str(payload["revision_of"])) if payload.get("revision_of") else None),
+        event_at=(datetime.fromisoformat(str(payload["event_at"])) if payload.get("event_at") else None),
     )
