@@ -4,12 +4,10 @@ import io
 import json
 import re
 import zipfile
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urljoin
 from xml.etree import ElementTree
-
-import httpx
 
 from forex_trader.ingestion.free_official import (
     BLS,
@@ -27,64 +25,17 @@ from forex_trader.ingestion.free_official import (
     fetch_currency as fetch_currency_legacy,
     html_document,
 )
-from forex_trader.ingestion.official_sources import RawSourcePayload, SourceAuthority, SourceDescriptor
 
 
-_BLS_API_URL = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
 _BLS_CPI_SERIES = "CUUR0000SA0"
+_BLS_API_URL = f"https://api.bls.gov/publicAPI/v1/timeseries/data/{_BLS_CPI_SERIES}"
 _BOJ_POLICY_TABLE_URL = "https://www.boj.or.jp/en/statistics/boj/other/discount/discount.htm"
 _RBNZ_OCR_XLSX_URL = "https://rbnz.govt.nz/-/media/project/sites/rbnz/files/statistics/series/b/b2/hb2-daily-close.xlsx"
 _RBNZ_CPI_XLSX_URL = "https://rbnz.govt.nz/-/media/project/sites/rbnz/files/statistics/series/m/m1/hm1.xlsx"
 
 
 class ResilientOfficialWebClient(OfficialWebClient):
-    """Official-only client with a constrained JSON POST for public statistical APIs."""
-
-    def post_json(
-        self,
-        descriptor: SourceDescriptor,
-        url: str,
-        *,
-        payload: dict[str, object],
-        retrieved_at: datetime,
-    ) -> RawSourcePayload:
-        if descriptor.authority is not SourceAuthority.OFFICIAL:
-            raise ValueError("free official client requires OFFICIAL source authority")
-        if retrieved_at.tzinfo is None:
-            raise ValueError("retrieved_at must be timezone-aware")
-        if not descriptor.permits(url):
-            raise ValueError(f"URL is not permitted for source {descriptor.source_id}: {url}")
-        try:
-            response = self._client.post(
-                url,
-                json=payload,
-                headers={
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                    "User-Agent": "forex-trader/free-official-macro",
-                },
-                timeout=self.timeout_seconds,
-            )
-        except httpx.HTTPError as exc:
-            raise FreeOfficialSourceError(
-                f"{descriptor.source_id} transport failure: {type(exc).__name__}"
-            ) from exc
-        if response.status_code != 200:
-            raise FreeOfficialSourceError(f"{descriptor.source_id} returned HTTP {response.status_code}")
-        final_url = str(response.url)
-        if not descriptor.permits(final_url):
-            raise FreeOfficialSourceError(f"{descriptor.source_id} response escaped approved publisher host")
-        if len(response.content) > self.maximum_payload_bytes:
-            raise FreeOfficialSourceError(f"{descriptor.source_id} payload exceeds configured maximum size")
-        return RawSourcePayload.create(
-            descriptor=descriptor,
-            url=final_url,
-            body=bytes(response.content),
-            content_type=response.headers.get("content-type", "application/json").split(";", 1)[0],
-            retrieved_at=retrieved_at.astimezone(UTC),
-            published_at=retrieved_at.astimezone(UTC),
-            available_at=retrieved_at.astimezone(UTC),
-        )
+    """Official-only client used by resilient no-key source adapters."""
 
 
 def fetch_currency_resilient(
@@ -95,8 +46,6 @@ def fetch_currency_resilient(
 ) -> OfficialCurrencySnapshot:
     normalized = currency.upper()
     if normalized == "USD":
-        if not isinstance(client, ResilientOfficialWebClient):
-            raise TypeError("USD resilient adapter requires ResilientOfficialWebClient")
         return _fetch_usd(client, retrieved_at=retrieved_at)
     if normalized == "JPY":
         return _fetch_jpy(client, retrieved_at=retrieved_at)
@@ -106,7 +55,7 @@ def fetch_currency_resilient(
 
 
 def _fetch_usd(
-    client: ResilientOfficialWebClient,
+    client: OfficialWebClient,
     *,
     retrieved_at: datetime,
 ) -> OfficialCurrencySnapshot:
@@ -132,16 +81,7 @@ def _fetch_usd(
         else None
     )
 
-    api = client.post_json(
-        BLS,
-        _BLS_API_URL,
-        payload={
-            "seriesid": [_BLS_CPI_SERIES],
-            "startyear": str(retrieved_at.year - 2),
-            "endyear": str(retrieved_at.year),
-        },
-        retrieved_at=retrieved_at,
-    )
+    api = client.fetch(BLS, _BLS_API_URL, retrieved_at=retrieved_at)
     latest_cpi, previous_cpi, reference = _bls_cpi_annual_changes(api.body)
     return OfficialCurrencySnapshot(
         "USD",
