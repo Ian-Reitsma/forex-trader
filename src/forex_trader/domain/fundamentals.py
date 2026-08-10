@@ -16,11 +16,23 @@ _COMPONENT_WEIGHTS = {
     "labor": Decimal("0.15"),
     "news": Decimal("0.15"),
 }
+# Directional influence should decay as markets digest the information.
 _COMPONENT_HALF_LIVES = {
     "policy": timedelta(days=21),
     "inflation": timedelta(hours=72),
     "growth": timedelta(hours=72),
     "labor": timedelta(hours=48),
+    "news": timedelta(hours=6),
+}
+# Evidence coverage is a different question from directional alpha.  A monthly
+# first-party CPI release remains legitimate evidence that inflation is covered
+# after its short-term market impulse has faded.  maximum_age below still caps
+# non-policy evidence at 30 days by default.
+_COMPONENT_CONFIDENCE_HALF_LIVES = {
+    "policy": timedelta(days=180),
+    "inflation": timedelta(days=45),
+    "growth": timedelta(days=60),
+    "labor": timedelta(days=30),
     "news": timedelta(hours=6),
 }
 _POSITIVE_PHRASES = {
@@ -134,32 +146,35 @@ class FundamentalBook:
         currency: str,
         category: str,
         actual: Decimal,
-        previous: Decimal,
+        previous: Decimal | None,
         higher_is_positive: bool,
         importance: Decimal = Decimal("1"),
         source_confidence: Decimal = Decimal("0.95"),
         observed_at: datetime | None = None,
     ) -> CurrencyFundamentals:
-        """Apply verified official trend/state evidence without inventing a market consensus.
+        """Apply verified official state/trend evidence without inventing consensus.
 
-        This signal deliberately answers a different question than ``apply_release``.  It asks
-        whether the latest official value strengthened or weakened versus the previous official
-        value.  Direction is unit-agnostic and magnitude is bounded by importance; confidence is
-        driven by source quality, not by how large the move happened to be in its native units.
+        If the publisher exposes a prior comparable value, actual-vs-previous supplies a
+        directional trend.  If it exposes only the current policy level, ``previous=None``
+        records strong evidence coverage with a neutral directional contribution instead of
+        fabricating a historical comparison.
         """
         currency = currency.upper()
         timestamp = observed_at or datetime.now(UTC)
         state = self.get(currency) or CurrencyFundamentals(currency=currency, as_of=timestamp)
         component = _component_for_category(category.lower())
-        delta = actual - previous
-        if delta > 0:
-            direction = Decimal("1")
-        elif delta < 0:
-            direction = Decimal("-1")
-        else:
+        if previous is None:
             direction = Decimal("0")
-        if not higher_is_positive:
-            direction = -direction
+        else:
+            delta = actual - previous
+            if delta > 0:
+                direction = Decimal("1")
+            elif delta < 0:
+                direction = Decimal("-1")
+            else:
+                direction = Decimal("0")
+            if not higher_is_positive:
+                direction = -direction
         bounded_importance = max(Decimal("0"), min(Decimal("1"), importance))
         signal = direction * bounded_importance
         confidence = (
@@ -310,13 +325,14 @@ class FundamentalBook:
                 continue
             age = as_of - timestamp
             if age > maximum_age and component != "policy":
-                freshness = Decimal("0")
+                score_freshness = Decimal("0")
+                confidence_freshness = Decimal("0")
             else:
-                half_life = _COMPONENT_HALF_LIVES[component]
-                freshness = _decay(age, half_life)
+                score_freshness = _decay(age, _COMPONENT_HALF_LIVES[component])
+                confidence_freshness = _decay(age, _COMPONENT_CONFIDENCE_HALF_LIVES[component])
             value = Decimal(str(getattr(state, component)))
-            weighted_score += value * weight * freshness
-            confidence = confidences.get(component, Decimal("0")) * freshness
+            weighted_score += value * weight * score_freshness
+            confidence = confidences.get(component, Decimal("0")) * confidence_freshness
             weighted_confidence += confidence * weight
             covered_weight += weight
         if covered_weight <= 0:
