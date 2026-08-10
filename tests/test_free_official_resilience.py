@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import io
-import zipfile
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -23,31 +21,9 @@ def _html(request: httpx.Request, body: str) -> httpx.Response:
     return httpx.Response(200, text=body, headers={"content-type": "text/html"}, request=request)
 
 
-def _xlsx(rows: list[list[str | float]]) -> bytes:
-    def cell(column: int, row: int, value: str | float) -> str:
-        reference = f"{chr(ord('A') + column)}{row}"
-        if isinstance(value, str):
-            escaped = (
-                value.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-            )
-            return f'<c r="{reference}" t="inlineStr"><is><t>{escaped}</t></is></c>'
-        return f'<c r="{reference}"><v>{value}</v></c>'
-
-    sheet_rows = []
-    for row_number, values in enumerate(rows, start=1):
-        cells = "".join(cell(column, row_number, value) for column, value in enumerate(values))
-        sheet_rows.append(f'<row r="{row_number}">{cells}</row>')
-    sheet = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-        f'<sheetData>{"".join(sheet_rows)}</sheetData></worksheet>'
-    )
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("xl/worksheets/sheet1.xml", sheet)
-    return buffer.getvalue()
+def _csv(request: httpx.Request, rows: list[tuple[str, str]]) -> httpx.Response:
+    body = "TIME_PERIOD,OBS_VALUE\n" + "".join(f"{period},{value}\n" for period, value in rows)
+    return httpx.Response(200, text=body, headers={"content-type": "text/csv"}, request=request)
 
 
 def test_usd_uses_unregistered_bls_v1_api_not_blocked_html_page() -> None:
@@ -104,22 +80,16 @@ def test_usd_uses_unregistered_bls_v1_api_not_blocked_html_page() -> None:
     assert any("/publicAPI/v1/" in url for _, url in calls)
 
 
-def test_jpy_uses_maintained_boj_rate_table_instead_of_guessed_decision_url() -> None:
+def test_jpy_uses_bis_machine_readable_policy_and_cpi_series() -> None:
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         calls.append(url)
-        if url.endswith("/en/statistics/boj/other/discount/discount.htm"):
-            return _html(
-                request,
-                "<table>"
-                "<tr><td>Dec. 22, 2025</td><td>1.00</td></tr>"
-                "<tr><td>Jun. 17, 2026</td><td>1.25</td></tr>"
-                "</table>",
-            )
-        if url == "https://www.stat.go.jp/english/":
-            return _html(request, "Consumer Price Index 1.7% June 2026 change over the year")
+        if url.startswith("https://stats.bis.org/api/v2/data/dataflow/BIS/WS_CBPOL/1.0/M.JP"):
+            return _csv(request, [("2026-05", "0.50"), ("2026-06", "0.75")])
+        if url.startswith("https://stats.bis.org/api/v2/data/dataflow/BIS/WS_LONG_CPI/1.0/M.JP.771"):
+            return _csv(request, [("2026-05", "2.5"), ("2026-06", "2.8")])
         raise AssertionError(f"unexpected request: {url}")
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
@@ -129,37 +99,35 @@ def test_jpy_uses_maintained_boj_rate_table_instead_of_guessed_decision_url() ->
     finally:
         http.close()
     policy = next(item for item in snapshot.indicators if item.category == "policy")
-    assert policy.series_id == "basic_loan_rate"
-    assert policy.actual == Decimal("1.25")
-    assert policy.previous == Decimal("1.00")
-    assert not any("/mopo/mpmdeci/state_2026/k" in url for url in calls)
+    inflation = next(item for item in snapshot.indicators if item.category == "inflation")
+    assert policy.source_id == "bis"
+    assert policy.actual == Decimal("0.75")
+    assert policy.previous == Decimal("0.50")
+    assert inflation.source_id == "bis"
+    assert inflation.actual == Decimal("2.8")
+    assert inflation.previous == Decimal("2.5")
+    assert all("stat.go.jp" not in url for url in calls)
+    assert all("boj.or.jp" not in url for url in calls)
 
 
-def test_nzd_uses_rbnz_automation_data_files() -> None:
-    ocr = _xlsx(
-        [
-            ["Date", "Official Cash Rate (OCR)"],
-            ["2026-04-01", 3.25],
-            ["2026-07-09", 2.50],
-            ["2026-07-23", 2.50],
-        ]
-    )
-    cpi = _xlsx(
-        [
-            ["Date", "Index", "q/q%", "y/y%"],
-            ["Mar 2026", 1339.0, 0.9, 3.1],
-            ["Jun 2026", 1359.0, 1.5, 4.1],
-        ]
-    )
+def test_nzd_uses_bis_policy_and_stats_nz_cpi_without_rbnz_automation() -> None:
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         calls.append(url)
-        if url.endswith("/b/b2/hb2-daily-close.xlsx"):
-            return httpx.Response(200, content=ocr, headers={"content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}, request=request)
-        if url.endswith("/m/m1/hm1.xlsx"):
-            return httpx.Response(200, content=cpi, headers={"content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}, request=request)
+        if url.startswith("https://stats.bis.org/api/v2/data/dataflow/BIS/WS_CBPOL/1.0/M.NZ"):
+            return _csv(request, [("2026-06", "2.25"), ("2026-07", "2.50")])
+        if url == "https://www.stats.govt.nz/information-releases/consumers-price-index-june-2026-quarter/":
+            return _html(
+                request,
+                "<table>"
+                "<tr><th>Quarter</th><th>CPI all groups (quarterly)</th>"
+                "<th>CPI all groups (annual)</th><th>Tradeables (annual)</th></tr>"
+                "<tr><td>Mar-26</td><td>0.9</td><td>3.1</td><td>2.5</td></tr>"
+                "<tr><td>Jun-26</td><td>1.5</td><td>4.1</td><td>4.9</td></tr>"
+                "</table>",
+            )
         raise AssertionError(f"unexpected request: {url}")
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
@@ -170,12 +138,49 @@ def test_nzd_uses_rbnz_automation_data_files() -> None:
         http.close()
     policy = next(item for item in snapshot.indicators if item.category == "policy")
     inflation = next(item for item in snapshot.indicators if item.category == "inflation")
-    assert policy.actual == Decimal("2.5")
-    assert policy.previous == Decimal("3.25")
+    assert policy.source_id == "bis"
+    assert policy.actual == Decimal("2.50")
+    assert policy.previous == Decimal("2.25")
+    assert inflation.source_id == "stats_nz"
     assert inflation.actual == Decimal("4.1")
     assert inflation.previous == Decimal("3.1")
-    assert all("/monetary-policy/" not in url for url in calls)
-    assert all("/statistics/series/economic-indicators/prices" not in url for url in calls)
+    assert all("rbnz.govt.nz" not in url for url in calls)
+
+
+def test_stats_nz_release_probe_falls_back_only_on_404() -> None:
+    before_march_release = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        calls.append(url)
+        if url.startswith("https://stats.bis.org/api/v2/data/dataflow/BIS/WS_CBPOL/1.0/M.NZ"):
+            return _csv(request, [("2026-02", "3.00"), ("2026-03", "2.75")])
+        if url.endswith("consumers-price-index-march-2026-quarter/"):
+            return httpx.Response(404, text="not yet published", request=request)
+        if url.endswith("consumers-price-index-december-2025-quarter/"):
+            return _html(
+                request,
+                "<table>"
+                "<tr><th>Quarter</th><th>CPI all groups (quarterly)</th>"
+                "<th>CPI all groups (annual)</th></tr>"
+                "<tr><td>Sept-25</td><td>1.0</td><td>3.0</td></tr>"
+                "<tr><td>Dec-25</td><td>0.6</td><td>3.1</td></tr>"
+                "</table>",
+            )
+        raise AssertionError(f"unexpected request: {url}")
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    try:
+        with ResilientOfficialWebClient(client=http) as client:
+            snapshot = fetch_currency_resilient("NZD", client, retrieved_at=before_march_release)
+    finally:
+        http.close()
+    inflation = next(item for item in snapshot.indicators if item.category == "inflation")
+    assert inflation.actual == Decimal("3.1")
+    assert inflation.previous == Decimal("3.0")
+    assert any("march-2026" in url for url in calls)
+    assert any("december-2025" in url for url in calls)
 
 
 def _payload(currency: str) -> RawSourcePayload:
