@@ -1,4 +1,4 @@
-# v0.7.36 Free Official/Public Fundamentals
+# v0.7.37 Free Official/Public Fundamentals
 
 ## Goal
 
@@ -23,7 +23,7 @@ The runtime uses public HTTPS endpoints and sends no provider API credential.
 | CHF | Swiss National Bank monetary-policy assessment | Swiss National Bank monetary-policy assessment |
 | CAD | Bank of Canada key monetary-policy variables | Bank of Canada key monetary-policy variables |
 | AUD | Reserve Bank of Australia cash-rate history | Reserve Bank of Australia CPI page (ABS source data) |
-| NZD | BIS central-bank policy-rate series (`M.NZ`) | Stats NZ quarterly CPI release |
+| NZD | BIS central-bank policy-rate series (`M.NZ`) | Stats NZ quarterly CPI releases |
 
 The BIS policy-rate series are constructed in collaboration with national central banks and the daily observations are reported directly by member central banks. The BIS CPI data set is predominantly sourced from national statistical offices. Exact public response bodies are retained as source evidence before deterministic indicator observations are created.
 
@@ -31,11 +31,13 @@ No Trading Economics credential is required by `run_practice_campaign.py` or `sy
 
 ## Source-resilience changes
 
-Live no-key testing exposed HTTP/application and page-layout failures rather than trading-engine failures. The resilient paths now avoid those brittle surfaces:
+Live no-key testing exposed HTTP/application and page-layout failures rather than trading-engine failures. The resilient paths avoid those brittle surfaces:
 
 - **USD/BLS:** the runtime does not scrape the BLS CPI release HTML page. It uses the unregistered/no-key BLS Public Data API v1, retrieves CPI-U index history, and calculates current/previous 12-month changes.
 - **JPY:** deployable JPY policy and inflation use machine-readable BIS Statistics API series rather than guessed BoJ publication URLs or Statistics Japan HTML encoding/layout.
-- **NZD:** automated RBNZ access is absent. Policy uses the BIS machine-readable policy-rate series. Inflation uses Stats NZ first-party quarterly CPI releases. The adapter constructs predictable quarterly release slugs newest-first and skips a candidate only on HTTP 404, so transport/server/parser failures cannot silently select stale data.
+- **NZD:** automated RBNZ access is absent. Policy uses the BIS machine-readable policy-rate series. Inflation probes predictable Stats NZ quarterly release slugs newest-first. A candidate is skipped only on HTTP 404. For each published release, the adapter extracts that release's own annual CPI value from the first-party response source rather than assuming a server-rendered historical table exists. The two newest published releases become current and previous observations, and both raw bodies are retained as evidence.
+
+A dedicated `Free official live source` pull-request workflow runs an actual NZD provider smoke test whenever the free-official adapter or its tests change. This complements deterministic unit tests so a mocked publisher layout cannot by itself make a provider change merge-ready.
 
 No commercial consensus feed, synthetic consensus, or unofficial market-calendar mirror is used.
 
