@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -56,6 +57,26 @@ def test_dashboard_read_models_are_real_engine_data(engine) -> None:  # type: ig
     scheduled = client.get("/v1/events/scheduled")
     assert scheduled.status_code == 200
     assert scheduled.json() == []
+
+
+def test_repository_backed_dashboard_reads_are_serialized(engine) -> None:  # type: ignore[no-untyped-def]
+    client = local_client(engine)
+    paths = [
+        "/v1/status",
+        "/v1/promotion",
+        "/v1/decisions?limit=100",
+        "/v1/fundamentals/history",
+        "/v1/events/scheduled",
+    ]
+
+    def fetch_status(path: str) -> int:
+        return client.get(path).status_code
+
+    requests = paths * 16
+    with ThreadPoolExecutor(max_workers=14) as pool:
+        statuses = list(pool.map(fetch_status, requests))
+
+    assert statuses == [200] * len(requests)
 
 
 def test_frontend_assets_are_inside_the_python_package() -> None:
