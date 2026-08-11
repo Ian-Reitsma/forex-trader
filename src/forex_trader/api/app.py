@@ -135,6 +135,10 @@ def create_app(
     def system_status() -> dict[str, object]:
         return engine.status()
 
+    @app.get("/v1/runtime", dependencies=repository_protected)
+    def runtime_status() -> dict[str, object]:
+        return engine.runtime_status()
+
     @app.get("/v1/account", dependencies=protected)
     def account() -> dict[str, object]:
         return jsonable(engine.broker.account())

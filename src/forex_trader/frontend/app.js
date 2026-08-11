@@ -129,8 +129,10 @@
     state.connected = connected;
     $('connectButton').classList.toggle('connected', connected);
     $('connectionLabel').textContent = connected ? 'LINKED' : 'CONNECT';
-    $('runtimeOrbit').classList.toggle('online', connected);
-    $('runtimeState').textContent = connected ? 'STREAMING' : 'OFFLINE';
+    if (!connected) {
+      $('runtimeOrbit').classList.remove('online');
+      $('runtimeState').textContent = 'OFFLINE';
+    }
   }
 
   function toast(title, message = '', error = false) {
@@ -320,6 +322,14 @@
     const readiness = state.data.readiness || {};
     const quote = state.data.quotes[state.symbol] || {};
     const mode = String(statusData.mode || '—').toUpperCase();
+    const runtime = statusData.runtime || {};
+    const runtimeHealthy = runtime.healthy === true;
+    $('runtimeOrbit').classList.toggle('online', runtimeHealthy);
+    $('runtimeState').textContent = runtimeHealthy
+      ? 'AUTONOMOUS'
+      : runtime.active
+        ? (runtime.stale ? 'STALE' : 'DEGRADED')
+        : 'IDLE';
     $('modeValue').textContent = mode;
     $('modePill').className = `status-pill ${mode === 'PAPER' ? 'good' : mode === '—' ? '' : 'warn'}`;
     $('readinessValue').textContent = readiness.ready === true ? 'READY' : readiness.ready === false ? 'BLOCKED' : '—';

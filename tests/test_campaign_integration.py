@@ -33,7 +33,8 @@ def test_real_engine_campaign_executes_one_simulated_order_and_keeps_scanning(tm
     assert report.orders_submitted == 1
     assert report.orders_unknown == 0
     assert report.orders_rejected == 0
-    assert report.orders_protected + report.orders_filled == 1
+    assert report.orders_filled == 1
+    assert report.orders_protected == 1
     assert report.errors == 0
     assert report.campaign_id == "integration-campaign"
     assert report.policy_fingerprint == runner.policy_fingerprint

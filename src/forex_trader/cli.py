@@ -7,6 +7,7 @@ import typer
 import uvicorn
 
 from forex_trader.api.app import create_app
+from forex_trader.application.autonomous import AutonomousPracticeRuntime
 from forex_trader.application.runner import run_cycles
 from forex_trader.application.sync import BrokerStateSynchronizer
 from forex_trader.config import AppConfig, build_engine
@@ -104,13 +105,45 @@ def scan(
 
 @app.command(name="run")
 def run_bot(
-    interval_seconds: float = typer.Option(60.0, min=0.0),
+    interval_seconds: float | None = typer.Option(
+        None, help="Polling interval; OANDA Practice execution defaults to the lower-timeframe bar"
+    ),
     execute: bool = typer.Option(False, help="Allow paper orders when configuration also permits them"),
     max_cycles: int | None = typer.Option(None, min=1, help="Stop after this many cycles; omit to run continuously"),
+    all_currency_pairs: bool = typer.Option(
+        False, help="For OANDA Practice execution, dynamically discover and prefilter the broker currency universe"
+    ),
+    max_orders_per_cycle: int = typer.Option(1, min=0),
+    fundamental_refresh_seconds: float = typer.Option(3600.0, min=1.0),
+    universe_refresh_seconds: float = typer.Option(3600.0, min=1.0),
+    evidence_path: Path = typer.Option(Path("autonomous-campaign-evidence.jsonl")),
+    decision_evidence_path: Path = typer.Option(Path("autonomous-decision-evidence.jsonl")),
     macro_file: Path | None = typer.Option(None, exists=True, dir_okay=False),
 ) -> None:
-    """Run the polling bot until interrupted or max-cycles is reached."""
+    """Run polling continuously; OANDA execute mode adds reconciliation and durable heartbeat."""
     config = AppConfig.from_env()
+    if all_currency_pairs and not execute:
+        raise typer.BadParameter("--all-currency-pairs on run requires --execute; use scan for one-shot shadow discovery")
+
+    if execute and config.provider is ProviderKind.OANDA:
+        if macro_file is not None:
+            raise typer.BadParameter("OANDA autonomous execution uses durable official fundamentals, not --macro-file")
+        runtime = AutonomousPracticeRuntime(
+            config,
+            all_currency_pairs=all_currency_pairs or config.auto_discover_currency_instruments,
+            max_new_orders_per_cycle=max_orders_per_cycle,
+            interval_seconds=interval_seconds,
+            fundamental_refresh_seconds=fundamental_refresh_seconds,
+            universe_refresh_seconds=universe_refresh_seconds,
+            evidence_path=evidence_path,
+            decision_evidence_path=decision_evidence_path,
+        )
+        runtime.run(
+            max_cycles=max_cycles,
+            on_cycle=lambda report: typer.echo(json.dumps(report.to_jsonable(), indent=2, sort_keys=True)),
+        )
+        return
+
     engine = build_engine(config, macro_file=str(macro_file) if macro_file else None)
 
     def report_error(instrument: str, exc: Exception) -> None:
@@ -120,12 +153,42 @@ def run_bot(
         engine,
         config.instruments,
         execute=execute,
-        interval_seconds=interval_seconds,
+        interval_seconds=60.0 if interval_seconds is None else interval_seconds,
         max_cycles=max_cycles,
         on_error=report_error,
     )
     if max_cycles is not None:
         typer.echo(json.dumps([jsonable(trace) for trace in traces], indent=2))
+
+
+@app.command()
+def autonomous(
+    interval_seconds: float | None = typer.Option(
+        None, help="Defaults to one configured lower-timeframe bar"
+    ),
+    max_cycles: int | None = typer.Option(None, min=1, help="Omit to run continuously"),
+    max_orders_per_cycle: int = typer.Option(1, min=0),
+    fundamental_refresh_seconds: float = typer.Option(3600.0, min=1.0),
+    universe_refresh_seconds: float = typer.Option(3600.0, min=1.0),
+    evidence_path: Path = typer.Option(Path("autonomous-campaign-evidence.jsonl")),
+    decision_evidence_path: Path = typer.Option(Path("autonomous-decision-evidence.jsonl")),
+) -> None:
+    """Run the canonical all-eligible-pair OANDA Practice daemon."""
+    config = AppConfig.from_env()
+    runtime = AutonomousPracticeRuntime(
+        config,
+        all_currency_pairs=True,
+        max_new_orders_per_cycle=max_orders_per_cycle,
+        interval_seconds=interval_seconds,
+        fundamental_refresh_seconds=fundamental_refresh_seconds,
+        universe_refresh_seconds=universe_refresh_seconds,
+        evidence_path=evidence_path,
+        decision_evidence_path=decision_evidence_path,
+    )
+    runtime.run(
+        max_cycles=max_cycles,
+        on_cycle=lambda report: typer.echo(json.dumps(report.to_jsonable(), indent=2, sort_keys=True)),
+    )
 
 
 @app.command()

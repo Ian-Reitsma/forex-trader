@@ -102,3 +102,12 @@ def test_scheduled_event_endpoint_creates_blackout(engine) -> None:  # type: ign
         },
     )
     assert response.status_code == 200
+
+
+def test_api_exposes_autonomous_runtime_heartbeat(engine) -> None:  # type: ignore[no-untyped-def]
+    client = local_client(engine)
+    runtime = client.get("/v1/runtime")
+    assert runtime.status_code == 200
+    assert runtime.json()["active"] is False
+    status = client.get("/v1/status").json()
+    assert status["runtime"]["active"] is False

@@ -96,6 +96,7 @@ def test_campaign_keeps_evaluating_in_shadow_after_order_budget_is_spent(tmp_pat
     assert report.trade_candidates == 2
     assert report.abstentions == 1
     assert report.orders_submitted == 1
+    assert report.orders_filled == 1
     assert report.orders_protected == 1
     assert report.orders_unresolved == 0
     assert report.order_statuses == {"protected": 1}

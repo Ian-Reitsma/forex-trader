@@ -174,6 +174,13 @@ class PointInTimeFundamentalBook:
         self._observations.append(observation)
         self._observations.sort(key=lambda item: (item.available_at, str(item.observation_id)))
 
+    def replace_observations(self, observations: Iterable[MacroObservation]) -> None:
+        """Atomically replace observation history while preserving immutable seed state."""
+        self._observations = sorted(
+            list(observations),
+            key=lambda item: (item.available_at, str(item.observation_id)),
+        )
+
     def observations(self, *, as_of: datetime | None = None) -> list[MacroObservation]:
         if as_of is None:
             return list(self._observations)

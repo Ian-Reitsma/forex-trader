@@ -8,6 +8,8 @@ from forex_trader.domain.models import OrderRequest, OrderResult
 class ReconciliationGuardedBroker:
     """Delegate broker reads but fail closed on writes until reconciliation is durable."""
 
+    requires_runtime_readiness = True
+
     def __init__(self, broker: object, repository: object) -> None:
         self._broker = broker
         self._repository = repository
