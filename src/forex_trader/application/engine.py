@@ -61,6 +61,7 @@ class TradingEngine:
         self.cost_model = cost_model or SessionCostModel(minimum_samples=30)
         self.promotion_policy = promotion_policy or PracticePromotionPolicy()
         self.maximum_slippage_pips = maximum_slippage_pips
+        self.runtime_execution_owner: str | None = None
 
     def evaluate(self, instrument: str, *, execute: bool = False) -> DecisionTrace:
         instrument = instrument.upper()
@@ -171,6 +172,18 @@ class TradingEngine:
             if halt_reason:
                 denied = self.risk_policy.deny(candidate, f"account is halted: {halt_reason}", account_id=account_id)
                 return candidate, denied, None, self.market_data.quote(candidate.instrument), initial_account, list(self.broker.positions())
+
+            lease_reason = self._runtime_lease_reason()
+            if lease_reason is not None:
+                denied = self.risk_policy.deny(candidate, lease_reason, account_id=account_id)
+                return (
+                    candidate,
+                    denied,
+                    None,
+                    self.market_data.quote(candidate.instrument),
+                    initial_account,
+                    list(self.broker.positions()),
+                )
 
             readiness_reason = self._execution_readiness_reason(candidate.instrument)
             if readiness_reason is not None:
@@ -654,6 +667,17 @@ class TradingEngine:
 
     def _event_risk(self, instrument: str, instant: datetime) -> bool:
         return pair_event_blackout(instrument, instant, self._scheduled_events_near(instant))[0]
+
+    def _runtime_lease_reason(self) -> str | None:
+        owner = self.runtime_execution_owner
+        if owner is None:
+            return None
+        getter = getattr(self.repository, "runtime_lease_owner", None)
+        if getter is None:
+            return "autonomous runtime lease contract is unavailable"
+        if getter("autonomous_practice") != owner:
+            return "autonomous runtime lease was lost before broker submission"
+        return None
 
     def _execution_readiness_reason(self, instrument: str) -> str | None:
         if not bool(getattr(self.broker, "requires_runtime_readiness", False)):

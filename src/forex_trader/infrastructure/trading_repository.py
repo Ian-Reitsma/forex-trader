@@ -51,6 +51,15 @@ class TradingRepository(SqliteDecisionRepository):
             )
             self._connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS runtime_leases (
+                    name TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    expires_epoch REAL NOT NULL
+                )
+                """
+            )
+            self._connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS scheduled_events (
                     event_id TEXT PRIMARY KEY,
                     currency TEXT NOT NULL,
@@ -141,6 +150,70 @@ class TradingRepository(SqliteDecisionRepository):
             self._connection.execute(
                 "DELETE FROM execution_locks WHERE account_id = ? AND owner = ?",
                 (account_id, owner),
+            )
+
+    def acquire_runtime_lease(
+        self,
+        name: str,
+        owner: str,
+        *,
+        ttl_seconds: float,
+    ) -> bool:
+        if not name or not owner or ttl_seconds <= 0:
+            raise ValueError("runtime lease requires name, owner and positive TTL")
+        now = time.time()
+        with self._lock, self._connection:
+            self._connection.execute(
+                "DELETE FROM runtime_leases WHERE expires_epoch <= ?",
+                (now,),
+            )
+            cursor = self._connection.execute(
+                "INSERT OR IGNORE INTO runtime_leases(name, owner, expires_epoch) VALUES (?, ?, ?)",
+                (name, owner, now + ttl_seconds),
+            )
+        return cursor.rowcount == 1
+
+    def renew_runtime_lease(
+        self,
+        name: str,
+        owner: str,
+        *,
+        ttl_seconds: float,
+    ) -> bool:
+        if not name or not owner or ttl_seconds <= 0:
+            raise ValueError("runtime lease requires name, owner and positive TTL")
+        now = time.time()
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                """
+                UPDATE runtime_leases
+                SET expires_epoch = ?
+                WHERE name = ? AND owner = ? AND expires_epoch > ?
+                """,
+                (now + ttl_seconds, name, owner, now),
+            )
+        return cursor.rowcount == 1
+
+    def runtime_lease_owner(self, name: str) -> str | None:
+        if not name:
+            raise ValueError("runtime lease name is required")
+        now = time.time()
+        with self._lock, self._connection:
+            self._connection.execute(
+                "DELETE FROM runtime_leases WHERE name = ? AND expires_epoch <= ?",
+                (name, now),
+            )
+            row = self._connection.execute(
+                "SELECT owner FROM runtime_leases WHERE name = ?",
+                (name,),
+            ).fetchone()
+        return None if row is None else str(row["owner"])
+
+    def release_runtime_lease(self, name: str, owner: str) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "DELETE FROM runtime_leases WHERE name = ? AND owner = ?",
+                (name, owner),
             )
 
     def observe_risk_day(

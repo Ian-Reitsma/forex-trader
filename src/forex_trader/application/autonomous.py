@@ -40,6 +40,18 @@ class RuntimeRepository(Protocol):
 
     def get_broker_cursor(self, name: str) -> str | None: ...
 
+    def acquire_runtime_lease(
+        self, name: str, owner: str, *, ttl_seconds: float
+    ) -> bool: ...
+
+    def renew_runtime_lease(
+        self, name: str, owner: str, *, ttl_seconds: float
+    ) -> bool: ...
+
+    def runtime_lease_owner(self, name: str) -> str | None: ...
+
+    def release_runtime_lease(self, name: str, owner: str) -> None: ...
+
     def macro_observations(self, *, as_of: datetime | None = None) -> list[MacroObservation]: ...
 
 
@@ -138,6 +150,16 @@ class AutonomousPracticeRuntime:
             raise TypeError("autonomous runtime requires durable runtime-state repository support")
         if not hasattr(resolved_engine.repository, "macro_observations"):
             raise TypeError("autonomous runtime requires durable macro-observation repository support")
+        for lease_method in (
+            "acquire_runtime_lease",
+            "renew_runtime_lease",
+            "runtime_lease_owner",
+            "release_runtime_lease",
+        ):
+            if not hasattr(resolved_engine.repository, lease_method):
+                raise TypeError(
+                    f"autonomous runtime requires durable {lease_method} repository support"
+                )
 
         self.config = config
         self.engine = resolved_engine
@@ -164,6 +186,8 @@ class AutonomousPracticeRuntime:
 
         self.campaign_id = uuid4().hex
         self.started_at = self.clock().astimezone(UTC)
+        self.lease_ttl_seconds = max(900.0, self.interval_seconds * 3.0)
+        self._lease_acquired = False
         self._last_fundamental_refresh_monotonic: float | None = None
         self._last_universe_refresh_monotonic: float | None = None
         self._last_fundamental_refresh: dict[str, object] | None = None
@@ -282,6 +306,18 @@ class AutonomousPracticeRuntime:
 
         finite_reports: list[AutonomousCycleReport] = []
         cycle = 0
+        if not self.repository.acquire_runtime_lease(
+            RUNTIME_STATE_KEY,
+            self.campaign_id,
+            ttl_seconds=self.lease_ttl_seconds,
+        ):
+            owner = self.repository.runtime_lease_owner(RUNTIME_STATE_KEY)
+            suffix = f" ({owner})" if owner else ""
+            raise RuntimeError(
+                "another autonomous Practice runtime already owns the durable runner lease" + suffix
+            )
+        self._lease_acquired = True
+        self.engine.runtime_execution_owner = self.campaign_id
         self._write_runtime_state(
             active=True,
             status="starting",
@@ -292,9 +328,21 @@ class AutonomousPracticeRuntime:
         )
         try:
             while max_cycles is None or cycle < max_cycles:
+                if not self.repository.renew_runtime_lease(
+                    RUNTIME_STATE_KEY,
+                    self.campaign_id,
+                    ttl_seconds=self.lease_ttl_seconds,
+                ):
+                    raise RuntimeError("autonomous Practice runtime lost its durable runner lease")
                 cycle += 1
                 cycle_started = self.monotonic()
                 report = self.run_cycle(cycle)
+                if not self.repository.renew_runtime_lease(
+                    RUNTIME_STATE_KEY,
+                    self.campaign_id,
+                    ttl_seconds=self.lease_ttl_seconds,
+                ):
+                    raise RuntimeError("autonomous Practice runtime lost its durable runner lease")
                 if max_cycles is not None:
                     finite_reports.append(report)
                 if on_cycle is not None:
@@ -312,14 +360,18 @@ class AutonomousPracticeRuntime:
                 if self._last_report is not None and self._last_report.orders_unresolved
                 else "stopped"
             )
-            self._write_runtime_state(
-                active=False,
-                status=final_status,
-                cycle=cycle,
-                heartbeat_at=self.clock().astimezone(UTC),
-                selection=None,
-                errors=final_errors,
-            )
+            if self.repository.runtime_lease_owner(RUNTIME_STATE_KEY) == self.campaign_id:
+                self._write_runtime_state(
+                    active=False,
+                    status=final_status,
+                    cycle=cycle,
+                    heartbeat_at=self.clock().astimezone(UTC),
+                    selection=None,
+                    errors=final_errors,
+                )
+                self.repository.release_runtime_lease(RUNTIME_STATE_KEY, self.campaign_id)
+            self.engine.runtime_execution_owner = None
+            self._lease_acquired = False
         return tuple(finite_reports)
 
     def _refresh_fundamentals_if_due(self, errors: list[str]) -> None:
@@ -388,6 +440,11 @@ class AutonomousPracticeRuntime:
     ) -> None:
         if heartbeat_at.tzinfo is None:
             raise ValueError("heartbeat_at must be timezone-aware")
+        if (
+            self._lease_acquired
+            and self.repository.runtime_lease_owner(RUNTIME_STATE_KEY) != self.campaign_id
+        ):
+            return
         selected_count = (
             len(selection.selected)
             if selection is not None

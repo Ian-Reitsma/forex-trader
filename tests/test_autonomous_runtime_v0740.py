@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+
+import pytest
 from types import SimpleNamespace
 
 from forex_trader.application.autonomous import AutonomousPracticeRuntime
@@ -111,6 +113,7 @@ class _FakeRepository:
     def __init__(self) -> None:
         self.states: list[dict[str, object]] = []
         self.cursor = "18"
+        self.lease_owner: str | None = None
 
     def set_runtime_state(self, name: str, payload) -> None:  # type: ignore[no-untyped-def]
         assert name == "autonomous_practice"
@@ -122,6 +125,32 @@ class _FakeRepository:
     def get_broker_cursor(self, name: str) -> str | None:
         assert name == "oanda.transactions"
         return self.cursor
+
+    def acquire_runtime_lease(
+        self, name: str, owner: str, *, ttl_seconds: float
+    ) -> bool:
+        assert name == "autonomous_practice"
+        assert ttl_seconds > 0
+        if self.lease_owner is not None:
+            return False
+        self.lease_owner = owner
+        return True
+
+    def renew_runtime_lease(
+        self, name: str, owner: str, *, ttl_seconds: float
+    ) -> bool:
+        assert name == "autonomous_practice"
+        assert ttl_seconds > 0
+        return self.lease_owner == owner
+
+    def runtime_lease_owner(self, name: str) -> str | None:
+        assert name == "autonomous_practice"
+        return self.lease_owner
+
+    def release_runtime_lease(self, name: str, owner: str) -> None:
+        assert name == "autonomous_practice"
+        if self.lease_owner == owner:
+            self.lease_owner = None
 
     def macro_observations(self, *, as_of=None):  # type: ignore[no-untyped-def]
         return []
@@ -216,3 +245,47 @@ def test_autonomous_cycle_syncs_selects_all_eligible_and_persists_heartbeat(
     assert repository.states[0]["active"] is True
     assert repository.states[-1]["active"] is False
     assert repository.states[-1]["cycle"] == 1
+
+
+def test_runtime_lease_is_single_owner() -> None:
+    repository = TradingRepository(":memory:")
+    assert repository.acquire_runtime_lease(
+        "autonomous_practice", "runner-a", ttl_seconds=900
+    )
+    assert not repository.acquire_runtime_lease(
+        "autonomous_practice", "runner-b", ttl_seconds=900
+    )
+    assert repository.runtime_lease_owner("autonomous_practice") == "runner-a"
+    assert repository.renew_runtime_lease(
+        "autonomous_practice", "runner-a", ttl_seconds=900
+    )
+    assert not repository.renew_runtime_lease(
+        "autonomous_practice", "runner-b", ttl_seconds=900
+    )
+    repository.release_runtime_lease("autonomous_practice", "runner-a")
+    assert repository.runtime_lease_owner("autonomous_practice") is None
+    assert repository.acquire_runtime_lease(
+        "autonomous_practice", "runner-b", ttl_seconds=900
+    )
+
+
+def test_autonomous_runtime_refuses_duplicate_runner(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    repository = _FakeRepository()
+    repository.lease_owner = "existing-runner"
+    engine = SimpleNamespace(
+        repository=repository,
+        broker=object(),
+        fundamentals=SimpleNamespace(),
+        fusion_policy=SimpleNamespace(minimum_fundamental_confidence=Decimal("0.5")),
+        instrument_universe=lambda: ("EUR_USD",),
+        runtime_execution_owner=None,
+    )
+    runtime = AutonomousPracticeRuntime(
+        _config(tmp_path),
+        engine=engine,  # type: ignore[arg-type]
+        synchronizer=_FakeSynchronizer(),
+        fundamental_sync=lambda database_path: pytest.fail("refresh must not run"),
+        interval_seconds=0,
+    )
+    with pytest.raises(RuntimeError, match="already owns the durable runner lease"):
+        runtime.run(max_cycles=1)
