@@ -6,6 +6,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from forex_trader.application.ports import DecisionRepository, MarketDataProvider, PaperBroker
+from forex_trader.application.readiness import assess_engine_readiness
 from forex_trader.domain.costs import SessionCostModel
 from forex_trader.domain.enums import DecisionDisposition, Direction, OperatingMode, OrderStatus, RiskDisposition
 from forex_trader.domain.events import EventImportance, ScheduledMacroEvent, pair_event_blackout
@@ -60,6 +61,7 @@ class TradingEngine:
         self.cost_model = cost_model or SessionCostModel(minimum_samples=30)
         self.promotion_policy = promotion_policy or PracticePromotionPolicy()
         self.maximum_slippage_pips = maximum_slippage_pips
+        self.runtime_execution_owner: str | None = None
 
     def evaluate(self, instrument: str, *, execute: bool = False) -> DecisionTrace:
         instrument = instrument.upper()
@@ -170,6 +172,30 @@ class TradingEngine:
             if halt_reason:
                 denied = self.risk_policy.deny(candidate, f"account is halted: {halt_reason}", account_id=account_id)
                 return candidate, denied, None, self.market_data.quote(candidate.instrument), initial_account, list(self.broker.positions())
+
+            lease_reason = self._runtime_lease_reason()
+            if lease_reason is not None:
+                denied = self.risk_policy.deny(candidate, lease_reason, account_id=account_id)
+                return (
+                    candidate,
+                    denied,
+                    None,
+                    self.market_data.quote(candidate.instrument),
+                    initial_account,
+                    list(self.broker.positions()),
+                )
+
+            readiness_reason = self._execution_readiness_reason(candidate.instrument)
+            if readiness_reason is not None:
+                denied = self.risk_policy.deny(candidate, readiness_reason, account_id=account_id)
+                return (
+                    candidate,
+                    denied,
+                    None,
+                    self.market_data.quote(candidate.instrument),
+                    initial_account,
+                    list(self.broker.positions()),
+                )
 
             account = self.broker.account()
             positions = list(self.broker.positions())
@@ -492,6 +518,67 @@ class TradingEngine:
             raise TypeError("promotion evaluation must serialize to a mapping")
         return {str(key): value for key, value in result.items()}
 
+    def runtime_status(self) -> dict[str, object]:
+        getter = getattr(self.repository, "runtime_state", None)
+        if getter is None:
+            return {
+                "active": False,
+                "healthy": False,
+                "stale": True,
+                "reason": "repository does not expose autonomous runtime heartbeat state",
+            }
+        raw = getter("autonomous_practice")
+        if not isinstance(raw, dict):
+            return {
+                "active": False,
+                "healthy": False,
+                "stale": True,
+                "reason": "no autonomous Practice runtime heartbeat has been recorded",
+            }
+        payload: dict[str, object] = {str(key): value for key, value in raw.items()}
+        heartbeat_raw = payload.get("heartbeat_at")
+        try:
+            heartbeat = datetime.fromisoformat(str(heartbeat_raw)).astimezone(UTC)
+        except (TypeError, ValueError):
+            heartbeat = None
+        raw_interval = payload.get("interval_seconds", 300.0)
+        if isinstance(raw_interval, (int, float, str)):
+            try:
+                interval_seconds = float(raw_interval)
+            except ValueError:
+                interval_seconds = 300.0
+        else:
+            interval_seconds = 300.0
+        stale_after = max(900.0, max(0.0, interval_seconds) * 3.0)
+        age_seconds = (
+            None
+            if heartbeat is None
+            else max(0.0, (datetime.now(UTC) - heartbeat).total_seconds())
+        )
+        stale = age_seconds is None or age_seconds > stale_after
+        active = bool(payload.get("active"))
+        declared = str(payload.get("status") or "unknown")
+        healthy = active and not stale and declared in {"starting", "running"}
+        if not active:
+            reason = "autonomous Practice runtime is not active"
+        elif stale:
+            reason = "autonomous Practice runtime heartbeat is stale"
+        elif declared not in {"starting", "running"}:
+            reason = f"autonomous Practice runtime reports {declared}"
+        else:
+            reason = "autonomous Practice runtime heartbeat is healthy"
+        payload.update(
+            {
+                "active": active,
+                "healthy": healthy,
+                "stale": stale,
+                "heartbeat_age_seconds": age_seconds,
+                "stale_after_seconds": stale_after,
+                "reason": reason,
+            }
+        )
+        return payload
+
     def status(self) -> dict[str, object]:
         account = self.broker.account()
         return {
@@ -500,6 +587,7 @@ class TradingEngine:
             "fundamental_currencies": [item.currency for item in self.fundamentals.snapshots()],
             "account": jsonable(account),
             "execution_halt": self._account_halt_reason(account.account_id),
+            "runtime": self.runtime_status(),
             "promotion": self.promotion_status(),
         }
 
@@ -579,6 +667,32 @@ class TradingEngine:
 
     def _event_risk(self, instrument: str, instant: datetime) -> bool:
         return pair_event_blackout(instrument, instant, self._scheduled_events_near(instant))[0]
+
+    def _runtime_lease_reason(self) -> str | None:
+        owner = self.runtime_execution_owner
+        if owner is None:
+            return None
+        getter = getattr(self.repository, "runtime_lease_owner", None)
+        if getter is None:
+            return "autonomous runtime lease contract is unavailable"
+        if getter("autonomous_practice") != owner:
+            return "autonomous runtime lease was lost before broker submission"
+        return None
+
+    def _execution_readiness_reason(self, instrument: str) -> str | None:
+        if not bool(getattr(self.broker, "requires_runtime_readiness", False)):
+            return None
+        checker = getattr(self.repository, "execution_ready", None)
+        if checker is None:
+            return None
+        try:
+            _, _, readiness = assess_engine_readiness(self, instrument)
+        except (AttributeError, RuntimeError, ValueError) as exc:
+            return f"runtime readiness assessment failed: {type(exc).__name__}: {exc}"
+        if readiness.ready:
+            return None
+        reasons = "; ".join(readiness.reasons) or "runtime data-quality readiness is false"
+        return f"runtime readiness blocked execution: {reasons}"
 
     def _account_halt_reason(self, account_id: str) -> str | None:
         getter = getattr(self.repository, "get_halt", None)

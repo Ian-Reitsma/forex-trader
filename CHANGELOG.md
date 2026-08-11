@@ -2,6 +2,23 @@
 
 All notable changes to this repository are documented here.
 
+## 0.7.40 — 2026-08-10
+
+### Autonomous Practice runtime
+
+- Added a dedicated continuous OANDA Practice runtime with pre/post-cycle broker reconciliation, broker-discovered/fundamental-eligible universe refresh, periodic free-official fundamental refresh/reload, bounded per-cycle order authority, evidence persistence and durable heartbeat state.
+- `forex-trader autonomous` is the canonical all-eligible-pair daemon; OANDA `forex-trader run --execute` now uses the same durable orchestration and defaults to broker discovery/fundamental eligibility filtering, with `--configured-pairs` as an explicit opt-out. The API server remains observational.
+- Added a durable singleton runner lease plus execution-time owner fencing so duplicate or stalled autonomous processes cannot silently create competing execution loops.
+- Added `/v1/runtime` and runtime health/staleness inside `/v1/status`; the frontend no longer labels API connectivity itself as `STREAMING`.
+- Enforced data-quality readiness at the broker-write boundary when the durable reconciliation/readiness contract is present.
+- Corrected campaign lifecycle telemetry so a final `protected` order counts as both filled and protection-verified.
+- Promotion accounting now excludes explicit `probe-` capability round trips and attributes separate OANDA daily financing to owned strategy trades.
+- Expanded the read-only OANDA smoke report to expose whole-account open-position count, unrealized P/L and open positions.
+
+### Safety boundary
+
+- No strategy threshold, spread ceiling, slippage ceiling, risk fraction, exposure limit or live-money authority was relaxed. Execution remains OANDA Practice-only and unresolved broker state remains fail-closed.
+
 ## 0.7.1 — 2026-08-07
 
 ### Paired Phase-D counterfactual research

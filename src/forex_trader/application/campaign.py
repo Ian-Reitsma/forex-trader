@@ -278,9 +278,9 @@ class PracticeCampaignRunner:
             submitted += 1
             status = trace.order.status
             order_statuses[status.value] += 1
-            if status is OrderStatus.FILLED:
+            if status in {OrderStatus.FILLED, OrderStatus.PROTECTED}:
                 filled += 1
-            elif status is OrderStatus.PROTECTED:
+            if status is OrderStatus.PROTECTED:
                 protected += 1
             elif status is OrderStatus.REJECTED:
                 rejected += 1

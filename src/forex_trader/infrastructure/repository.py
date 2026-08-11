@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import sqlite3
 from datetime import datetime
@@ -96,6 +97,15 @@ class SqliteDecisionRepository:
                 CREATE TABLE IF NOT EXISTS broker_cursors (
                     name TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS runtime_state (
+                    name TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
@@ -267,6 +277,36 @@ class SqliteDecisionRepository:
         ).fetchone()
         return None if row is None else str(row["value"])
 
+    def set_runtime_state(self, name: str, payload: Mapping[str, object]) -> None:
+        if not name.strip():
+            raise ValueError("runtime state name is required")
+        encoded = json.dumps(jsonable(dict(payload)), sort_keys=True)
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO runtime_state(name, payload_json, updated_at)
+                VALUES (?, ?, datetime('now'))
+                ON CONFLICT(name) DO UPDATE SET
+                    payload_json=excluded.payload_json,
+                    updated_at=excluded.updated_at
+                """,
+                (name, encoded),
+            )
+
+    def runtime_state(self, name: str) -> dict[str, object] | None:
+        row = self._connection.execute(
+            "SELECT payload_json, updated_at FROM runtime_state WHERE name = ?",
+            (name,),
+        ).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(str(row["payload_json"]))
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"runtime state {name} is not a JSON object")
+        result = {str(key): value for key, value in payload.items()}
+        result["updated_at"] = str(row["updated_at"])
+        return result
+
     def promotion_metrics(self) -> PromotionMetrics:
         traces = self.recent_traces(10000)
         decisions = len(traces)
@@ -289,16 +329,36 @@ class SqliteDecisionRepository:
         transactions = self.broker_transactions(limit=100000)
         our_orders: set[str] = set()
         our_trades: set[str] = set()
+        financing_by_trade: dict[str, Decimal] = {}
         closed_values: list[Decimal] = []
         for transaction in transactions:
             extensions = transaction.get("clientExtensions")
             if isinstance(extensions, dict):
                 client_id = str(extensions.get("id") or "")
                 tag = str(extensions.get("tag") or "")
-                if client_id.startswith("ft-") or tag == "forex-trader":
+                if client_id.startswith("ft-") and tag == "forex-trader":
                     tx_id = str(transaction.get("id") or "")
                     if tx_id:
                         our_orders.add(tx_id)
+            if transaction.get("type") == "DAILY_FINANCING":
+                position_financings = transaction.get("positionFinancings")
+                if isinstance(position_financings, list):
+                    for position_financing in position_financings:
+                        if not isinstance(position_financing, dict):
+                            continue
+                        open_trade_financings = position_financing.get("openTradeFinancings")
+                        if not isinstance(open_trade_financings, list):
+                            continue
+                        for trade_financing in open_trade_financings:
+                            if not isinstance(trade_financing, dict):
+                                continue
+                            trade_id = str(trade_financing.get("tradeID") or "")
+                            if trade_id not in our_trades:
+                                continue
+                            financing_by_trade[trade_id] = financing_by_trade.get(
+                                trade_id, Decimal("0")
+                            ) + Decimal(str(trade_financing.get("financing", "0")))
+
             if transaction.get("type") == "ORDER_FILL":
                 order_id = str(transaction.get("orderID") or "")
                 opened = transaction.get("tradeOpened")
@@ -311,10 +371,12 @@ class SqliteDecisionRepository:
                     for trade in closed:
                         if not isinstance(trade, dict):
                             continue
-                        if str(trade.get("tradeID") or "") not in our_trades:
+                        trade_id = str(trade.get("tradeID") or "")
+                        if trade_id not in our_trades:
                             continue
                         value = Decimal(str(trade.get("realizedPL", transaction.get("pl", "0"))))
                         value += Decimal(str(trade.get("financing", "0")))
+                        value += financing_by_trade.pop(trade_id, Decimal("0"))
                         closed_values.append(value)
 
         gross_profit = sum((value for value in closed_values if value > 0), Decimal("0"))
