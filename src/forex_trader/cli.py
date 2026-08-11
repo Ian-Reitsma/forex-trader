@@ -111,7 +111,9 @@ def run_bot(
     execute: bool = typer.Option(False, help="Allow paper orders when configuration also permits them"),
     max_cycles: int | None = typer.Option(None, min=1, help="Stop after this many cycles; omit to run continuously"),
     all_currency_pairs: bool = typer.Option(
-        False, help="For OANDA Practice execution, dynamically discover and prefilter the broker currency universe"
+        True,
+        "--all-currency-pairs/--configured-pairs",
+        help="OANDA Practice execution discovers and prefilters all broker currency pairs by default",
     ),
     max_orders_per_cycle: int = typer.Option(1, min=0),
     fundamental_refresh_seconds: float = typer.Option(3600.0, min=1.0),
@@ -122,15 +124,15 @@ def run_bot(
 ) -> None:
     """Run polling continuously; OANDA execute mode adds reconciliation and durable heartbeat."""
     config = AppConfig.from_env()
-    if all_currency_pairs and not execute:
-        raise typer.BadParameter("--all-currency-pairs on run requires --execute; use scan for one-shot shadow discovery")
+    if not execute and not all_currency_pairs:
+        raise typer.BadParameter("--configured-pairs is only meaningful with OANDA --execute")
 
     if execute and config.provider is ProviderKind.OANDA:
         if macro_file is not None:
             raise typer.BadParameter("OANDA autonomous execution uses durable official fundamentals, not --macro-file")
         runtime = AutonomousPracticeRuntime(
             config,
-            all_currency_pairs=all_currency_pairs or config.auto_discover_currency_instruments,
+            all_currency_pairs=all_currency_pairs,
             max_new_orders_per_cycle=max_orders_per_cycle,
             interval_seconds=interval_seconds,
             fundamental_refresh_seconds=fundamental_refresh_seconds,
