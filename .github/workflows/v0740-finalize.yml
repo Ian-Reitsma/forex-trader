@@ -1,0 +1,156 @@
+name: v0.7.40 final runtime hardening
+
+on:
+  push:
+    branches:
+      - feat/autonomous-practice-v0.7.40
+
+permissions:
+  contents: write
+
+jobs:
+  finalize-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/autonomous-practice-v0.7.40
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Add singleton lease and fencing
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text()
+              if old not in text:
+                  raise SystemExit(f"missing patch anchor in {path}: {old[:100]!r}")
+              target.write_text(text.replace(old, new, 1))
+
+          # Dedicated SQLite-backed singleton lease for the autonomous runtime.
+          replace_once(
+              "src/forex_trader/infrastructure/trading_repository.py",
+              '''            self._connection.execute(\n                """\n                CREATE TABLE IF NOT EXISTS execution_locks (\n                    account_id TEXT PRIMARY KEY,\n                    owner TEXT NOT NULL,\n                    expires_epoch REAL NOT NULL\n                )\n                """\n            )\n''',
+              '''            self._connection.execute(\n                """\n                CREATE TABLE IF NOT EXISTS execution_locks (\n                    account_id TEXT PRIMARY KEY,\n                    owner TEXT NOT NULL,\n                    expires_epoch REAL NOT NULL\n                )\n                """\n            )\n            self._connection.execute(\n                """\n                CREATE TABLE IF NOT EXISTS runtime_leases (\n                    name TEXT PRIMARY KEY,\n                    owner TEXT NOT NULL,\n                    expires_epoch REAL NOT NULL\n                )\n                """\n            )\n''',
+          )
+          replace_once(
+              "src/forex_trader/infrastructure/trading_repository.py",
+              '''    def release_account_lock(self, account_id: str, owner: str) -> None:\n        with self._lock, self._connection:\n            self._connection.execute(\n                "DELETE FROM execution_locks WHERE account_id = ? AND owner = ?",\n                (account_id, owner),\n            )\n\n    def observe_risk_day(\n''',
+              '''    def release_account_lock(self, account_id: str, owner: str) -> None:\n        with self._lock, self._connection:\n            self._connection.execute(\n                "DELETE FROM execution_locks WHERE account_id = ? AND owner = ?",\n                (account_id, owner),\n            )\n\n    def acquire_runtime_lease(\n        self,\n        name: str,\n        owner: str,\n        *,\n        ttl_seconds: float,\n    ) -> bool:\n        if not name or not owner or ttl_seconds <= 0:\n            raise ValueError("runtime lease requires name, owner and positive TTL")\n        now = time.time()\n        with self._lock, self._connection:\n            self._connection.execute(\n                "DELETE FROM runtime_leases WHERE expires_epoch <= ?",\n                (now,),\n            )\n            cursor = self._connection.execute(\n                "INSERT OR IGNORE INTO runtime_leases(name, owner, expires_epoch) VALUES (?, ?, ?)",\n                (name, owner, now + ttl_seconds),\n            )\n        return cursor.rowcount == 1\n\n    def renew_runtime_lease(\n        self,\n        name: str,\n        owner: str,\n        *,\n        ttl_seconds: float,\n    ) -> bool:\n        if not name or not owner or ttl_seconds <= 0:\n            raise ValueError("runtime lease requires name, owner and positive TTL")\n        now = time.time()\n        with self._lock, self._connection:\n            cursor = self._connection.execute(\n                """\n                UPDATE runtime_leases\n                SET expires_epoch = ?\n                WHERE name = ? AND owner = ? AND expires_epoch > ?\n                """,\n                (now + ttl_seconds, name, owner, now),\n            )\n        return cursor.rowcount == 1\n\n    def runtime_lease_owner(self, name: str) -> str | None:\n        if not name:\n            raise ValueError("runtime lease name is required")\n        now = time.time()\n        with self._lock, self._connection:\n            self._connection.execute(\n                "DELETE FROM runtime_leases WHERE name = ? AND expires_epoch <= ?",\n                (name, now),\n            )\n            row = self._connection.execute(\n                "SELECT owner FROM runtime_leases WHERE name = ?",\n                (name,),\n            ).fetchone()\n        return None if row is None else str(row["owner"])\n\n    def release_runtime_lease(self, name: str, owner: str) -> None:\n        with self._lock, self._connection:\n            self._connection.execute(\n                "DELETE FROM runtime_leases WHERE name = ? AND owner = ?",\n                (name, owner),\n            )\n\n    def observe_risk_day(\n''',
+          )
+
+          # Runtime owns and renews the lease. Engine receives the owner token only while
+          # the lease is held so broker writes are fenced if a stalled process loses it.
+          replace_once(
+              "src/forex_trader/application/autonomous.py",
+              '''    def get_broker_cursor(self, name: str) -> str | None: ...\n\n    def macro_observations(self, *, as_of: datetime | None = None) -> list[MacroObservation]: ...\n''',
+              '''    def get_broker_cursor(self, name: str) -> str | None: ...\n\n    def acquire_runtime_lease(\n        self, name: str, owner: str, *, ttl_seconds: float\n    ) -> bool: ...\n\n    def renew_runtime_lease(\n        self, name: str, owner: str, *, ttl_seconds: float\n    ) -> bool: ...\n\n    def runtime_lease_owner(self, name: str) -> str | None: ...\n\n    def release_runtime_lease(self, name: str, owner: str) -> None: ...\n\n    def macro_observations(self, *, as_of: datetime | None = None) -> list[MacroObservation]: ...\n''',
+          )
+          replace_once(
+              "src/forex_trader/application/autonomous.py",
+              '''        if not hasattr(resolved_engine.repository, "macro_observations"):\n            raise TypeError("autonomous runtime requires durable macro-observation repository support")\n\n        self.config = config\n''',
+              '''        if not hasattr(resolved_engine.repository, "macro_observations"):\n            raise TypeError("autonomous runtime requires durable macro-observation repository support")\n        for lease_method in (\n            "acquire_runtime_lease",\n            "renew_runtime_lease",\n            "runtime_lease_owner",\n            "release_runtime_lease",\n        ):\n            if not hasattr(resolved_engine.repository, lease_method):\n                raise TypeError(\n                    f"autonomous runtime requires durable {lease_method} repository support"\n                )\n\n        self.config = config\n''',
+          )
+          replace_once(
+              "src/forex_trader/application/autonomous.py",
+              '''        self.campaign_id = uuid4().hex\n        self.started_at = self.clock().astimezone(UTC)\n''',
+              '''        self.campaign_id = uuid4().hex\n        self.started_at = self.clock().astimezone(UTC)\n        self.lease_ttl_seconds = max(900.0, self.interval_seconds * 3.0)\n        self._lease_acquired = False\n''',
+          )
+          old_run = '''        finite_reports: list[AutonomousCycleReport] = []\n        cycle = 0\n        self._write_runtime_state(\n            active=True,\n            status="starting",\n            cycle=0,\n            heartbeat_at=self.clock().astimezone(UTC),\n            selection=None,\n            errors=(),\n        )\n        try:\n            while max_cycles is None or cycle < max_cycles:\n                cycle += 1\n                cycle_started = self.monotonic()\n                report = self.run_cycle(cycle)\n                if max_cycles is not None:\n                    finite_reports.append(report)\n                if on_cycle is not None:\n                    on_cycle(report)\n                if report.orders_unresolved:\n                    break\n                if max_cycles is not None and cycle >= max_cycles:\n                    break\n                elapsed = self.monotonic() - cycle_started\n                self.sleeper(max(0.0, self.interval_seconds - elapsed))\n        finally:\n            final_errors = self._last_report.errors if self._last_report is not None else ()\n            final_status = (\n                "halted"\n                if self._last_report is not None and self._last_report.orders_unresolved\n                else "stopped"\n            )\n            self._write_runtime_state(\n                active=False,\n                status=final_status,\n                cycle=cycle,\n                heartbeat_at=self.clock().astimezone(UTC),\n                selection=None,\n                errors=final_errors,\n            )\n        return tuple(finite_reports)\n'''
+          new_run = '''        finite_reports: list[AutonomousCycleReport] = []\n        cycle = 0\n        if not self.repository.acquire_runtime_lease(\n            RUNTIME_STATE_KEY,\n            self.campaign_id,\n            ttl_seconds=self.lease_ttl_seconds,\n        ):\n            owner = self.repository.runtime_lease_owner(RUNTIME_STATE_KEY)\n            suffix = f" ({owner})" if owner else ""\n            raise RuntimeError(\n                "another autonomous Practice runtime already owns the durable runner lease" + suffix\n            )\n        self._lease_acquired = True\n        self.engine.runtime_execution_owner = self.campaign_id\n        self._write_runtime_state(\n            active=True,\n            status="starting",\n            cycle=0,\n            heartbeat_at=self.clock().astimezone(UTC),\n            selection=None,\n            errors=(),\n        )\n        try:\n            while max_cycles is None or cycle < max_cycles:\n                if not self.repository.renew_runtime_lease(\n                    RUNTIME_STATE_KEY,\n                    self.campaign_id,\n                    ttl_seconds=self.lease_ttl_seconds,\n                ):\n                    raise RuntimeError("autonomous Practice runtime lost its durable runner lease")\n                cycle += 1\n                cycle_started = self.monotonic()\n                report = self.run_cycle(cycle)\n                if not self.repository.renew_runtime_lease(\n                    RUNTIME_STATE_KEY,\n                    self.campaign_id,\n                    ttl_seconds=self.lease_ttl_seconds,\n                ):\n                    raise RuntimeError("autonomous Practice runtime lost its durable runner lease")\n                if max_cycles is not None:\n                    finite_reports.append(report)\n                if on_cycle is not None:\n                    on_cycle(report)\n                if report.orders_unresolved:\n                    break\n                if max_cycles is not None and cycle >= max_cycles:\n                    break\n                elapsed = self.monotonic() - cycle_started\n                self.sleeper(max(0.0, self.interval_seconds - elapsed))\n        finally:\n            final_errors = self._last_report.errors if self._last_report is not None else ()\n            final_status = (\n                "halted"\n                if self._last_report is not None and self._last_report.orders_unresolved\n                else "stopped"\n            )\n            if self.repository.runtime_lease_owner(RUNTIME_STATE_KEY) == self.campaign_id:\n                self._write_runtime_state(\n                    active=False,\n                    status=final_status,\n                    cycle=cycle,\n                    heartbeat_at=self.clock().astimezone(UTC),\n                    selection=None,\n                    errors=final_errors,\n                )\n                self.repository.release_runtime_lease(RUNTIME_STATE_KEY, self.campaign_id)\n            self.engine.runtime_execution_owner = None\n            self._lease_acquired = False\n        return tuple(finite_reports)\n'''
+          replace_once("src/forex_trader/application/autonomous.py", old_run, new_run)
+          replace_once(
+              "src/forex_trader/application/autonomous.py",
+              '''        if heartbeat_at.tzinfo is None:\n            raise ValueError("heartbeat_at must be timezone-aware")\n        selected_count = (\n''',
+              '''        if heartbeat_at.tzinfo is None:\n            raise ValueError("heartbeat_at must be timezone-aware")\n        if (\n            self._lease_acquired\n            and self.repository.runtime_lease_owner(RUNTIME_STATE_KEY) != self.campaign_id\n        ):\n            return\n        selected_count = (\n''',
+          )
+
+          # Fence an in-flight stalled daemon at the actual execution boundary if its
+          # orchestration lease expired or was taken over while network work was blocked.
+          replace_once(
+              "src/forex_trader/application/engine.py",
+              '''        self.promotion_policy = promotion_policy or PracticePromotionPolicy()\n        self.maximum_slippage_pips = maximum_slippage_pips\n''',
+              '''        self.promotion_policy = promotion_policy or PracticePromotionPolicy()\n        self.maximum_slippage_pips = maximum_slippage_pips\n        self.runtime_execution_owner: str | None = None\n''',
+          )
+          replace_once(
+              "src/forex_trader/application/engine.py",
+              '''            readiness_reason = self._execution_readiness_reason(candidate.instrument)\n            if readiness_reason is not None:\n''',
+              '''            lease_reason = self._runtime_lease_reason()\n            if lease_reason is not None:\n                denied = self.risk_policy.deny(candidate, lease_reason, account_id=account_id)\n                return (\n                    candidate,\n                    denied,\n                    None,\n                    self.market_data.quote(candidate.instrument),\n                    initial_account,\n                    list(self.broker.positions()),\n                )\n\n            readiness_reason = self._execution_readiness_reason(candidate.instrument)\n            if readiness_reason is not None:\n''',
+          )
+          replace_once(
+              "src/forex_trader/application/engine.py",
+              '''    def _execution_readiness_reason(self, instrument: str) -> str | None:\n''',
+              '''    def _runtime_lease_reason(self) -> str | None:\n        owner = self.runtime_execution_owner\n        if owner is None:\n            return None\n        getter = getattr(self.repository, "runtime_lease_owner", None)\n        if getter is None:\n            return "autonomous runtime lease contract is unavailable"\n        if getter("autonomous_practice") != owner:\n            return "autonomous runtime lease was lost before broker submission"\n        return None\n\n    def _execution_readiness_reason(self, instrument: str) -> str | None:\n''',
+          )
+
+          # Tests for lease exclusivity and runtime behavior.
+          tests = Path("tests/test_autonomous_runtime_v0740.py")
+          text = tests.read_text()
+          text = text.replace("from decimal import Decimal\n", "from decimal import Decimal\n\nimport pytest\n", 1)
+          text = text.replace(
+              '''    def __init__(self) -> None:\n        self.states: list[dict[str, object]] = []\n        self.cursor = "18"\n''',
+              '''    def __init__(self) -> None:\n        self.states: list[dict[str, object]] = []\n        self.cursor = "18"\n        self.lease_owner: str | None = None\n''',
+              1,
+          )
+          text = text.replace(
+              '''    def macro_observations(self, *, as_of=None):  # type: ignore[no-untyped-def]\n        return []\n\n\nclass _FakeSynchronizer:\n''',
+              '''    def acquire_runtime_lease(\n        self, name: str, owner: str, *, ttl_seconds: float\n    ) -> bool:\n        assert name == "autonomous_practice"\n        assert ttl_seconds > 0\n        if self.lease_owner is not None:\n            return False\n        self.lease_owner = owner\n        return True\n\n    def renew_runtime_lease(\n        self, name: str, owner: str, *, ttl_seconds: float\n    ) -> bool:\n        assert name == "autonomous_practice"\n        assert ttl_seconds > 0\n        return self.lease_owner == owner\n\n    def runtime_lease_owner(self, name: str) -> str | None:\n        assert name == "autonomous_practice"\n        return self.lease_owner\n\n    def release_runtime_lease(self, name: str, owner: str) -> None:\n        assert name == "autonomous_practice"\n        if self.lease_owner == owner:\n            self.lease_owner = None\n\n    def macro_observations(self, *, as_of=None):  # type: ignore[no-untyped-def]\n        return []\n\n\nclass _FakeSynchronizer:\n''',
+              1,
+          )
+          text += '''\n\ndef test_runtime_lease_is_single_owner() -> None:\n    repository = TradingRepository(":memory:")\n    assert repository.acquire_runtime_lease(\n        "autonomous_practice", "runner-a", ttl_seconds=900\n    )\n    assert not repository.acquire_runtime_lease(\n        "autonomous_practice", "runner-b", ttl_seconds=900\n    )\n    assert repository.runtime_lease_owner("autonomous_practice") == "runner-a"\n    assert repository.renew_runtime_lease(\n        "autonomous_practice", "runner-a", ttl_seconds=900\n    )\n    assert not repository.renew_runtime_lease(\n        "autonomous_practice", "runner-b", ttl_seconds=900\n    )\n    repository.release_runtime_lease("autonomous_practice", "runner-a")\n    assert repository.runtime_lease_owner("autonomous_practice") is None\n    assert repository.acquire_runtime_lease(\n        "autonomous_practice", "runner-b", ttl_seconds=900\n    )\n\n\ndef test_autonomous_runtime_refuses_duplicate_runner(tmp_path) -> None:  # type: ignore[no-untyped-def]\n    repository = _FakeRepository()\n    repository.lease_owner = "existing-runner"\n    engine = SimpleNamespace(\n        repository=repository,\n        broker=object(),\n        fundamentals=SimpleNamespace(),\n        fusion_policy=SimpleNamespace(minimum_fundamental_confidence=Decimal("0.5")),\n        instrument_universe=lambda: ("EUR_USD",),\n        runtime_execution_owner=None,\n    )\n    runtime = AutonomousPracticeRuntime(\n        _config(tmp_path),\n        engine=engine,  # type: ignore[arg-type]\n        synchronizer=_FakeSynchronizer(),\n        fundamental_sync=lambda database_path: pytest.fail("refresh must not run"),\n        interval_seconds=0,\n    )\n    with pytest.raises(RuntimeError, match="already owns the durable runner lease"):\n        runtime.run(max_cycles=1)\n'''
+          tests.write_text(text)
+
+          # Docs/changelog match the final CLI default and singleton guarantee.
+          docs = Path("docs/58_AUTONOMOUS_PRACTICE_RUNTIME.md")
+          text = docs.read_text()
+          text = text.replace(
+              "`forex-trader run --execute` also uses the durable OANDA runtime. Add `--all-currency-pairs` (or set `FOREX_AUTO_DISCOVER_CURRENCY_INSTRUMENTS=true`) to use broker discovery; otherwise it preserves the configured instrument list. Non-OANDA/shadow `run` retains the generic polling loop.",
+              "`forex-trader run --execute` also uses the durable OANDA runtime and defaults to broker discovery plus fundamental eligibility filtering. Pass `--configured-pairs` only when you intentionally want to restrict execution to `FOREX_INSTRUMENTS`. Non-OANDA/shadow `run` retains the generic polling loop.",
+          )
+          text = text.replace(
+              "A durable `autonomous_practice` heartbeat is stored in SQLite.",
+              "A durable SQLite singleton lease prevents two autonomous runners from owning execution at once, and an owner token fences broker writes if a stalled process loses that lease. A durable `autonomous_practice` heartbeat is stored in SQLite.",
+          )
+          docs.write_text(text)
+
+          changelog = Path("CHANGELOG.md")
+          text = changelog.read_text()
+          text = text.replace(
+              "- `forex-trader autonomous` is the canonical all-eligible-pair daemon; OANDA `forex-trader run --execute` now uses the same durable orchestration and supports `--all-currency-pairs`. The API server remains observational.",
+              "- `forex-trader autonomous` is the canonical all-eligible-pair daemon; OANDA `forex-trader run --execute` now uses the same durable orchestration and defaults to broker discovery/fundamental eligibility filtering, with `--configured-pairs` as an explicit opt-out. The API server remains observational.\n- Added a durable singleton runner lease plus execution-time owner fencing so duplicate or stalled autonomous processes cannot silently create competing execution loops.",
+          )
+          changelog.write_text(text)
+          PY
+
+      - name: Install dev environment
+        run: python -m pip install -e '.[dev]'
+      - name: Compile
+        run: python -m compileall -q src scripts
+      - name: Full Ruff
+        run: ruff check src scripts tests
+      - name: Strict application/domain mypy
+        run: |
+          mypy --strict \
+            src/forex_trader/application \
+            src/forex_trader/domain
+      - name: CLI contract smoke
+        run: |
+          forex-trader run --help >/dev/null
+          forex-trader autonomous --help >/dev/null
+      - name: Full pytest
+        run: pytest -q
+      - name: Commit validated final hardening
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests docs CHANGELOG.md
+          git commit -m 'v0.7.40: fence autonomous Practice runner ownership'
+          git push origin HEAD:feat/autonomous-practice-v0.7.40
