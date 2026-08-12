@@ -64,10 +64,36 @@ def evaluate_runtime_management_shadow(
             target_hit = executable_high >= target
             if stop_hit:
                 fill = min(active_stop, executable_open) - adverse_exit
-                return _trade(candidate, OutcomeStatus.LOSS, (fill - entry) / risk, index, "shadow_stop", entry, fill, max_favorable, max_adverse, target_hit, adverse_exit / risk)
+                realized = (fill - entry) / risk
+                return _trade(
+                    candidate,
+                    _status_for_realized(realized),
+                    realized,
+                    index,
+                    "shadow_stop",
+                    entry,
+                    fill,
+                    max_favorable,
+                    max_adverse,
+                    target_hit,
+                    adverse_exit / risk,
+                )
             if target_hit:
                 fill = target - adverse_exit
-                return _trade(candidate, OutcomeStatus.WIN, (fill - entry) / risk, index, "shadow_target", entry, fill, max_favorable, max_adverse, False, adverse_exit / risk)
+                realized = (fill - entry) / risk
+                return _trade(
+                    candidate,
+                    _status_for_realized(realized),
+                    realized,
+                    index,
+                    "shadow_target",
+                    entry,
+                    fill,
+                    max_favorable,
+                    max_adverse,
+                    False,
+                    adverse_exit / risk,
+                )
         else:
             executable_open = candle.open + half_spread
             executable_low = candle.low + half_spread
@@ -79,10 +105,36 @@ def evaluate_runtime_management_shadow(
             target_hit = executable_low <= target
             if stop_hit:
                 fill = max(active_stop, executable_open) + adverse_exit
-                return _trade(candidate, OutcomeStatus.LOSS, (entry - fill) / risk, index, "shadow_stop", entry, fill, max_favorable, max_adverse, target_hit, adverse_exit / risk)
+                realized = (entry - fill) / risk
+                return _trade(
+                    candidate,
+                    _status_for_realized(realized),
+                    realized,
+                    index,
+                    "shadow_stop",
+                    entry,
+                    fill,
+                    max_favorable,
+                    max_adverse,
+                    target_hit,
+                    adverse_exit / risk,
+                )
             if target_hit:
                 fill = target + adverse_exit
-                return _trade(candidate, OutcomeStatus.WIN, (entry - fill) / risk, index, "shadow_target", entry, fill, max_favorable, max_adverse, False, adverse_exit / risk)
+                realized = (entry - fill) / risk
+                return _trade(
+                    candidate,
+                    _status_for_realized(realized),
+                    realized,
+                    index,
+                    "shadow_target",
+                    entry,
+                    fill,
+                    max_favorable,
+                    max_adverse,
+                    False,
+                    adverse_exit / risk,
+                )
 
         observed_at = candle.time + step
         intent = active_policy.decide(
@@ -104,10 +156,9 @@ def evaluate_runtime_management_shadow(
         if intent.action is ManagementAction.CLOSE:
             fill = executable_close - adverse_exit if candidate.direction is Direction.LONG else executable_close + adverse_exit
             realized = (fill - entry) / risk if candidate.direction is Direction.LONG else (entry - fill) / risk
-            status = OutcomeStatus.WIN if realized > 0 else OutcomeStatus.LOSS if realized < 0 else OutcomeStatus.TIMEOUT
             return _trade(
                 candidate,
-                status,
+                _status_for_realized(realized),
                 realized,
                 index,
                 f"shadow_management:{intent.reason}",
@@ -139,6 +190,14 @@ def evaluate_runtime_management_shadow(
         False,
         adverse_exit / risk,
     )
+
+
+def _status_for_realized(realized: Decimal) -> OutcomeStatus:
+    if realized > 0:
+        return OutcomeStatus.WIN
+    if realized < 0:
+        return OutcomeStatus.LOSS
+    return OutcomeStatus.TIMEOUT
 
 
 def _bar_step(candles: list[Candle]) -> timedelta:
