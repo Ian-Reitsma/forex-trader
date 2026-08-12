@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Protocol
 
 RISK_BREAKER_STATE_PREFIX = "risk_breaker:"
+RISK_BREAKER_REVIEW_PREFIX = "risk_breaker_review:"
 
 
 class RiskBreakerRepository(Protocol):
@@ -20,6 +21,16 @@ def risk_breaker_state_key(account_id: str) -> str:
     if not account_id.strip():
         raise ValueError("account_id is required")
     return f"{RISK_BREAKER_STATE_PREFIX}{account_id.strip()}"
+
+
+def risk_breaker_review_key(account_id: str, review_id: str) -> str:
+    clean_account = account_id.strip()
+    clean_review = review_id.strip()
+    if not clean_account:
+        raise ValueError("account_id is required")
+    if not clean_review:
+        raise ValueError("review_id is required")
+    return f"{RISK_BREAKER_REVIEW_PREFIX}{clean_account}:{clean_review}"
 
 
 def risk_breaker_resume_cursor(repository: object, account_id: str) -> str | None:
@@ -81,6 +92,8 @@ def review_loss_streak_breaker(
         raise ValueError("broker_cursor is required")
     if max_loss_streak < 1:
         raise ValueError("max_loss_streak must be positive")
+    if reviewed_at is not None and reviewed_at.tzinfo is None:
+        raise ValueError("reviewed_at must be timezone-aware")
 
     current = repository.advanced_risk_state(account_id, nav)
     loss_streak = int(str(current.get("loss_streak", "0")))
@@ -88,6 +101,10 @@ def review_loss_streak_breaker(
         raise ValueError(
             f"loss-streak breaker is not tripped: {loss_streak} < {max_loss_streak}"
         )
+
+    audit_key = risk_breaker_review_key(account_id, clean_review_id)
+    if repository.runtime_state(audit_key) is not None:
+        raise ValueError(f"review_id has already been used: {clean_review_id}")
 
     observed = (reviewed_at or datetime.now(UTC)).astimezone(UTC)
     payload: dict[str, object] = {
@@ -100,5 +117,8 @@ def review_loss_streak_breaker(
         "resume_after_transaction_id": clean_cursor,
         "reviewed_at": observed.isoformat(),
     }
+    # Keep an immutable-by-convention review record as well as a latest-state pointer.
+    # The review-specific key prevents a later resume from erasing the prior audit trail.
+    repository.set_runtime_state(audit_key, payload)
     repository.set_runtime_state(risk_breaker_state_key(account_id), payload)
     return payload
