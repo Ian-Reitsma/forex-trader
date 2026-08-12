@@ -3,8 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from datetime import UTC, datetime
+from decimal import Decimal
 
 from forex_trader.application.ports import MarketDataProvider
+from forex_trader.domain.context import HealthState, ProviderHealth
 from forex_trader.domain.models import Candle, Quote
 from forex_trader.domain.timeframes import minimum_lower_history_count, validate_timeframe_pair
 
@@ -39,6 +42,7 @@ class TimeframeMappedMarketData:
             f"forex_trader_candle_snapshot_{id(self)}",
             default=None,
         )
+        self._last_quote_observed_at: datetime | None = None
 
     @contextmanager
     def evaluation_scope(self) -> Iterator[None]:
@@ -74,7 +78,40 @@ class TimeframeMappedMarketData:
 
     def quote(self, instrument: str) -> Quote:
         # Never cache executable pricing. Every quote call must reach the provider.
-        return self.provider.quote(instrument)
+        quote = self.provider.quote(instrument)
+        self._last_quote_observed_at = quote.time
+        return quote
+
+    def health(self) -> ProviderHealth:
+        """Expose health of the market path most recently proven by an executable quote.
+
+        Readiness calls `quote()` immediately before `health()`. If that provider request
+        succeeds, reporting the wrapper itself as degraded merely because it does not own a
+        separate heartbeat API is misleading. An upstream explicit health contract still
+        wins when one exists.
+        """
+        upstream_health = getattr(self.provider, "health", None)
+        if callable(upstream_health):
+            result = upstream_health()
+            if isinstance(result, ProviderHealth):
+                return result
+        now = datetime.now(UTC)
+        if self._last_quote_observed_at is None:
+            return ProviderHealth(
+                provider=type(self.provider).__name__,
+                state=HealthState.DEGRADED,
+                observed_at=now,
+                detail="no successful executable quote has been observed through the timeframe adapter",
+            )
+        observed = self._last_quote_observed_at.astimezone(UTC)
+        age = max(Decimal("0"), Decimal(str((now - observed).total_seconds())))
+        return ProviderHealth(
+            provider=type(self.provider).__name__,
+            state=HealthState.HEALTHY,
+            observed_at=observed,
+            heartbeat_age_seconds=age,
+            detail="successful executable quote observed through TimeframeMappedMarketData",
+        )
 
     def _candles_snapshot(self, instrument: str, granularity: str, count: int) -> list[Candle]:
         cache = self._snapshot.get()
