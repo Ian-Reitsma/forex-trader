@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Mapping, cast
 
 from forex_trader.application.risk_breaker import RiskBreakerRepository, risk_breaker_status
-from forex_trader.domain.context import HealthState, ProviderHealth
+from forex_trader.domain.context import ProviderHealth
 from forex_trader.domain.models import jsonable
 from forex_trader.domain.risk_advanced import EnhancedRiskPolicy
 
@@ -84,7 +84,10 @@ def breaker_snapshot(engine: object) -> dict[str, object]:
         account_id=account_id,
         policy=risk_policy,
     )
-    return {"supported": True, **jsonable(payload)}
+    serialized = jsonable(payload)
+    if not isinstance(serialized, dict):
+        raise TypeError("risk breaker status must serialize to an object")
+    return {"supported": True, **serialized}
 
 
 def eligibility_layers(
@@ -92,6 +95,7 @@ def eligibility_layers(
     instrument: str,
     *,
     observed_at: datetime | None = None,
+    include_breaker: bool = False,
 ) -> dict[str, object]:
     """Expose preflight layers without pretending they are a final trade decision."""
     normalized = instrument.strip().upper()
@@ -143,7 +147,11 @@ def eligibility_layers(
             "relevant_events_next_24h": len(relevant_events),
             "note": "an empty calendar is not evidence that no macro event exists",
         },
-        "risk_breaker": breaker_snapshot(engine),
+        "risk_breaker": (
+            breaker_snapshot(engine)
+            if include_breaker
+            else {"included": False, "endpoint": "/v1/risk/breaker"}
+        ),
         "final_trade_eligible": None,
         "final_trade_eligible_reason": (
             "not asserted by preflight: technical setup, spread, quote freshness, context, portfolio risk and send-time execution gates remain authoritative"
