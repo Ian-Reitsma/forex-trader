@@ -17,6 +17,12 @@ from forex_trader import __version__
 from forex_trader.application.engine import TradingEngine
 from forex_trader.application.operations import OperationalRepository, OperationalTelemetryService
 from forex_trader.application.readiness import assess_engine_readiness
+from forex_trader.application.runtime_diagnostics import (
+    basic_readiness_contract,
+    breaker_snapshot,
+    eligibility_layers,
+    provider_snapshot,
+)
 from forex_trader.domain.models import jsonable
 from forex_trader.domain.operations import OperationalCategory, OperationalSeverity
 
@@ -108,6 +114,7 @@ def create_app(
 
     @app.get("/health/ready", dependencies=[Depends(serialize_repository_access)])
     def readiness_health(instrument: str = "EUR_USD") -> dict[str, object]:
+        contract = basic_readiness_contract()
         try:
             snapshot, providers, readiness = assess_engine_readiness(engine, instrument)
         except (ValueError, RuntimeError) as exc:
@@ -121,6 +128,7 @@ def create_app(
                     "degraded_sources": readiness.degraded_sources,
                     "snapshot": jsonable(snapshot),
                     "providers": jsonable(providers),
+                    **contract,
                 },
             )
         return {
@@ -129,6 +137,7 @@ def create_app(
             "degraded_sources": readiness.degraded_sources,
             "snapshot": jsonable(snapshot),
             "providers": jsonable(providers),
+            **contract,
         }
 
     @app.get("/v1/status", dependencies=repository_protected)
@@ -146,6 +155,14 @@ def create_app(
     @app.get("/v1/positions", dependencies=protected)
     def positions() -> list[dict[str, object]]:
         return [jsonable(position) for position in engine.broker.positions()]
+
+    @app.get("/v1/providers", dependencies=protected)
+    def providers() -> dict[str, object]:
+        return provider_snapshot(engine)
+
+    @app.get("/v1/risk/breaker", dependencies=repository_protected)
+    def risk_breaker() -> dict[str, object]:
+        return breaker_snapshot(engine)
 
     @app.get("/v1/market/{instrument}/quote", dependencies=protected)
     def market_quote(instrument: str) -> dict[str, object]:
@@ -168,7 +185,11 @@ def create_app(
 
     @app.get("/v1/readiness/{instrument}", dependencies=repository_protected)
     def runtime_readiness(instrument: str) -> dict[str, object]:
-        snapshot, providers, readiness = assess_engine_readiness(engine, instrument)
+        try:
+            snapshot, providers, readiness = assess_engine_readiness(engine, instrument)
+            layers = eligibility_layers(engine, instrument, observed_at=snapshot.observed_at)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "instrument": instrument.upper(),
             "ready": readiness.ready,
@@ -176,6 +197,8 @@ def create_app(
             "degraded_sources": readiness.degraded_sources,
             "snapshot": jsonable(snapshot),
             "providers": jsonable(providers),
+            "eligibility_layers": layers,
+            **basic_readiness_contract(),
         }
 
     @app.get("/v1/operations/summary", dependencies=repository_protected)
