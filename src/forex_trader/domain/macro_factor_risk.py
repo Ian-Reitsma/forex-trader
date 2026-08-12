@@ -9,27 +9,66 @@ from typing import Callable, Iterable, Mapping
 from forex_trader.domain.enums import Direction
 from forex_trader.domain.portfolio import OpenPosition
 
+SUPPORTED_EIGHT_CURRENCY_PAIRS = (
+    "AUD_CAD",
+    "AUD_CHF",
+    "AUD_JPY",
+    "AUD_NZD",
+    "AUD_USD",
+    "CAD_CHF",
+    "CAD_JPY",
+    "CHF_JPY",
+    "EUR_AUD",
+    "EUR_CAD",
+    "EUR_CHF",
+    "EUR_GBP",
+    "EUR_JPY",
+    "EUR_NZD",
+    "EUR_USD",
+    "GBP_AUD",
+    "GBP_CAD",
+    "GBP_CHF",
+    "GBP_JPY",
+    "GBP_NZD",
+    "GBP_USD",
+    "NZD_CAD",
+    "NZD_CHF",
+    "NZD_JPY",
+    "NZD_USD",
+    "USD_CAD",
+    "USD_CHF",
+    "USD_JPY",
+)
+COMMODITY_CURRENCIES = frozenset({"AUD", "CAD", "NZD"})
+
+
+def _pair_factor_tags(instrument: str) -> tuple[str, ...]:
+    base, quote = instrument.split("_", maxsplit=1)
+    factors = {
+        f"{base.lower()}_macro",
+        f"{base.lower()}_rates",
+        f"{quote.lower()}_macro",
+        f"{quote.lower()}_rates",
+    }
+    if base in COMMODITY_CURRENCIES or quote in COMMODITY_CURRENCIES:
+        factors.add("commodity_cycle")
+    return tuple(sorted(factors))
+
 
 def default_macro_factor_map() -> dict[str, tuple[str, ...]]:
-    """Return the audited v1 policy taxonomy for the initial FX universe.
+    """Return the audited v2 taxonomy for the complete eight-currency FX universe.
 
-    These are qualitative concentration tags, not statistical factor betas. They
-    intentionally identify shared scheduled-macro/rates dependencies that can be
-    missed by a rolling return-correlation veto.
+    The free/official fundamental runtime supports AUD/CAD/CHF/EUR/GBP/JPY/NZD/USD,
+    which produces 28 unique OANDA currency-pair combinations. v0.7.40 classified
+    only ten of those pairs while ``require_classification`` remained fail-closed,
+    so fundamentally eligible pairs such as AUD_CHF could never reach execution.
+
+    These remain qualitative concentration tags, not statistical factor betas. Every
+    pair receives macro/rates exposure for both currency legs, and pairs containing a
+    commodity currency receive the shared ``commodity_cycle`` concentration tag.
     """
 
-    return {
-        "EUR_USD": ("usd_macro", "usd_rates", "eur_macro", "eur_rates"),
-        "GBP_USD": ("usd_macro", "usd_rates", "gbp_macro", "gbp_rates"),
-        "USD_JPY": ("usd_macro", "usd_rates", "jpy_macro", "jpy_rates"),
-        "USD_CHF": ("usd_macro", "usd_rates", "chf_macro", "chf_rates"),
-        "AUD_USD": ("usd_macro", "usd_rates", "aud_macro", "aud_rates", "commodity_cycle"),
-        "USD_CAD": ("usd_macro", "usd_rates", "cad_macro", "cad_rates", "commodity_cycle"),
-        "NZD_USD": ("usd_macro", "usd_rates", "nzd_macro", "nzd_rates", "commodity_cycle"),
-        "EUR_GBP": ("eur_macro", "eur_rates", "gbp_macro", "gbp_rates"),
-        "EUR_JPY": ("eur_macro", "eur_rates", "jpy_macro", "jpy_rates"),
-        "GBP_JPY": ("gbp_macro", "gbp_rates", "jpy_macro", "jpy_rates"),
-    }
+    return {instrument: _pair_factor_tags(instrument) for instrument in SUPPORTED_EIGHT_CURRENCY_PAIRS}
 
 
 @dataclass(frozen=True, slots=True)
