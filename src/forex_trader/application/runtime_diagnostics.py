@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Mapping, cast
 
 from forex_trader.application.risk_breaker import RiskBreakerRepository, risk_breaker_status
 from forex_trader.domain.context import ProviderHealth
+from forex_trader.domain.events import ScheduledMacroEvent
 from forex_trader.domain.models import jsonable
 from forex_trader.domain.risk_advanced import EnhancedRiskPolicy
 
@@ -72,7 +74,9 @@ def breaker_snapshot(engine: object) -> dict[str, object]:
             "reason": "runtime risk policy is not EnhancedRiskPolicy",
         }
     try:
-        account_id = str(getattr(engine, "broker").account().account_id)
+        account = getattr(engine, "broker").account()
+        account_id = str(account.account_id)
+        nav = account.nav
     except (AttributeError, RuntimeError, ValueError) as exc:
         return {
             "supported": True,
@@ -82,7 +86,8 @@ def breaker_snapshot(engine: object) -> dict[str, object]:
     payload = risk_breaker_status(
         cast(RiskBreakerRepository, getattr(engine, "repository")),
         account_id=account_id,
-        policy=risk_policy,
+        nav=nav,
+        max_loss_streak=risk_policy.max_loss_streak,
     )
     serialized = jsonable(payload)
     if not isinstance(serialized, dict):
@@ -116,13 +121,14 @@ def eligibility_layers(
     classified = bool(factors) if classification_required else True
 
     repository = getattr(engine, "repository")
-    event_reader = getattr(repository, "scheduled_events", None)
-    event_support = callable(event_reader)
-    relevant_events = []
+    event_reader_raw = getattr(repository, "scheduled_events", None)
+    event_support = callable(event_reader_raw)
+    relevant_events: list[ScheduledMacroEvent] = []
     if event_support:
+        event_reader = cast(Callable[..., Iterable[ScheduledMacroEvent]], event_reader_raw)
         base, quote = normalized.split("_", maxsplit=1)
         future = event_reader(start=instant, end=instant + timedelta(hours=24))
-        relevant_events = [event for event in future if getattr(event, "currency", "") in {base, quote}]
+        relevant_events = [event for event in future if event.currency in {base, quote}]
     calendar_state = "populated" if relevant_events else "empty" if event_support else "unsupported"
 
     return {
