@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal
 
 import pytest
 
@@ -59,8 +60,10 @@ def test_timeframe_adapter_health_uses_successful_executable_quote() -> None:
     health = mapped.health()
     assert health.state is HealthState.HEALTHY
     assert health.provider == "SyntheticMarketData"
-    assert health.observed_at == quote.time
-    assert "successful executable quote" in health.detail
+    assert health.heartbeat_age_seconds is not None
+    assert Decimal("0") <= health.heartbeat_age_seconds < Decimal("1")
+    assert quote.time.isoformat() in health.detail
+    assert "successful executable quote request" in health.detail
 
 
 def test_technical_signal_time_is_completed_lower_bar_close() -> None:
