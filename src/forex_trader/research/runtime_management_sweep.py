@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 from itertools import product
-from typing import Iterable, Sequence
+from typing import Iterable, Sequence, TypeVar
 
 from forex_trader.domain.models import Candle, TradeCandidate
 from forex_trader.domain.position_management import RuntimeManagementPolicy
@@ -85,7 +85,14 @@ def evaluate_sweep_point(
     }
 
 
-def chronological_holdout_split[T](items: Sequence[T], *, train_fraction: Decimal = Decimal("0.625")) -> tuple[tuple[T, ...], tuple[T, ...]]:
+T = TypeVar("T")
+
+
+def chronological_holdout_split(
+    items: Sequence[T],
+    *,
+    train_fraction: Decimal = Decimal("0.625"),
+) -> tuple[tuple[T, ...], tuple[T, ...]]:
     if not Decimal("0") < train_fraction < Decimal("1"):
         raise ValueError("train_fraction must be in (0,1)")
     if len(items) < 4:
