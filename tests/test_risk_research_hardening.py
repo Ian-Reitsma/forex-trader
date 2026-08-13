@@ -54,13 +54,13 @@ def test_capital_utilization_reports_full_budget_when_not_capped() -> None:
 
 def test_capital_utilization_summary_counts_underutilization() -> None:
     report = summarize_capital_utilization(
-        [_trace(), _trace(units=150000, risk_amount="150")],
+        [_trace(), _trace(units=100000, risk_amount="150")],
         risk_fraction=Decimal("0.0015"),
         configured_max_units=100000,
     )
     assert report["observations"] == 2
     assert report["under_90_percent_risk_budget_count"] == 1
-    assert report["binding_limit_count"] == 2
+    assert report["binding_limit_count"] == 1
 
 
 def test_execution_review_assessment_flags_three_losses(engine, monkeypatch) -> None:  # type: ignore[no-untyped-def]
