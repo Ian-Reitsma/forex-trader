@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -22,6 +23,7 @@ from forex_trader.research.evidence import (
     DecisionEvidence,
     append_decision_evidence,
     candidate_from_evidence,
+    first_observation_per_setup_episode,
     label_decision,
     load_decision_evidence,
 )
@@ -144,6 +146,43 @@ def test_decision_evidence_round_trip_and_trace_extraction(tmp_path) -> None:
     assert loaded[0].order_status == "protected"
     assert loaded[0].confirmation_categories == ("price", "fundamental", "execution")
     assert loaded[0].candidate_evidence["zone_quality"] == "0.82"
+
+
+def test_setup_episode_identity_groups_repeated_structural_snapshots() -> None:
+    first = replace(
+        decision(0),
+        candidate_evidence={"zone_id": "zone-a", "liquidity_kind": "equal_lows", "liquidity_price": "1.0990"},
+    )
+    repeated = replace(
+        decision(1),
+        candidate_evidence={"zone_id": "zone-a", "liquidity_kind": "equal_lows", "liquidity_price": "1.0990"},
+    )
+    new_episode = replace(
+        decision(2),
+        candidate_evidence={"zone_id": "zone-b", "liquidity_kind": "equal_lows", "liquidity_price": "1.0980"},
+    )
+    assert first.setup_episode_id == repeated.setup_episode_id
+    assert first.setup_episode_id != new_episode.setup_episode_id
+    assert first.to_jsonable()["setup_episode_id"] == first.setup_episode_id
+    assert first_observation_per_setup_episode((repeated, new_episode, first)) == (first, new_episode)
+
+
+def test_chronological_split_counts_structural_episodes_not_snapshots() -> None:
+    rows: list[LabeledDecision] = []
+    for index, zone_id in enumerate(("zone-a", "zone-a", "zone-b", "zone-b", "zone-c", "zone-c")):
+        record = replace(
+            decision(index),
+            candidate_evidence={
+                "zone_id": zone_id,
+                "liquidity_kind": "equal_lows",
+                "liquidity_price": f"1.09{index // 2}0",
+            },
+        )
+        rows.append(LabeledDecision(record, outcome(record, win=index % 2 == 0)))
+    split = chronological_split(rows)
+    assert len(split.train) == 1
+    assert len(split.validation) == 1
+    assert len(split.test) == 1
 
 
 def test_decision_evidence_reconstructs_and_labels_candidate() -> None:

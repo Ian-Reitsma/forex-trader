@@ -24,6 +24,23 @@ def test_policy_fingerprint_is_canonical_and_order_independent() -> None:
     assert campaign_policy_fingerprint(left) == campaign_policy_fingerprint(right)
 
 
+def test_policy_fingerprint_ignores_campaign_run_metadata() -> None:
+    policy = {
+        "strategy": {"minimum": Decimal("0.66")},
+        "risk": {"risk_fraction": Decimal("0.0015")},
+        "mode": "paper",
+    }
+    collection = {
+        **policy,
+        "campaign": {
+            "execute": False,
+            "max_new_orders_per_cycle": 0,
+            "paired_ablation_capture": True,
+        },
+    }
+    assert campaign_policy_fingerprint(policy) == campaign_policy_fingerprint(collection)
+
+
 def test_real_engine_policy_context_is_secret_free_and_changes_with_policy(tmp_path) -> None:
     first = build_engine(
         AppConfig(database_path=str(tmp_path / "a.db"), minimum_score=Decimal("0.66"))

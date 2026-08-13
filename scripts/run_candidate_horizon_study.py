@@ -19,7 +19,11 @@ from forex_trader.adapters.oanda_safe import SafeOandaPracticeClient
 from forex_trader.config import AppConfig
 from forex_trader.domain.enums import ProviderKind
 from forex_trader.research.dataset import append_outcome_evidence, decision_key, label_mature_decisions
-from forex_trader.research.evidence import DecisionEvidence, load_decision_evidence
+from forex_trader.research.evidence import (
+    DecisionEvidence,
+    first_observation_per_setup_episode,
+    load_decision_evidence,
+)
 
 PREREGISTERED_HORIZONS = (6, 12, 24, 48, 72, 144, 288)
 
@@ -33,6 +37,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--exit-slippage-pips", type=Decimal, default=Decimal("0.10"))
     parser.add_argument("--maximum-pages", type=int, default=200)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--observation-unit",
+        choices=("episode", "snapshot"),
+        default="episode",
+        help=(
+            "Research unit. 'episode' keeps the first chronological observation of each "
+            "structural setup; 'snapshot' retains every repeated point-in-time candidate."
+        ),
+    )
     return parser
 
 
@@ -105,12 +118,21 @@ def main() -> int:
         raise SystemExit("candidate horizon study requires the OANDA Practice market-data configuration")
 
     decisions = load_decision_evidence(args.decision_evidence)
-    candidates = tuple(record for record in decisions if record.is_trade_candidate and record.signal_time is not None)
-    if not candidates:
+    raw_candidates = tuple(
+        record for record in decisions if record.is_trade_candidate and record.signal_time is not None
+    )
+    if not raw_candidates:
         raise SystemExit("decision evidence contains no trade candidates with signal times")
-    policy_fingerprints = {record.policy_fingerprint for record in candidates}
+    policy_fingerprints = {record.policy_fingerprint for record in raw_candidates}
     if len(policy_fingerprints) != 1:
         raise SystemExit("candidate horizon study requires one immutable policy fingerprint")
+
+    unique_episode_count = len({record.setup_episode_id for record in raw_candidates})
+    candidates = (
+        first_observation_per_setup_episode(raw_candidates)
+        if args.observation_unit == "episode"
+        else raw_candidates
+    )
 
     now = datetime.now(UTC)
     by_instrument: dict[str, list[DecisionEvidence]] = defaultdict(list)
@@ -181,13 +203,22 @@ def main() -> int:
         }
 
     manifest = {
-        "schema": "preregistered-candidate-horizon-study-v1",
+        "schema": "preregistered-candidate-horizon-study-v2",
         "research_only": True,
         "broker_write_authority": False,
         "generated_at": now.isoformat(),
         "decision_evidence": str(args.decision_evidence),
         "policy_fingerprint": next(iter(policy_fingerprints)),
         "candidate_count": len(candidates),
+        "raw_candidate_count": len(raw_candidates),
+        "unique_episode_count": unique_episode_count,
+        "duplicate_snapshot_count": len(raw_candidates) - unique_episode_count,
+        "observation_unit": args.observation_unit,
+        "episode_selection": (
+            "first chronological observation per structural setup episode"
+            if args.observation_unit == "episode"
+            else "all point-in-time candidate snapshots"
+        ),
         "horizons_bars": list(PREREGISTERED_HORIZONS),
         "horizon_selection": "fixed before outcome inspection; do not select a production horizon from this same sample",
         "assumptions": {
@@ -202,7 +233,19 @@ def main() -> int:
     }
     manifest_path = args.output_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"manifest": str(manifest_path.resolve()), "candidate_count": len(candidates), "horizons": list(PREREGISTERED_HORIZONS)}, indent=2))
+    print(
+        json.dumps(
+            {
+                "manifest": str(manifest_path.resolve()),
+                "candidate_count": len(candidates),
+                "raw_candidate_count": len(raw_candidates),
+                "unique_episode_count": unique_episode_count,
+                "observation_unit": args.observation_unit,
+                "horizons": list(PREREGISTERED_HORIZONS),
+            },
+            indent=2,
+        )
+    )
     return 0
 
 

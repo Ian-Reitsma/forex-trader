@@ -82,13 +82,29 @@ def _sort_key(item: LabeledDecision) -> tuple[datetime, str, str]:
     return signal_time, item.decision.instrument, item.decision.trace_id or ""
 
 
+def independent_episode_records(
+    records: Iterable[LabeledDecision],
+) -> tuple[LabeledDecision, ...]:
+    """Collapse repeated snapshots so empirical sample counts use setup episodes."""
+    values = tuple(sorted(records, key=_sort_key))
+    selected: list[LabeledDecision] = []
+    seen: set[str] = set()
+    for item in values:
+        episode = item.decision.setup_episode_id
+        if episode in seen:
+            continue
+        seen.add(episode)
+        selected.append(item)
+    return tuple(selected)
+
+
 def chronological_split(
     records: Iterable[LabeledDecision],
     *,
     train_fraction: Decimal = Decimal("0.60"),
     validation_fraction: Decimal = Decimal("0.20"),
 ) -> ChronologicalSplit:
-    values = tuple(sorted(records, key=_sort_key))
+    values = independent_episode_records(records)
     if len(values) < 3:
         raise ValueError("chronological split requires at least three labeled decisions")
     if not Decimal("0") < train_fraction < Decimal("1"):
@@ -143,7 +159,7 @@ class HierarchicalOutcomeModel:
         self.include_instrument = include_instrument
         self.model = model or EmpiricalOutcomeModel()
         buckets: dict[str, list[BacktestTrade]] = {}
-        for record in records:
+        for record in independent_episode_records(records):
             for key in cohort_hierarchy(record.decision, include_instrument=include_instrument):
                 buckets.setdefault(key, []).append(record.outcome)
         self._buckets = {key: tuple(value) for key, value in buckets.items()}
@@ -276,7 +292,7 @@ def walk_forward_cohort_calibration(
     include_instrument: bool = False,
     model: EmpiricalOutcomeModel | None = None,
 ) -> CohortCalibrationSummary:
-    values = tuple(sorted(records, key=_sort_key))
+    values = independent_episode_records(records)
     if minimum_history < 2 or minimum_cohort_trades < 2:
         raise ValueError("history thresholds must be at least 2")
     outcome_model = model or EmpiricalOutcomeModel()

@@ -108,7 +108,9 @@ def campaign_policy_context(engine: TradingEngine) -> dict[str, object]:
 
 
 def campaign_policy_fingerprint(context: Mapping[str, object]) -> str:
-    canonical = json.dumps(_jsonable(dict(context)), sort_keys=True, separators=(",", ":"))
+    """Fingerprint outcome policy while excluding non-policy campaign run metadata."""
+    fingerprint_context = {key: value for key, value in dict(context).items() if key != "campaign"}
+    canonical = json.dumps(_jsonable(fingerprint_context), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
 
 

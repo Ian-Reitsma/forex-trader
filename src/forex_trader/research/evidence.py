@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Mapping
+from typing import Iterable, Mapping
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from forex_trader.domain.enums import DecisionDisposition, Direction
@@ -61,6 +62,10 @@ class DecisionEvidence:
     def cohort_key(self) -> str:
         return cohort_key(self)
 
+    @property
+    def setup_episode_id(self) -> str:
+        return setup_episode_id(self)
+
     def to_jsonable(self) -> dict[str, object]:
         safe = _json_safe(
             {
@@ -70,6 +75,7 @@ class DecisionEvidence:
                 "instrument": self.instrument,
                 "trace_id": self.trace_id,
                 "candidate_id": self.candidate_id,
+                "setup_episode_id": self.setup_episode_id,
                 "captured_at": self.captured_at,
                 "signal_time": self.signal_time,
                 "direction": self.direction,
@@ -253,6 +259,67 @@ def cohort_key(record: DecisionEvidence, *, include_instrument: bool = False) ->
     if include_instrument:
         parts.append(record.instrument)
     return "|".join(parts)
+
+
+def setup_episode_id(record: DecisionEvidence) -> str:
+    """Return a conservative structural episode identity for research statistics.
+
+    Repeated five-minute observations of the same structural location are useful lifecycle
+    telemetry, but they are not independent trade hypotheses. The identity intentionally
+    excludes cycle/session/regime so the same setup cannot inflate sample counts merely by
+    surviving into another observation window.
+    """
+    evidence = record.candidate_evidence
+    zone_id = _text(evidence.get("zone_id"))
+    liquidity_kind = _text(evidence.get("liquidity_kind"))
+    liquidity_price = _text(evidence.get("liquidity_price"))
+
+    if zone_id is not None:
+        structural_anchor = f"zone:{zone_id}"
+    elif liquidity_kind is not None and liquidity_price is not None:
+        structural_anchor = f"liquidity:{liquidity_kind}:{liquidity_price}"
+    else:
+        fallback = record.candidate_id or record.trace_id or (
+            record.signal_time.isoformat() if record.signal_time is not None else f"cycle:{record.cycle}"
+        )
+        structural_anchor = f"observation:{fallback}"
+
+    canonical = "|".join(
+        (
+            record.policy_fingerprint,
+            record.instrument.upper(),
+            record.direction or "unknown_direction",
+            record.setup_family or "unknown_setup",
+            structural_anchor,
+            liquidity_kind or "unknown_liquidity",
+        )
+    )
+    return "se-" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
+
+
+def first_observation_per_setup_episode(
+    records: Iterable[DecisionEvidence],
+) -> tuple[DecisionEvidence, ...]:
+    """Keep the first chronological observation from each structural setup episode."""
+    ordered = sorted(
+        records,
+        key=lambda record: (
+            record.signal_time or record.captured_at,
+            record.captured_at,
+            record.cycle,
+            record.instrument,
+            record.trace_id or "",
+        ),
+    )
+    selected: list[DecisionEvidence] = []
+    seen: set[str] = set()
+    for record in ordered:
+        episode = record.setup_episode_id
+        if episode in seen:
+            continue
+        seen.add(episode)
+        selected.append(record)
+    return tuple(selected)
 
 
 def candidate_from_evidence(record: DecisionEvidence) -> TradeCandidate:
