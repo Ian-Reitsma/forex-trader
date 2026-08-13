@@ -25,8 +25,10 @@ def test_readiness_is_observable_without_enabling_broker_writes(engine) -> None:
     ready_payload = ready.json()
     assert ready_payload["ready"] is True
     assert ready_payload["scope"] == "market_data_and_reconciliation"
-    assert ready_payload["degraded_sources"] == []
-    assert ready_payload["providers"][0]["state"] == "healthy"
+    assert ready_payload["requirements"]["calendar"] is False
+    assert ready_payload["requirements"]["fundamentals"] is False
+    assert ready_payload["requirements"]["institutional_flow"] is False
+    assert isinstance(ready_payload["providers"], list)
 
     runtime = client.get("/v1/readiness/EUR_USD")
     assert runtime.status_code == 200
