@@ -68,6 +68,7 @@ def test_execution_review_assessment_flags_three_losses(engine, monkeypatch) -> 
         engine.repository,
         "advanced_risk_state",
         lambda account_id, nav: {"loss_streak": 3},
+        raising=False,
     )
     monkeypatch.setattr(
         engine,
