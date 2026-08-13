@@ -1,10 +1,12 @@
 from datetime import timedelta
+from decimal import Decimal
 
 import pytest
 
 from forex_trader.adapters.synthetic import SyntheticMarketData
 from forex_trader.adapters.timeframe import TimeframeMappedMarketData
 from forex_trader.config import AppConfig, build_engine
+from forex_trader.domain.context import HealthState
 from forex_trader.domain.technicals import assess_technicals
 from forex_trader.domain.timeframes import granularity_duration, validate_timeframe_pair
 from forex_trader.research.timeframes import TimeframePolicy, timeframe_ablation_grid
@@ -48,6 +50,20 @@ def test_timeframe_adapter_maps_semantic_engine_requests() -> None:
     assert lower[-1].time + timedelta(minutes=15) == provider.anchor
     assert mapped.quote("EUR_USD").time == provider.anchor + timedelta(seconds=1)
     assert mapped.quote("EUR_USD") == provider.quote("EUR_USD")
+
+
+def test_timeframe_adapter_health_uses_successful_executable_quote() -> None:
+    provider = SyntheticMarketData(seed=11, quote_granularity="M5")
+    mapped = TimeframeMappedMarketData(provider)
+    assert mapped.health().state is HealthState.DEGRADED
+    quote = mapped.quote("EUR_USD")
+    health = mapped.health()
+    assert health.state is HealthState.HEALTHY
+    assert health.provider == "SyntheticMarketData"
+    assert health.heartbeat_age_seconds is not None
+    assert Decimal("0") <= health.heartbeat_age_seconds < Decimal("1")
+    assert quote.time.isoformat() in health.detail
+    assert "successful executable quote request" in health.detail
 
 
 def test_technical_signal_time_is_completed_lower_bar_close() -> None:
