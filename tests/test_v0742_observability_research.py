@@ -20,7 +20,7 @@ from forex_trader.domain.events import ScheduledMacroEvent
 from forex_trader.domain.models import AccountSnapshot, Candle, TradeCandidate
 from forex_trader.domain.position_management import RuntimeManagementPolicy
 from forex_trader.domain.risk_advanced import EnhancedRiskPolicy
-from forex_trader.infrastructure.trading_repository import TradingRepository
+from forex_trader.infrastructure.advanced_repository import AdvancedTradingRepository
 from forex_trader.research.backtest import OutcomeStatus
 from forex_trader.research.runtime_management_shadow import evaluate_runtime_management_shadow
 
@@ -170,7 +170,7 @@ def test_breaker_snapshot_reports_enhanced_policy_account_failure() -> None:
 
 
 def test_breaker_snapshot_reads_durable_enhanced_risk_state() -> None:
-    repository = TradingRepository(":memory:")
+    repository = AdvancedTradingRepository(":memory:")
     account = AccountSnapshot("practice-account", "USD", Decimal("100000"), Decimal("100000"))
     engine = SimpleNamespace(
         risk_policy=EnhancedRiskPolicy(max_loss_streak=6),
