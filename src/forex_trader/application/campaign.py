@@ -65,6 +65,7 @@ class CampaignCycleReport:
     ablation_snapshots: int
     ablation_rows: int
     ablation_errors: int
+    ablation_error_details: tuple[dict[str, object], ...]
     stopped_early: bool
     stop_reason: str | None
     rejection_codes: dict[str, int]
@@ -182,6 +183,7 @@ class PracticeCampaignRunner:
         risk_denial_reasons: Counter[str] = Counter()
         error_types: Counter[str] = Counter()
         ablation_error_types: Counter[str] = Counter()
+        ablation_error_details: list[dict[str, object]] = []
         order_statuses: Counter[str] = Counter()
         evaluated = 0
         trade_candidates = 0
@@ -248,6 +250,12 @@ class PracticeCampaignRunner:
                 rejection_codes[candidate.rejection_code or "UNSPECIFIED_ABSTENTION"] += 1
 
             if captured_inputs is not None:
+                snapshot_id = _ablation_snapshot_id(
+                    self.campaign_id,
+                    cycle,
+                    instrument,
+                    trace.candidate.signal_time,
+                )
                 try:
                     rows = self._capture_ablations(
                         cycle=cycle,
@@ -257,7 +265,18 @@ class PracticeCampaignRunner:
                     )
                 except Exception as exc:
                     ablation_errors += 1
-                    ablation_error_types[type(exc).__name__] += 1
+                    error_type = type(exc).__name__
+                    ablation_error_types[error_type] += 1
+                    ablation_error_details.append(
+                        {
+                            "cycle": cycle,
+                            "instrument": instrument,
+                            "snapshot_id": snapshot_id,
+                            "variant": None,
+                            "error_type": error_type,
+                            "error_message": str(exc)[:500],
+                        }
+                    )
                 else:
                     ablation_snapshots += 1
                     ablation_rows += len(rows)
@@ -265,6 +284,16 @@ class PracticeCampaignRunner:
                         if row.error_type is not None:
                             ablation_errors += 1
                             ablation_error_types[row.error_type] += 1
+                            ablation_error_details.append(
+                                {
+                                    "cycle": cycle,
+                                    "instrument": instrument,
+                                    "snapshot_id": row.snapshot_id,
+                                    "variant": row.variant.value,
+                                    "error_type": row.error_type,
+                                    "error_message": row.error_message or "",
+                                }
+                            )
 
             if trace.risk is not None:
                 if trace.risk.disposition is RiskDisposition.GRANTED:
@@ -331,6 +360,7 @@ class PracticeCampaignRunner:
             ablation_snapshots=ablation_snapshots,
             ablation_rows=ablation_rows,
             ablation_errors=ablation_errors,
+            ablation_error_details=tuple(ablation_error_details),
             stopped_early=stopped_early,
             stop_reason=stop_reason,
             rejection_codes=dict(rejection_codes.most_common()),

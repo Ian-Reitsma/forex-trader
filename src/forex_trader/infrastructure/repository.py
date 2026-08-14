@@ -16,12 +16,20 @@ from forex_trader.domain.models import DecisionTrace, jsonable
 from forex_trader.domain.promotion import PromotionMetrics
 
 
+_SQLITE_BUSY_TIMEOUT_MS = 30_000
+
+
 class SqliteDecisionRepository:
     def __init__(self, path: str | Path = ":memory:") -> None:
         self.path = str(path)
         self._lock = Lock()
-        self._connection = sqlite3.connect(self.path, check_same_thread=False)
+        self._connection = sqlite3.connect(
+            self.path,
+            check_same_thread=False,
+            timeout=_SQLITE_BUSY_TIMEOUT_MS / 1000,
+        )
         self._connection.row_factory = sqlite3.Row
+        self._connection.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
         self._migrate()
 
     def _migrate(self) -> None:
@@ -131,10 +139,11 @@ class SqliteDecisionRepository:
             )
 
     def recent_traces(self, limit: int = 20) -> list[dict[str, object]]:
-        rows = self._connection.execute(
-            "SELECT payload_json FROM decision_traces ORDER BY created_at DESC LIMIT ?",
-            (max(1, min(limit, 10000)),),
-        ).fetchall()
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT payload_json FROM decision_traces ORDER BY created_at DESC LIMIT ?",
+                (max(1, min(limit, 10000)),),
+            ).fetchall()
         return [json.loads(row["payload_json"]) for row in rows]
 
     def claim_execution(self, execution_key: str) -> bool:
@@ -183,7 +192,8 @@ class SqliteDecisionRepository:
             sql += " WHERE available_at <= ?"
             params = (as_of.isoformat(),)
         sql += " ORDER BY available_at, observation_id"
-        rows = self._connection.execute(sql, params).fetchall()
+        with self._lock:
+            rows = self._connection.execute(sql, params).fetchall()
         return [_macro_from_json(json.loads(row["payload_json"])) for row in rows]
 
     def save_cost_sample(self, sample: CostSample) -> None:
@@ -205,13 +215,14 @@ class SqliteDecisionRepository:
             )
 
     def cost_samples(self, *, limit: int = 10000) -> list[CostSample]:
-        rows = self._connection.execute(
-            """
-            SELECT instrument, observed_at, session, spread_pips, slippage_pips, event_risk
-            FROM cost_samples ORDER BY observed_at DESC LIMIT ?
-            """,
-            (max(1, min(limit, 100000)),),
-        ).fetchall()
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT instrument, observed_at, session, spread_pips, slippage_pips, event_risk
+                FROM cost_samples ORDER BY observed_at DESC LIMIT ?
+                """,
+                (max(1, min(limit, 100000)),),
+            ).fetchall()
         return [
             CostSample(
                 instrument=row["instrument"],
@@ -249,13 +260,14 @@ class SqliteDecisionRepository:
         return cursor.rowcount == 1
 
     def broker_transactions(self, *, limit: int = 10000) -> list[dict[str, object]]:
-        rows = self._connection.execute(
-            """
-            SELECT payload_json FROM broker_transactions
-            ORDER BY CAST(transaction_id AS INTEGER), transaction_id LIMIT ?
-            """,
-            (max(1, min(limit, 100000)),),
-        ).fetchall()
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT payload_json FROM broker_transactions
+                ORDER BY CAST(transaction_id AS INTEGER), transaction_id LIMIT ?
+                """,
+                (max(1, min(limit, 100000)),),
+            ).fetchall()
         return [json.loads(row["payload_json"]) for row in rows]
 
     def set_broker_cursor(self, name: str, value: str) -> None:
@@ -272,9 +284,10 @@ class SqliteDecisionRepository:
             )
 
     def get_broker_cursor(self, name: str) -> str | None:
-        row = self._connection.execute(
-            "SELECT value FROM broker_cursors WHERE name = ?", (name,)
-        ).fetchone()
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT value FROM broker_cursors WHERE name = ?", (name,)
+            ).fetchone()
         return None if row is None else str(row["value"])
 
     def set_runtime_state(self, name: str, payload: Mapping[str, object]) -> None:
@@ -294,10 +307,11 @@ class SqliteDecisionRepository:
             )
 
     def runtime_state(self, name: str) -> dict[str, object] | None:
-        row = self._connection.execute(
-            "SELECT payload_json, updated_at FROM runtime_state WHERE name = ?",
-            (name,),
-        ).fetchone()
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT payload_json, updated_at FROM runtime_state WHERE name = ?",
+                (name,),
+            ).fetchone()
         if row is None:
             return None
         payload = json.loads(str(row["payload_json"]))
@@ -395,9 +409,7 @@ class SqliteDecisionRepository:
             for sample in self.cost_samples(limit=100000)
             if sample.slippage_pips is not None
         ]
-        median_slippage = (
-            Decimal(str(median(slippages))) if slippages else None
-        )
+        median_slippage = Decimal(str(median(slippages))) if slippages else None
         return PromotionMetrics(
             decisions=decisions,
             trade_candidates=trade_candidates,
@@ -414,7 +426,8 @@ class SqliteDecisionRepository:
         )
 
     def close(self) -> None:
-        self._connection.close()
+        with self._lock:
+            self._connection.close()
 
     def __enter__(self) -> "SqliteDecisionRepository":
         return self
